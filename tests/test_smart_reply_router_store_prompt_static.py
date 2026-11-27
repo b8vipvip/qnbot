@@ -7,41 +7,45 @@ def read(path):
     return (ROOT / path).read_text(encoding="utf-8-sig")
 
 
-def test_smart_reply_router_has_three_routes_and_two_stage_small_retrieval():
-    code = read("src/Bot/ChromeNs/SmartReplyRouterService.cs")
-    assert "DirectKnowledge" in code
-    assert "ContextualKnowledge" in code
-    assert "AiGeneral" in code
-    assert "RetrievalPoolSize = 10" in code
-    assert "PromptCandidateCount = 3" in code
-    assert "CalculateContextDependency" in code
-    assert "CanDirectReply" in code
-    assert "DetectIntent" in code
-    assert "候选知识" in code
-    assert "这些知识是候选事实依据，不是必须原样发送的固定答案" in code
+def test_smart_reply_router_is_context_only_and_v2_owns_knowledge_retrieval():
+    router = read("src/Bot/ChromeNs/SmartReplyRouterService.cs")
+    runtime = read("src/Bot/ChromeNs/KnowledgeEngineV2RuntimeBridge.cs")
+    public = read("src/Bot/Knowledge/KnowledgeEngineV2.Service.Public.cs")
 
+    assert "ContextualQueryRewriteService.Resolve" in router
+    assert "ConversationStateService.Build" in router
+    assert "CanUseOfflineKnowledgeFallback" in router
+    fallback = router[router.index("public static bool CanUseOfflineKnowledgeFallback"):router.index("public static string BuildPromptAddon")]
+    assert "return false;" in fallback
+    assert "Knowledge V2 已完成唯一知识检索" in router
+    assert "KnowledgeEngineV2Service.Resolve(" in runtime
+    assert "KnowledgeV2AuthorityPolicy.IsProductionApproved" in public
+    assert "RetrieveCandidates" not in router
 
-def test_streaming_pipeline_uses_router_before_ai_and_keeps_manual_rules_first():
-    code = read("src/Bot/ChromeNs/BuyerStreamingReplyPipeline.cs")
-    manual = code.index("var manualDecision = BotFeatureStore.EvaluateAutoReplyRule(question)")
-    plan = code.index("var plan = await SmartReplyRouterService.BuildPlanAsync(seller, buyer, question, token)")
-    direct = code.index("plan.Route == SmartReplyRouteKind.DirectKnowledge", plan)
-    prompt = code.index("SmartReplyRouterService.BuildPromptAddon(plan)", direct)
-    assert manual < plan < direct < prompt
-    assert "StorePromptProfileService.BuildPromptAddon()" in code
-    assert "ConversationSessionLearningService.BuildReplyStylePromptAddon(seller)" in code
-    assert "plan.ContextDigest" in code
-    assert "plan.RecentTurns" in code
-    assert "智能路由-知识上下文" in code
+def test_streaming_pipeline_runs_v2_before_ai_and_manual_rules_precede_v2_retrieval():
+    runtime = read("src/Bot/ChromeNs/KnowledgeEngineV2RuntimeBridge.cs")
+    pipeline = read("src/Bot/ChromeNs/BuyerStreamingReplyPipeline.cs")
 
+    manual = runtime.index("BotFeatureStore.EvaluateAutoReplyRule(currentQuestion)")
+    resolve = runtime.index("KnowledgeEngineV2Service.Resolve(")
+    v2 = pipeline.index("KnowledgeEngineV2RuntimeBridge.TryHandleWithContextAsync(qn, lease)")
+    ai = pipeline.index("StreamingBuyerAnswerService.GetAnswerAsync(")
+    assert manual < resolve
+    assert v2 < ai
+    assert "StorePromptProfileService.BuildPromptAddon()" in pipeline
+    assert "ConversationSessionLearningService.BuildReplyStylePromptAddon(seller)" in pipeline
+    assert "SmartReplyRouterService.BuildPromptAddon(plan)" in pipeline
+    assert "knowledgeV2Result.ContextPromptAddon" in pipeline
 
-def test_legacy_non_streaming_local_hit_is_gated_by_same_smart_router():
-    helper = read("src/Bot/ChromeNs/KnowledgeContextualReplyService.cs")
-    assert "SmartReplyRouterService.BuildPlan" in helper
-    assert "decision.SmartPlan.Route != SmartReplyRouteKind.DirectKnowledge" in helper
-    assert "SmartReplyRouterService.BuildPromptAddon(decision.SmartPlan)" in helper
-    assert "StorePromptProfileService.BuildPromptAddon()" in helper
+def test_legacy_non_streaming_knowledge_router_is_removed_not_reactivated():
+    root = ROOT / "src/Bot/ChromeNs/KnowledgeContextualReplyService.cs"
+    pipeline = read("src/Bot/ChromeNs/BuyerStreamingReplyPipeline.cs")
+    my_openai = read("src/Bot/ChromeNs/MyOpenAI.cs")
 
+    assert not root.exists()
+    assert "KnowledgeContextualReplyService" not in pipeline
+    assert "KnowledgeContextualReplyService" not in my_openai
+    assert "KnowledgeEngineV2Service.Resolve(" in my_openai
 
 def test_store_rule_center_generates_core_and_scene_rules_instead_of_one_long_prompt():
     service = read("src/Bot/ChromeNs/StorePromptProfileService.cs")
@@ -90,23 +94,29 @@ def test_structured_rules_have_scope_priority_triggers_and_runtime_limits():
 
 
 
-def test_ai_general_never_injects_weak_legacy_candidates():
-    code = read("src/Bot/ChromeNs/SmartReplyRouterService.cs")
-    prompt = code[code.index("public static string BuildPromptAddon"):code.index("private static string BuildContextDigest")]
-    retrieval = code[code.index("private static List<SmartKnowledgeCandidate> RetrieveCandidates"):code.index("private static SmartKnowledgeCandidate ScoreCandidate")]
+def test_ai_general_receives_only_v2_approved_knowledge_context():
+    router = read("src/Bot/ChromeNs/SmartReplyRouterService.cs")
+    runtime = read("src/Bot/ChromeNs/KnowledgeEngineV2RuntimeBridge.cs")
+    public = read("src/Bot/Knowledge/KnowledgeEngineV2.Service.Public.cs")
 
-    assert "plan.Route == SmartReplyRouteKind.AiGeneral" in prompt
-    assert prompt.index("plan.Route == SmartReplyRouteKind.AiGeneral") < prompt.index("【智能知识路由】")
-    assert "PolicyEvaluation.ScoreAdjustment > 0" not in retrieval
-    assert "x.RetrievalScore >= 0.20" in retrieval
-    assert "x.ResolvedQueryScore >= 0.24" in retrieval
+    assert "Knowledge V2 已完成唯一知识检索" in router
+    assert "CanUseOfflineKnowledgeFallback" in router
+    assert "return false;" in router[router.index("public static bool CanUseOfflineKnowledgeFallback"):router.index("public static string BuildPromptAddon")]
+    assert "BuildContextPromptAddon(decision)" in runtime
+    assert "KnowledgeV2AuthorityPolicy.IsProductionApproved" in public
+    assert "RetrieveCandidates" not in router
 
+def test_retired_v1_retrieval_services_are_not_compiled_or_called():
+    props = read("src/Bot/Directory.Build.props")
+    runtime = read("src/Bot/ChromeNs/KnowledgeEngineV2RuntimeBridge.cs")
+    pipeline = read("src/Bot/ChromeNs/BuyerStreamingReplyPipeline.cs")
+    repository = read("src/Bot/Knowledge/KnowledgeEngineV2.Repository.cs")
 
-def test_legacy_retrieval_paths_exclude_unapproved_learning_records():
-    smart = read("src/Bot/ChromeNs/SmartReplyRouterService.cs")
-    local = read("src/Bot/ChromeNs/KnowledgeLearningService.cs")
-    embedding = read("src/Bot/ChromeNs/SemanticEmbeddingService.cs")
+    for name in ["KnowledgeContextualReplyService.cs", "SemanticEmbeddingService.cs", "KnowledgeMemoryEngine.cs"]:
+        assert name not in props
+    assert "KnowledgeContextualReplyService" not in runtime
+    assert "KnowledgeContextualReplyService" not in pipeline
+    assert "KnowledgeMemoryEngine" not in runtime
+    assert "BotFeatureStore.GetKnowledgeBase" not in repository
+    assert "MirrorOneToLegacy" not in repository
 
-    assert "KnowledgeV2AuthorityPolicy.IsUnapprovedLegacyLearningEntry(x)" in smart
-    assert "KnowledgeV2AuthorityPolicy.IsUnapprovedLegacyLearningEntry(x)" in local
-    assert "KnowledgeV2AuthorityPolicy.IsUnapprovedLegacyLearningEntry(entry)" in embedding
