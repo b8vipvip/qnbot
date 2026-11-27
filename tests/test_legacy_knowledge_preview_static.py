@@ -33,10 +33,11 @@ def test_build_compiles_only_the_v2_history_importer():
     assert not (ROOT / "src/Bot/Knowledge/KnowledgeV2LegacyDeltaImportService.cs").exists()
     assert not (ROOT / "src/Bot/ChromeNs/KnowledgeContextualReplyService.cs").exists()
 
-def test_history_import_writes_only_to_the_shop_scoped_v2_repository():
+def test_history_import_writes_only_to_v2_and_auto_publishes_only_with_human_evidence():
     importer = read("src/Bot/Knowledge/KnowledgeV2HistoryImportService.cs")
     repository = read("src/Bot/Knowledge/KnowledgeEngineV2.Repository.cs")
-    store = read("src/Bot/Options/CtlRobotOptions.xaml.cs")
+    ai = read("src/Bot/Knowledge/KnowledgeAiService.cs")
+    history = read("src/Bot/Knowledge/ChatHistoryScanService.cs")
     props = read("src/Bot/Directory.Build.props")
 
     assert "ShopContextLocator.ResolveRuntimeByShopKey(shopKey)" in importer
@@ -44,35 +45,35 @@ def test_history_import_writes_only_to_the_shop_scoped_v2_repository():
     assert "using (ShopSettingsScope.Enter(shop))" in importer
     assert "KnowledgeEngineV2Repository.LoadAll(seller)" in importer
     assert "KnowledgeEngineV2Repository.Save(seller, record)" in importer
-    assert "SourceType = \"chat_history_import\"" in importer
+    assert "SourceEvidenceByToken" in ai and "sourceEvidenceByToken" in history
+    assert "ImportEvidenceTokens" in ai
+    assert "evidenceValid" in importer and "autoPublish = evidenceValid" in importer
+    assert 'record.SourceType = autoPublish' in importer
+    assert 'ai_auto_learned_human_evidence' in importer
+    assert 'chat_history_unverified_candidate' in importer
     assert "BotFeatureStore.SaveKnowledgeBase" not in importer
-    assert "TryGetKnowledgeBaseForMigration" in store
-    assert "BotFeatureStore.TryGetKnowledgeBaseForMigration" in repository
     assert "KnowledgeV2HistoryImportService.cs" in props
     assert "KnowledgeV2LegacyDeltaImportService.cs" not in props
     assert not (ROOT / "src/Bot/Knowledge/KnowledgeV2LegacyDeltaImportService.cs").exists()
 
-def test_legacy_migration_fails_closed_on_corrupt_source_json():
-    store = read("src/Bot/Options/CtlRobotOptions.xaml.cs")
+def test_v1_knowledge_store_migration_and_runtime_fallback_are_removed():
     repository = read("src/Bot/Knowledge/KnowledgeEngineV2.Repository.cs")
-    method = repository[
-        repository.index("private static void EnsureMigrated"):
-        repository.index("private static void EnsureV2CandidateStatesNormalized")
-    ]
-    reader = store[
-        store.index("public static bool TryGetKnowledgeBaseForMigration"):
-        store.index("public static void SaveKnowledgeBase")
-    ]
+    semantics = read("src/Bot/Knowledge/KnowledgeEngineV2.Semantics.cs")
+    settings = read("src/Bot/Options/CtlRobotOptions.xaml.cs")
+    ai = read("src/Bot/Knowledge/KnowledgeAiService.cs")
 
-    assert "JsonConvert.DeserializeObject<List<KnowledgeBaseEntry>>(json)" in reader
-    assert "legacy_knowledge_root_invalid" in reader
-    assert "legacy_knowledge_read_failed:" in reader
-    assert "return false;" in reader
-    assert "TryGetKnowledgeBaseForMigration(out legacy, out migrationError)" in method
-    assert "throw new InvalidOperationException(" in method
-    assert method.index("TryGetKnowledgeBaseForMigration") < method.index('Key = "schema_version"')
-    assert "BotFeatureStore.GetKnowledgeBase()" not in method
-
+    assert "EnsureSchemaInitialized(state)" in repository
+    assert "private static void EnsureSchemaInitialized(" in repository
+    assert "EnsureMigrated(" not in repository
+    assert "BotFeatureStore.GetKnowledgeBase" not in repository
+    assert "BotFeatureStore.TryGetKnowledgeBaseForMigration" not in repository
+    assert "BotFeatureStore.SaveKnowledgeBase" not in repository
+    assert "KnowledgeBaseEntry" not in repository
+    assert "FromLegacy" not in semantics
+    assert "KnowledgeBaseEntry" not in ai
+    assert "GetKnowledgeBase" not in settings
+    assert "SaveKnowledgeBase" not in settings
+    assert "TryGetKnowledgeBaseForMigration" not in settings
 
 def test_help_and_docs_describe_evidence_backed_auto_publish_not_manual_approval():
     help = read("src/Bot/Knowledge/KnowledgeCenterHelpWindow.cs")
