@@ -193,7 +193,6 @@ namespace Bot.Knowledge
                 sb.Append("，有效问答轮次 ").Append(scan.PairCount);
                 sb.Append("，V2写入 ").Append(promoted.Added);
                 sb.Append("，V2重复跳过 ").Append(promoted.DuplicateSkipped);
-                sb.Append("，清理本次旧格式临时记录 ").Append(promoted.LegacyTransientRemoved);
                 if (scan.FailedContacts > 0) sb.Append("，读取失败 ").Append(scan.FailedContacts);
                 _summary.Text = sb.ToString();
                 _progress.Text = sb + Environment.NewLine
