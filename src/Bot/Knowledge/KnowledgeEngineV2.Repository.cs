@@ -1510,8 +1510,14 @@ namespace Bot.Knowledge
                 if (count == 0)
                 {
                     List<KnowledgeBaseEntry> legacy;
+                    string migrationError;
                     using (ShopSettingsScope.Enter(shop))
-                        legacy = BotFeatureStore.GetKnowledgeBase() ?? new List<KnowledgeBaseEntry>();
+                    {
+                        if (!BotFeatureStore.TryGetKnowledgeBaseForMigration(out legacy, out migrationError))
+                            throw new InvalidOperationException(
+                                "Knowledge V2旧知识迁移源不可读取，已保留迁移标记并等待修复后重试：" + migrationError);
+                    }
+                    legacy = legacy ?? new List<KnowledgeBaseEntry>();
                     var migrated = new List<KnowledgeV2RecordRow>();
                     foreach (var entry in legacy.Where(x => x != null && !string.IsNullOrWhiteSpace(x.Answer)))
                     {
