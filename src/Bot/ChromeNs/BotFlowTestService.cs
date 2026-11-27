@@ -1,6 +1,7 @@
 using Bot.AssistWindow.Widget.Robot;
 using Bot.ChatRecord;
 using BotLib;
+using Bot.ShopScope;
 using Newtonsoft.Json.Linq;
 using System;
 using System.Collections.Generic;
@@ -13,6 +14,7 @@ namespace Bot.ChromeNs
     internal sealed class BotFlowTestCandidate
     {
         public string Seller { get; set; }
+        public string ShopKey { get; set; }
         public string Buyer { get; set; }
         public string Question { get; set; }
         public DateTime CapturedAt { get; set; }
@@ -42,13 +44,16 @@ namespace Bot.ChromeNs
             string seller,
             string buyer,
             string question,
-            DateTime capturedAt)
+            DateTime capturedAt,
+            string shopKey)
         {
-            if (!IsEligible(question)) return;
+            shopKey = (shopKey ?? string.Empty).Trim();
+            if (shopKey.Length == 0 || !IsEligible(question)) return;
             if (BotFeatureStore.EvaluateAutoReplyRule(question).Matched) return;
             var candidate = new BotFlowTestCandidate
             {
                 Seller = (seller ?? string.Empty).Trim(),
+                ShopKey = shopKey,
                 Buyer = (buyer ?? string.Empty).Trim(),
                 Question = question.Trim(),
                 CapturedAt = capturedAt == DateTime.MinValue ? DateTime.Now : capturedAt,
@@ -58,7 +63,8 @@ namespace Bot.ChromeNs
             lock (Sync)
             {
                 Recent.RemoveAll(x => x == null || x.CapturedAt < DateTime.Now.AddHours(-72));
-                if (!Recent.Any(x => x.Seller == candidate.Seller
+                if (!Recent.Any(x => x.ShopKey == candidate.ShopKey
+                    && x.Seller == candidate.Seller
                     && x.Buyer == candidate.Buyer
                     && x.Question == candidate.Question))
                 {
@@ -75,7 +81,8 @@ namespace Bot.ChromeNs
                 var available = Recent
                     .Where(x => x != null
                         && x.CapturedAt >= DateTime.Now.AddHours(-72)
-                        && QN.FindExistingBySellerNick(x.Seller) != null
+                        && !string.IsNullOrWhiteSpace(x.ShopKey)
+                        && QN.FindExistingByShopKey(x.ShopKey) != null
                         && IsEligible(x.Question)
                         && !BotFeatureStore.EvaluateAutoReplyRule(x.Question).Matched)
                     .ToList();
@@ -92,10 +99,25 @@ namespace Bot.ChromeNs
             var total = Stopwatch.StartNew();
             if (candidate == null) return Failure("没有可用的测试问题。", total);
             if (!Params.Robot.CanUseRobotReal) return Failure("Bot 总开关已停用。", total, candidate);
-            var qn = QN.FindExistingBySellerNick(candidate.Seller);
+            var shopKey = (candidate.ShopKey ?? string.Empty).Trim();
+            if (shopKey.Length == 0)
+                return Failure("测试问题缺少可信ShopKey，已阻止按客服昵称猜测店铺。", total, candidate);
+            var qn = QN.FindExistingByShopKey(shopKey);
             if (qn == null || qn.CDP == null)
             {
-                return Failure("目标客服账号当前没有可用的千牛消息连接，已阻止回退到其他店铺。", total, candidate);
+                return Failure("目标店铺当前没有可用的千牛消息连接，已阻止回退到其他店铺。", total, candidate);
+            }
+            ShopContext shop;
+            try { shop = ShopContextLocator.ResolveRuntimeBySeller(qn); }
+            catch
+            {
+                return Failure("无法确认目标QN的唯一ShopKey，已阻止跨店铺执行测试。", total, candidate);
+            }
+            if (shop == null
+                || !string.Equals((shop.ShopKey ?? string.Empty).Trim(), shopKey, StringComparison.Ordinal)
+                || !string.Equals((shop.SellerNick ?? string.Empty).Trim(), (candidate.Seller ?? string.Empty).Trim(), StringComparison.Ordinal))
+            {
+                return Failure("目标店铺身份与测试问题来源不一致，已阻止跨店铺执行测试。", total, candidate);
             }
             if (qn.Seller == null
                 || !string.Equals((qn.Seller.Nick ?? string.Empty).Trim(), (candidate.Seller ?? string.Empty).Trim(), StringComparison.Ordinal))
@@ -109,7 +131,8 @@ namespace Bot.ChromeNs
                 candidate.Seller,
                 candidate.Buyer,
                 label,
-                detectedAt);
+                detectedAt,
+                shopKey);
             if (ctl != null) ctl.SetProcessing("测试中：正在按真实规则生成答案...");
 
             var ai = Stopwatch.StartNew();
@@ -129,9 +152,12 @@ namespace Bot.ChromeNs
                     error,
                     "Bot真实流程测试",
                     detectedAt,
-                    DateTime.Now);
+                    DateTime.Now,
+                    shopKey);
                 if (ctl != null) ctl.SetSendResult(false, "测试失败：答案生成阶段");
-                ResponseProgressTracker.Complete(candidate.Seller, candidate.Buyer);
+                ResponseProgressTracker.Fail(
+                    candidate.Seller, candidate.Buyer,
+                    "Bot真实流程测试答案生成失败：" + error, shopKey);
                 return Failure(error, total, candidate, ai.ElapsedMilliseconds);
             }
 
@@ -146,18 +172,33 @@ namespace Bot.ChromeNs
                 outgoing,
                 "Bot真实流程测试",
                 detectedAt,
-                answerReadyAt);
+                answerReadyAt,
+                shopKey);
             if (ctl != null) ctl.SetSendPending("测试中：正在定位买家、写入输入框并真实发送...");
 
             var send = Stopwatch.StartNew();
             var sent = await qn.SendTextWithRetryAsync(candidate.Buyer, outgoing, 1);
             send.Stop();
             total.Stop();
+            var sendCancelled = !sent && qn.Rpa != null && qn.Rpa.LastSendWasCancelled;
+            var sendFailureReason = qn.Rpa == null
+                ? "发送器不可用，未能确认实际送达状态"
+                : qn.Rpa.GetSendFailureReason();
             var detail = sent
                 ? "测试成功：真实消息已发送，请在千牛中手动撤回这条【Bot测试】消息。"
-                : "测试失败：" + qn.Rpa.GetSendFailureReason();
+                : sendCancelled
+                    ? "测试取消：发送前会话门禁或人工接管已阻止发送。"
+                    : "测试失败：" + sendFailureReason;
             if (ctl != null) ctl.SetSendResult(sent, detail);
-            ResponseProgressTracker.Complete(candidate.Seller, candidate.Buyer);
+            if (sendCancelled)
+                ResponseProgressTracker.Cancel(
+                    candidate.Seller, candidate.Buyer, "Bot真实流程测试发送前门禁取消", shopKey);
+            else if (sent)
+                ResponseProgressTracker.Complete(candidate.Seller, candidate.Buyer, shopKey);
+            else
+                ResponseProgressTracker.Fail(
+                    candidate.Seller, candidate.Buyer,
+                    "Bot真实流程测试答案已生成，但实际发送未确认：" + sendFailureReason, shopKey);
             Log.Info("Bot真实流程测试完成: seller=" + candidate.Seller
                 + ", buyer=" + candidate.Buyer
                 + ", success=" + sent
@@ -193,6 +234,13 @@ namespace Bot.ChromeNs
                 {
                     return null;
                 }
+
+                ShopContext shop;
+                try { shop = ShopContextLocator.ResolveRuntimeBySeller(qn); }
+                catch { shop = null; }
+                if (shop == null || string.IsNullOrWhiteSpace(shop.ShopKey)
+                    || !string.Equals((shop.SellerNick ?? string.Empty).Trim(), qn.Seller.Nick.Trim(), StringComparison.Ordinal))
+                    return null;
 
                 var history = await qn.CDP.Invoke<JObject>("im.singlemsg.GetRemoteHisMsg", new
                 {
@@ -230,6 +278,7 @@ namespace Bot.ChromeNs
                 return new BotFlowTestCandidate
                 {
                     Seller = qn.Seller.Nick,
+                    ShopKey = shop.ShopKey,
                     Buyer = conversation.Nick,
                     Question = picked.Text,
                     CapturedAt = DateTime.Now,
