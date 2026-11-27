@@ -176,3 +176,12 @@ def test_normal_liveness_probe_history_window_covers_a_full_coalesced_buyer_burs
     assert "MaxBurstMessageCount = 40" in coordinator
     assert "20-row history response can silently omit" in method
     assert "then let an answered tail advance the durable checkpoint" in method
+
+
+def test_post_switch_background_history_fetch_also_covers_full_buyer_burst():
+    recovery = (ROOT / "src" / "Bot" / "ChromeNs" / "QN.MessageRecovery.cs").read_text(encoding="utf-8-sig")
+    method = recovery.split("private async Task<bool> TryRecoverRecentMessagesAfterSwitchAsync", 1)[1]
+    assert "count = 100" in method
+    assert "30-row post-switch fetch can truncate" in method
+    coordinator = (ROOT / "src" / "Bot" / "ChromeNs" / "BuyerMessageBurstCoordinator.cs").read_text(encoding="utf-8-sig")
+    assert "MaxBurstMessageCount = 40" in coordinator
