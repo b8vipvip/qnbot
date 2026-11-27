@@ -63,7 +63,7 @@ namespace Bot.Knowledge
             });
             header.Children.Add(new TextBlock
             {
-                Text = "沿用旧版智能导入的文字/图片 AI 整理能力，但结果直接去重后写入 Knowledge Center V2。旧版知识库不会作为本功能的数据源。",
+                Text = "将文字和图片整理为 Knowledge V2 结构化记录，按当前 ShopKey 去重并写入 V2 SQLite。只接受 V2 records 格式，不读取旧版知识库。",
                 TextWrapping = TextWrapping.Wrap,
                 Foreground = Brushes.DimGray,
                 Margin = new Thickness(0, 4, 0, 0)
