@@ -31,7 +31,7 @@ namespace Bot.Knowledge
 
         public KnowledgeCenterWindow()
         {
-            Title = "AI客服 - Knowledge V2 知识库";
+            Title = "知识库";
             Width = 1320;
             Height = 820;
             MinWidth = 1100;
@@ -43,7 +43,7 @@ namespace Bot.Knowledge
             KnowledgeCenterV2UiBridge.Initialize();
             Content = new TextBlock
             {
-                Text = "正在加载 Knowledge V2 知识库…",
+                Text = "正在加载知识库…",
                 Margin = new Thickness(28),
                 FontSize = 16,
                 Foreground = Brushes.Gray
