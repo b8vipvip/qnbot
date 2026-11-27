@@ -1313,34 +1313,6 @@ namespace Bot.ChromeNs
         }
     }
 
-    public class KnowledgeBaseEntry
-    {
-        public bool Enabled { get; set; }
-        public string Category { get; set; }
-        public string Title { get; set; }
-        public string Keywords { get; set; }
-        public string Answer { get; set; }
-        public string UpdatedAt { get; set; }
-        public string Id { get; set; }
-        public string CreatedAt { get; set; }
-        public bool AiGenerated { get; set; }
-        public string SourceType { get; set; }
-
-        public KnowledgeBaseEntry()
-        {
-            Enabled = true;
-            Category = "通用";
-            Title = string.Empty;
-            Keywords = string.Empty;
-            Answer = string.Empty;
-            UpdatedAt = DateTime.Now.ToString("yyyy-MM-dd HH:mm:ss");
-            CreatedAt = UpdatedAt;
-            Id = string.Empty;
-            AiGenerated = false;
-            SourceType = string.Empty;
-        }
-    }
-
     public class AutoReplyRuleConfig
     {
         public bool Enabled { get; set; }
@@ -1485,7 +1457,6 @@ namespace Bot.ChromeNs
     public static class BotFeatureStore
     {
         private const string Scope = "feature";
-        private const string KnowledgeKey = "KnowledgeBaseJson";
         private const string RuleKey = "AutoReplyRulesJson";
         private const string PolicyKey = "MessagePolicyJson";
         private const string LicenseKey = "LicenseJson";
@@ -1508,46 +1479,6 @@ namespace Bot.ChromeNs
             if (string.IsNullOrWhiteSpace(json)) return def;
             try { return JsonConvert.DeserializeObject<T>(json); }
             catch { return def; }
-        }
-
-        // One-time V1 -> V2 migration must distinguish an intentionally empty
-        // store from corrupt/unreadable JSON. The ordinary legacy getter is
-        // deliberately forgiving for old UI callers, but migration must fail
-        // closed rather than mark the V2 schema complete after a parse failure.
-        public static bool TryGetKnowledgeBaseForMigration(
-            out List<KnowledgeBaseEntry> list, out string error)
-        {
-            list = null;
-            error = string.Empty;
-            try
-            {
-                var json = GetJson(KnowledgeKey);
-                if (string.IsNullOrWhiteSpace(json))
-                {
-                    list = new List<KnowledgeBaseEntry>();
-                    return true;
-                }
-
-                var parsed = JsonConvert.DeserializeObject<List<KnowledgeBaseEntry>>(json);
-                if (parsed == null)
-                {
-                    if (string.Equals(json.Trim(), "null", StringComparison.OrdinalIgnoreCase))
-                    {
-                        list = new List<KnowledgeBaseEntry>();
-                        return true;
-                    }
-                    error = "legacy_knowledge_root_invalid";
-                    return false;
-                }
-
-                list = parsed;
-                return true;
-            }
-            catch (Exception ex)
-            {
-                error = "legacy_knowledge_read_failed:" + ex.GetType().Name;
-                return false;
-            }
         }
 
         public static int GetSmartImportTimeoutSeconds()
