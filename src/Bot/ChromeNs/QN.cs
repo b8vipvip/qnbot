@@ -1467,6 +1467,7 @@ namespace Bot.ChromeNs
             var sendOk = await SendTextWithRetryAsync(
                 burst.BuyerNick, answer, 1, lease.CancellationToken, preSendGuard);
             var sendCancelled = !sendOk && rpa != null && rpa.LastSendWasCancelled;
+            var sendIsIndeterminate = !sendOk && rpa != null && rpa.LastSendWasIndeterminate;
             var sendFailureReason = rpa == null
                 ? "发送器不可用，未能确认实际送达状态"
                 : rpa.GetSendFailureReason();
@@ -1475,6 +1476,9 @@ namespace Bot.ChromeNs
                 lease.MarkCompleted("legacy_text_send_completed");
                 ReplyDeduplicationService.RememberDelivered(
                     burst.SellerNick, burst.BuyerNick, answer, burst.ShopKey);
+                if (usedFirstInquiryFixedReply)
+                    FirstInquiryFixedReplyService.MarkDelivered(
+                        burst.SellerNick, burst.BuyerNick, burst.ShopKey);
                 if (string.Equals(answerSource, "AI生成", StringComparison.Ordinal))
                 {
                     KnowledgeLearningService.QueueLearn(
@@ -1492,6 +1496,20 @@ namespace Bot.ChromeNs
             else
             {
                 lease.MarkFailed("legacy_text_send_failed");
+            }
+            if (usedFirstInquiryFixedReply && !sendOk)
+            {
+                if (sendIsIndeterminate)
+                {
+                    Log.Error("旧文本路径首条咨询发送结果不确定，保留首条资格占位等待回显核验: seller="
+                        + burst.SellerNick + ", buyer=" + burst.BuyerNick
+                        + ", reason=" + sendFailureReason);
+                }
+                else
+                {
+                    FirstInquiryFixedReplyService.ReleaseReservation(
+                        burst.SellerNick, burst.BuyerNick, sendFailureReason, burst.ShopKey);
+                }
             }
             if (conversationCtl != null)
             {
