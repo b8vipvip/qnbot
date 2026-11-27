@@ -62,7 +62,7 @@ def test_remote_history_fallback_catches_up_after_long_probe_gap():
     assert "_lastBusinessInboundHistoryProbeCompletedAt" in text
     assert "lastCompletedAt.Subtract(BusinessInboundCatchupOverlap)" in method
     assert "probeStartedAt.Subtract(BusinessInboundMaxCatchupLookback)" in method
-    assert "gapRecovery ? 100 : 20" in method
+    assert "var historyCount = 100;" in method
     assert "count = historyCount" in method
     assert "business-inbound-probe-gap-detected" in method
     assert "DateTime.Now.AddMinutes(-2).Ticks" not in method
@@ -166,3 +166,13 @@ def test_recovery_simulates_quiet_delay_at_previous_message_time_before_testing_
     assert "Simulate that timestamp" in helper
     assert "next item's arrival time" in helper
     assert "otherwise a fragment arriving just after the" in helper
+
+
+def test_normal_liveness_probe_history_window_covers_a_full_coalesced_buyer_burst():
+    method = source().split("internal async Task ProbeActiveConversationForMissedInboundAsync()", 1)[1]
+    coordinator = (ROOT / "src" / "Bot" / "ChromeNs" / "BuyerMessageBurstCoordinator.cs").read_text(encoding="utf-8-sig")
+    assert "var historyCount = 100;" in method
+    assert "count = historyCount" in method
+    assert "MaxBurstMessageCount = 40" in coordinator
+    assert "20-row history response can silently omit" in method
+    assert "then let an answered tail advance the durable checkpoint" in method
