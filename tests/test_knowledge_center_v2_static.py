@@ -34,7 +34,8 @@ def test_buyer_runtime_builds_a_cold_v2_snapshot_instead_of_skipping_retrieval()
     runtime = read("src/Bot/ChromeNs/KnowledgeEngineV2RuntimeBridge.cs")
 
     assert "public static bool IsSnapshotReady" in public
-    assert "QueueWarm(burst.ShopKey, burst.SellerNick);" in runtime
+    assert "PrepareSeller(burst.ShopKey, burst.SellerNick);" in runtime
+    assert "QueueWarm(shopKey, seller)" in runtime
     assert "KnowledgeEngineV2Service.Resolve(burst.SellerNick, burst.BuyerNick, retrievalQuestion)" in runtime
     assert "if (!KnowledgeEngineV2Service.IsSnapshotReady(burst.SellerNick))" not in runtime
     assert "Resolve() builds the exact ShopKey snapshot under its per-shop build lock when cold" in runtime
