@@ -83,3 +83,45 @@ def test_wecom_notification_contains_buyer_message_text_only():
     assert "SafeBuyerMessage" in handoff
     assert "[手机号]" in bridge
     assert "[API_KEY]" in bridge
+
+def test_buyer_burst_never_silently_discards_early_messages_or_truncates_to_a_sendable_preview():
+    coordinator = text("src/Bot/ChromeNs/BuyerMessageBurstCoordinator.cs")
+    qn = text("src/Bot/ChromeNs/QN.cs")
+    streaming = text("src/Bot/ChromeNs/BuyerStreamingReplyPipeline.cs")
+
+    build = coordinator[
+        coordinator.index("private static string BuildCombinedQuestion("):
+        coordinator.index("private static string NormalizeDisplay", coordinator.index("private static string BuildCombinedQuestion("))
+    ]
+    assert "MaxBurstMessageCount = 40" in coordinator
+    assert "MaxBurstQuestionCharacters = 16000" in coordinator
+    assert "parts.Skip(parts.Count - 10)" not in build
+    assert "combined.Substring(combined.Length - 1600)" not in build
+    assert "out bool inputOverflow" in build
+    assert "InputOverflow = inputOverflow" in coordinator
+    assert "InputOverflowReason" in coordinator
+    assert "完整内容未发送给AI" in build
+
+    dispatch = qn[
+        qn.index("private async Task ProcessBuyerBurstAsync"):
+        qn.index("private async Task ProcessTextBurstAsync")
+    ]
+    overflow = dispatch.index("if (burst.InputOverflow)")
+    text_route = dispatch.index("await ProcessTextBurstAsync(lease)")
+    vision_route = dispatch.index("await ProcessVisionBurstAsync(lease, visionItem)")
+    assert overflow < text_route and overflow < vision_route
+    assert "ResponseProgressTracker.Fail(" in dispatch
+    assert "拒绝将截断预览发送给文本/视觉AI" in dispatch
+    assert "burst.InputOverflow" in streaming
+
+
+def test_burst_combined_question_preserves_all_parts_when_within_limits():
+    coordinator = text("src/Bot/ChromeNs/BuyerMessageBurstCoordinator.cs")
+    build = coordinator[
+        coordinator.index("private static string BuildCombinedQuestion("):
+        coordinator.index("private static string NormalizeDisplay", coordinator.index("private static string BuildCombinedQuestion("))
+    ]
+    assert "parts.Add(text);" in build
+    assert "string.Join(\"\\n\", parts)" in build
+    assert "if (!inputOverflow) return combined;" in build
+    assert "Substring(0, OverflowPreviewCharacters)" in build
