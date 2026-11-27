@@ -158,7 +158,77 @@ namespace Bot.ChromeNs
             // Intentionally never link the analysis itself to the reply lease. New buyer messages,
             // withdrawal, or a human reply may make the outgoing answer stale, but must not cancel
             // image download/analysis or prevent visual_summary from being persisted.
-            var result = await Vision.ExecuteAsync(task, CancellationToken.None);
+            var policyQuestion = string.IsNullOrWhiteSpace(burst.ModelQuestion)
+                ? burst.CombinedQuestion
+                : burst.ModelQuestion;
+            var manualRuleReply = false;
+            VisionRequestResult result;
+            try
+            {
+                string silentReason;
+                if (ReceptionFlowPolicy.TryChooseSilence(
+                    burst.SellerNick, burst.BuyerNick, policyQuestion, out silentReason))
+                {
+                    lifecycleLease.MarkCompleted("vision_reception_silence");
+                    if (ctl != null) ctl.SetSkipped("命中接待静默/等待策略：" + silentReason);
+                    ResponseProgressTracker.Complete(burst.SellerNick, burst.BuyerNick, burst.ShopKey);
+                    return;
+                }
+
+                var manualDecision = BotFeatureStore.EvaluateAutoReplyRule(policyQuestion);
+                if (manualDecision != null && manualDecision.Matched)
+                {
+                    manualRuleReply = true;
+                    var manualAnswer = await StreamingBuyerAnswerService.GetAnswerAsync(
+                        burst.SellerNick, burst.BuyerNick, policyQuestion,
+                        lifecycleLease.CancellationToken, null, burst.ShopKey, null);
+                    if (!string.IsNullOrWhiteSpace(manualAnswer)
+                        && manualAnswer.StartsWith(ReceptionFlowPolicy.SilentMarker, StringComparison.Ordinal))
+                    {
+                        var why = manualAnswer.Substring(ReceptionFlowPolicy.SilentMarker.Length);
+                        lifecycleLease.MarkCompleted("vision_manual_rule_silence");
+                        if (ctl != null) ctl.SetSkipped(why);
+                        ResponseProgressTracker.Complete(burst.SellerNick, burst.BuyerNick, burst.ShopKey);
+                        return;
+                    }
+                    if (string.IsNullOrWhiteSpace(manualAnswer)
+                        || manualAnswer.StartsWith("错误：", StringComparison.Ordinal))
+                    {
+                        var failure = string.IsNullOrWhiteSpace(manualAnswer)
+                            ? "错误：命中人工/转接规则但未生成可发送回复。"
+                            : manualAnswer;
+                        lifecycleLease.MarkFailed("vision_manual_rule_not_sent");
+                        if (ctl != null) ctl.SetStatus(failure, false);
+                        ResponseProgressTracker.Fail(burst.SellerNick, burst.BuyerNick, failure, burst.ShopKey);
+                        return;
+                    }
+
+                    result = new VisionRequestResult
+                    {
+                        Success = true,
+                        Answer = manualAnswer,
+                        EndpointName = "manual-rule",
+                        VisionModel = "manual-rule"
+                    };
+                }
+                else
+                {
+                    result = await Vision.ExecuteAsync(task, CancellationToken.None);
+                }
+            }
+            catch (OperationCanceledException)
+            {
+                throw;
+            }
+            catch (Exception ex)
+            {
+                var failure = "错误：图片消息接待规则检查失败，已阻止自动发送：" + ex.Message;
+                lifecycleLease.MarkFailed("vision_precheck_failed");
+                if (ctl != null) ctl.SetStatus(failure, false);
+                ResponseProgressTracker.Fail(burst.SellerNick, burst.BuyerNick, failure, burst.ShopKey);
+                Log.ErrorWithMaxCount(failure, 10);
+                return;
+            }
             ApplyOcrTextToQuestionCard(ctl, burst.CombinedQuestion, result, detectedAt);
             var withdrawn = VisionImageCacheService.IsWithdrawn(
                 burst.SellerNick,
@@ -289,10 +359,7 @@ namespace Bot.ChromeNs
             // generation. Preserve that authoritative answer while still applying the common AI
             // marker and generation cancellation contract. A workflow reply is separately grounded
             // in a published human-reply template and must not be treated as an OCR direct answer.
-            var trustedOcrKnowledge = workflowDecision == null && string.Equals(
-                result.MatchedVisualKnowledgeId,
-                "ocr-direct-knowledge-v2",
-                StringComparison.Ordinal);
+            var trustedOcrKnowledge = workflowDecision == null && result.IsKnowledgeV2DirectAnswer;
             var deduplication = workflowDecision != null && workflowDecision.RequiresSend
                 ? ReplyDeduplicationService.EnsureWorkflowReplyDistinct(
                     burst.SellerNick, burst.BuyerNick, burst.CombinedQuestion,
@@ -302,7 +369,9 @@ namespace Bot.ChromeNs
                         burst.SellerNick, burst.BuyerNick, burst.CombinedQuestion,
                         result.Answer, lifecycleLease.CancellationToken, true)
                     : ReplyDeduplicationService.EnsureDistinct(
-                        burst.SellerNick, burst.BuyerNick, burst.CombinedQuestion, result.Answer));
+                        burst.SellerNick, burst.BuyerNick, burst.CombinedQuestion,
+                        result.Answer, lifecycleLease.CancellationToken, false,
+                        result.ApprovedV2KnowledgeEvidence));
             if (trustedOcrKnowledge)
             {
                 Log.Info("OCR-first权威知识直答已跳过隐藏AI校验/重答，保持本地快速路径: seller="
@@ -381,11 +450,13 @@ namespace Bot.ChromeNs
 
             var source = workflowDecision != null && workflowDecision.RequiresSend
                 ? "Reception Agent"
+                : (manualRuleReply
+                ? "转人工回复"
                 : (!string.IsNullOrWhiteSpace(result.MatchedVisualKnowledgeId)
                 ? "视觉知识"
                 : (deduplication.Regenerated && !string.IsNullOrWhiteSpace(deduplication.Source)
                     ? deduplication.Source
-                    : "AI生成"));
+                    : "AI生成")));
             var answerReadyAt = DateTime.Now;
             ctl = ResponseProgressTracker.SetAnswerReady(
                 burst.SellerNick,
