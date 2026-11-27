@@ -544,6 +544,9 @@ namespace Bot.ChromeNs
                 return;
             }
             var sendCancelled = !sendOk && qn.Rpa != null && qn.Rpa.LastSendWasCancelled;
+            var sendFailureReason = qn.Rpa == null
+                ? "发送器不可用，未能确认实际送达状态"
+                : qn.Rpa.GetSendFailureReason();
             if (sendCancelled)
             {
                 ReceptionWorkflowRuntimeService.CancelDecision(workflowDecision);
@@ -583,11 +586,16 @@ namespace Bot.ChromeNs
                     sendOk,
                     sendOk
                         ? "已发送（Smart Reply Router，合并本轮买家消息）"
-                        : "发送失败：" + (qn.Rpa == null ? string.Empty : qn.Rpa.GetSendFailureReason()));
+                        : "发送失败：" + sendFailureReason);
             }
             Log.Info("Smart Reply文本真实流程完成: buyer=" + burst.BuyerNick + ", success=" + sendOk
                 + ", totalMs=" + Math.Max(0, (long)(DateTime.Now - detectedAt).TotalMilliseconds));
-            ResponseProgressTracker.Complete(burst.SellerNick, burst.BuyerNick, burst.ShopKey);
+            if (sendOk)
+                ResponseProgressTracker.Complete(burst.SellerNick, burst.BuyerNick, burst.ShopKey);
+            else
+                ResponseProgressTracker.Fail(
+                    burst.SellerNick, burst.BuyerNick,
+                    "Smart Reply答案已生成，但实际发送未确认：" + sendFailureReason, burst.ShopKey);
         }
 
         private static bool IsLocalKnowledgeDirectAnswerSource(string source)

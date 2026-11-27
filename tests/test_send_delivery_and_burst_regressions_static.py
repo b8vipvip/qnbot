@@ -564,3 +564,70 @@ def test_legacy_vision_send_failure_is_not_reported_as_completed_progress():
     assert terminal.index("else if (sendOk)") < terminal.index("ResponseProgressTracker.Complete(")
     assert terminal.index("ResponseProgressTracker.Complete(") < terminal.index("ResponseProgressTracker.Fail(")
     assert "var sendFailureReason = rpa == null" in method
+
+
+def test_active_streaming_smart_reply_does_not_mark_failed_send_as_completed():
+    pipeline = read("src/Bot/ChromeNs/BuyerStreamingReplyPipeline.cs")
+    start = pipeline.index("var sendCancelled = !sendOk && qn.Rpa != null && qn.Rpa.LastSendWasCancelled;")
+    end = pipeline.index("private static bool IsLocalKnowledgeDirectAnswerSource", start)
+    terminal = pipeline[start:end]
+    assert "if (sendCancelled)" in terminal
+    assert "ResponseProgressTracker.Cancel(" in terminal
+    assert "if (sendOk)" in terminal
+    assert "ResponseProgressTracker.Complete(" in terminal
+    assert "ResponseProgressTracker.Fail(" in terminal
+    assert "Smart Reply答案已生成，但实际发送未确认：" in terminal
+    assert "var sendFailureReason = qn.Rpa == null" in terminal
+    assert terminal.index("if (sendOk)") < terminal.index("ResponseProgressTracker.Complete(")
+    assert terminal.index("ResponseProgressTracker.Complete(") < terminal.index("ResponseProgressTracker.Fail(")
+
+
+def test_specialized_knowledge_and_vision_send_failures_do_not_complete_progress_cards():
+    memory = read("src/Bot/ChromeNs/KnowledgeMemoryEngine.cs")
+    v2 = read("src/Bot/ChromeNs/KnowledgeEngineV2RuntimeBridge.cs")
+    vision = read("src/Bot/ChromeNs/VisionWithdrawalAwarePipeline.cs")
+
+    memory_terminal = memory.split("var sendCancelled = !sendOk && qn.Rpa != null && qn.Rpa.LastSendWasCancelled;", 1)[1]
+    assert "else if (sendOk)" in memory_terminal
+    assert "ResponseProgressTracker.Fail(" in memory_terminal
+    assert "Knowledge Memory答案已生成，但实际发送未确认：" in memory_terminal
+
+    v2_terminal = v2.split("var sendCancelled = !sendOk && qn.Rpa != null && qn.Rpa.LastSendWasCancelled;", 1)[1]
+    assert "else if (sendOk)" in v2_terminal
+    assert "ResponseProgressTracker.Fail(" in v2_terminal
+    assert "Knowledge Engine V2答案已生成，但实际发送未确认：" in v2_terminal
+
+    vision_main = vision.split("var sendCancelled = !sendOk && qn.Rpa != null && qn.Rpa.LastSendWasCancelled;", 1)[1].split(
+        "private static async Task SendCacheMissFallbackAsync", 1
+    )[0]
+    assert "ResponseProgressTracker.Cancel(" in vision_main
+    assert "if (sendOk)" in vision_main
+    assert "ResponseProgressTracker.Complete(" in vision_main
+    assert "ResponseProgressTracker.Fail(" in vision_main
+    assert "图片撤回保护视觉答案已生成，但实际发送未确认：" in vision_main
+
+    vision_fallback = vision.split("var sendCancelled = !sent && qn.Rpa != null && qn.Rpa.LastSendWasCancelled;", 1)[1].split(
+        "private static bool TryRebindRecentCachedImage", 1
+    )[0]
+    assert "else if (sent)" in vision_fallback
+    assert "ResponseProgressTracker.Fail(" in vision_fallback
+    assert "图片缓存兜底回复发送未确认：" in vision_fallback
+
+
+def test_withdrawn_image_vision_invalid_answer_fails_and_stale_sends_cancel_progress():
+    vision = read("src/Bot/ChromeNs/VisionWithdrawalAwarePipeline.cs")
+    invalid = vision.split('if (string.IsNullOrWhiteSpace(answer) || answer.StartsWith("错误：", StringComparison.Ordinal))', 1)[1].split(
+        "if (!lifecycleLease.IsCurrent)", 1
+    )[0]
+    assert "ResponseProgressTracker.Fail(" in invalid
+    assert "ResponseProgressTracker.Complete(" not in invalid
+
+    primary_cancel = vision.split('if (lifecycleLease.IsCurrent) lifecycleLease.MarkFailed("vision_send_cancelled");', 1)[1].split(
+        "var sendCancelled = !sendOk", 1
+    )[0]
+    assert "ResponseProgressTracker.Cancel(" in primary_cancel
+
+    fallback_cancel = vision.split('if (lifecycleLease.IsCurrent) lifecycleLease.MarkFailed("vision_cache_miss_fallback_cancelled");', 1)[1].split(
+        "var sendCancelled = !sent", 1
+    )[0]
+    assert "ResponseProgressTracker.Cancel(" in fallback_cancel

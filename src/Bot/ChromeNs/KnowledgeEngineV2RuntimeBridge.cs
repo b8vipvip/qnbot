@@ -566,9 +566,11 @@ namespace Bot.ChromeNs
                 return KnowledgeV2RuntimeResult.HandledResult();
             }
             var sendCancelled = !sendOk && qn.Rpa != null && qn.Rpa.LastSendWasCancelled;
-            var failureReason = sendOk || sendCancelled || qn.Rpa == null
+            var failureReason = sendOk || sendCancelled
                 ? string.Empty
-                : qn.Rpa.GetSendFailureReason();
+                : qn.Rpa == null
+                    ? "发送器不可用，未能确认实际送达状态"
+                    : qn.Rpa.GetSendFailureReason();
             if (conditionalAdviceReserved)
                 ConditionalBusinessAdviceService.CompleteDelivery(
                     burst.ShopKey, burst.SellerNick, burst.BuyerNick,
@@ -622,8 +624,12 @@ namespace Bot.ChromeNs
             if (sendCancelled)
                 ResponseProgressTracker.Cancel(
                     burst.SellerNick, burst.BuyerNick, "Knowledge V2发送前会话门禁取消", burst.ShopKey);
-            else
+            else if (sendOk)
                 ResponseProgressTracker.Complete(burst.SellerNick, burst.BuyerNick, burst.ShopKey);
+            else
+                ResponseProgressTracker.Fail(
+                    burst.SellerNick, burst.BuyerNick,
+                    "Knowledge Engine V2答案已生成，但实际发送未确认：" + failureReason, burst.ShopKey);
             return KnowledgeV2RuntimeResult.HandledResult();
         }
 
