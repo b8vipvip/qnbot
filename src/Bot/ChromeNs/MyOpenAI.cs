@@ -794,7 +794,7 @@ namespace Bot.ChromeNs
                     contextForKnowledge.Append(' ').Append(turn.Text);
                 }
                 var dynamicSystemPrompt = systemPrompt + BotFeatureStore.BuildPromptAddon(
-                    contextForKnowledge.ToString(), false);
+                    contextForKnowledge.ToString());
                 dynamicSystemPrompt += knowledgeV2ContextAddon;
                 dynamicSystemPrompt += RecentVisualContextService.BuildPromptAddon(seller, buyer, question);
                 var messages = new JArray { CreateMessage("system", dynamicSystemPrompt) };
