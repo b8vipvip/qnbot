@@ -46,9 +46,9 @@ def test_incremental_idempotent_save_and_hashes_use_v2_repository_only():
 
 
 def test_error_classification_and_cancellation_sources_are_owned_by_v2_import_services():
-    service = read("src/Bot/Knowledge/KnowledgeV2SmartImportService.cs")
-    ai = read("src/Bot/Knowledge/KnowledgeAiService.cs")
-    ui = read("src/Bot/Knowledge/KnowledgeCenterV2AiToolsUi.cs")
+    service = (ROOT / "src/Bot/Knowledge/KnowledgeV2SmartImportService.cs").read_text(encoding="utf-8")
+    ai = (ROOT / "src/Bot/Knowledge/KnowledgeAiService.cs").read_text(encoding="utf-8")
+    ui = (ROOT / "src/Bot/Knowledge/KnowledgeCenterV2AiToolsUi.cs").read_text(encoding="utf-8")
     for term in ["UserCancel", "Timeout", "WindowClosed", "ReplacedByNewTask"]:
         assert term in service and term in ui
     assert "OperationCanceledException" in service
