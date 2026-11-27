@@ -267,6 +267,159 @@ namespace Bot.Knowledge
         }
 
         /// <summary>
+        /// Atomically scopes an applied human-evidence correction to its exact commerce
+        /// scenario. A previous answer is preserved as a separate V2 record and excluded
+        /// from the newly corrected scenario; no legacy profile or JSON store is involved.
+        /// </summary>
+        public static bool TryApplyCommerceScenarioScope(
+            string seller,
+            string knowledgeId,
+            string question,
+            string answer,
+            string oldAnswer,
+            string scopeToken,
+            string sourceId,
+            string evidenceType,
+            out string result)
+        {
+            result = string.Empty;
+            question = (question ?? string.Empty).Trim();
+            answer = (answer ?? string.Empty).Trim();
+            oldAnswer = (oldAnswer ?? string.Empty).Trim();
+            scopeToken = (scopeToken ?? string.Empty).Trim();
+            if (question.Length == 0 || answer.Length == 0 || scopeToken.Length == 0)
+            {
+                result = "缺少问题、答案或场景约束，拒绝更新 Knowledge V2。";
+                return false;
+            }
+
+            try
+            {
+                var shop = ResolveShopRequired(seller);
+                var state = GetState(shop);
+                EnsureMigrated(shop, state);
+                KnowledgeV2Record current = null;
+                KnowledgeV2Record preserved = null;
+                var preservedCreated = false;
+                lock (state.Sync)
+                {
+                    var all = state.Db.ReadRecords<KnowledgeV2RecordRow>(null)
+                        .Select(FromRow).Where(x => x != null).ToList();
+                    var normalizedQuestion = KnowledgeV2Semantics.Compact(question);
+                    var candidates = all.Where(x => string.Equals(
+                        KnowledgeV2Semantics.Compact(x.Title), normalizedQuestion, StringComparison.Ordinal))
+                        .ToList();
+                    if (!string.IsNullOrWhiteSpace(knowledgeId))
+                        current = candidates.FirstOrDefault(x => string.Equals(x.Id, knowledgeId, StringComparison.Ordinal));
+                    if (current == null)
+                    {
+                        var answerMatches = candidates.Where(x => x.Enabled
+                            && string.Equals(x.Status, "active", StringComparison.OrdinalIgnoreCase)
+                            && string.Equals((x.Answer ?? string.Empty).Trim(), answer, StringComparison.Ordinal)).ToList();
+                        if (answerMatches.Count == 1) current = answerMatches[0];
+                        else if (answerMatches.Count > 1)
+                        {
+                            result = "同题同答案存在多条 Knowledge V2 记录，拒绝猜测更新目标。";
+                            return false;
+                        }
+                    }
+                    if (current == null || !current.Enabled
+                        || !string.Equals(current.Status, "active", StringComparison.OrdinalIgnoreCase))
+                    {
+                        result = "找不到唯一且启用中的 Knowledge V2 记录，场景约束未写入。";
+                        return false;
+                    }
+                    if (!string.Equals((current.Answer ?? string.Empty).Trim(), answer, StringComparison.Ordinal))
+                    {
+                        result = "Knowledge V2 当前答案与学习报告不一致，拒绝覆盖更新。";
+                        return false;
+                    }
+
+                    var now = DateTime.Now;
+                    var currentUpdated = CloneAndNormalize(current);
+                    var rowsToSave = new List<object>();
+                    var oldAnswerKey = KnowledgeV2Semantics.Compact(oldAnswer);
+                    var currentAnswerKey = KnowledgeV2Semantics.Compact(answer);
+                    if (oldAnswerKey.Length > 0 && oldAnswerKey != currentAnswerKey)
+                    {
+                        preserved = all.FirstOrDefault(x => x.Id != current.Id
+                            && string.Equals(KnowledgeV2Semantics.Compact(x.Title), normalizedQuestion, StringComparison.Ordinal)
+                            && string.Equals(KnowledgeV2Semantics.Compact(x.Answer), oldAnswerKey, StringComparison.Ordinal));
+                        if (preserved == null)
+                        {
+                            preserved = CloneAndNormalize(current);
+                            preserved.Id = Guid.NewGuid().ToString("N");
+                            preserved.Answer = oldAnswer;
+                            preserved.ShortAnswer = oldAnswer;
+                            preserved.SourceType = "commerce_scenario_preserved";
+                            preserved.SourceId = "commerce-preserved:" + (string.IsNullOrWhiteSpace(sourceId)
+                                ? Guid.NewGuid().ToString("N") : sourceId.Trim());
+                            preserved.CreatedAt = now;
+                            preserved.UpdatedAt = now;
+                            preserved.LastVerifiedAt = now;
+                            preserved.UseCount = 0;
+                            preserved.AcceptedCount = 0;
+                            preserved.CorrectionCount = 0;
+                            preserved.WithdrawCount = 0;
+                            preserved.Authority = Math.Min(0.86, Math.Max(0.70, current.Authority));
+                            preserved.Confidence = Math.Min(0.86, Math.Max(0.70, current.Confidence));
+                            preservedCreated = true;
+                        }
+                        else preserved = CloneAndNormalize(preserved);
+
+                        preserved.Exclusions = NormalizeList(
+                            (preserved.Exclusions ?? new List<string>()).Concat(new[] { scopeToken }), 40);
+                        preserved.UpdatedAt = now;
+                        NormalizeForSave(preserved);
+                        rowsToSave.Add(ToRow(preserved));
+                    }
+
+                    currentUpdated.Conditions = NormalizeList(
+                        (currentUpdated.Conditions ?? new List<string>()).Concat(new[] { scopeToken }), 40);
+                    currentUpdated.RequiredContext = NormalizeList(
+                        (currentUpdated.RequiredContext ?? new List<string>()).Concat(new[] { scopeToken }), 40);
+                    currentUpdated.Exclusions = (currentUpdated.Exclusions ?? new List<string>())
+                        .Where(x => !string.Equals(x, scopeToken, StringComparison.OrdinalIgnoreCase)).ToList();
+                    currentUpdated.Authority = Math.Max(currentUpdated.Authority, 0.94);
+                    currentUpdated.Confidence = Math.Max(currentUpdated.Confidence, 0.94);
+                    currentUpdated.UpdatedAt = now;
+                    currentUpdated.LastVerifiedAt = now;
+                    NormalizeForSave(currentUpdated);
+                    rowsToSave.Add(ToRow(currentUpdated));
+
+                    state.Db.SaveRecordsInTransaction(rowsToSave);
+                    current = currentUpdated;
+                }
+
+                if (preserved != null) KnowledgeEngineV2Service.ApplyRecordUpdate(seller, preserved);
+                KnowledgeEngineV2Service.ApplyRecordUpdate(seller, current);
+                string auditError;
+                KnowledgeEngineV2GovernanceAuditService.TryAppendAction(
+                    seller,
+                    "commerce_scenario_scope",
+                    "knowledge",
+                    current.Id,
+                    sourceId ?? string.Empty,
+                    question,
+                    "previous_answer_length=" + oldAnswer.Length,
+                    "scope=" + scopeToken + ";evidence=" + (evidenceType ?? string.Empty)
+                        + ";preserved_previous=" + (preserved != null),
+                    "已将修订后的 Knowledge V2 答案限制到明确的订单/履约场景"
+                        + (preservedCreated ? "，并保留纠错前答案为独立排除变体。" : "。"),
+                    "success",
+                    out auditError);
+                result = "Knowledge V2 场景约束已保存并刷新索引。";
+                return true;
+            }
+            catch (Exception ex)
+            {
+                result = "Knowledge V2 场景约束写入失败：" + ex.Message;
+                BotLib.Log.ErrorWithMaxCount("Knowledge V2 Commerce场景约束失败: " + ex.GetType().Name, 10);
+                return false;
+            }
+        }
+
+        /// <summary>
         /// Adds a new production V2 fact only when a complete, source-stable session
         /// supplied an exact buyer message and an exact non-Bot human seller reply.
         /// The expected corpus fingerprint is checked under the same shop database
