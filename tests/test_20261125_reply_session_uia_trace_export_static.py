@@ -117,7 +117,9 @@ def test_premerge_waits_for_authoritative_same_shop_before_running_fixed_rules()
 
 def test_policy_suppression_does_not_mark_first_reply_delivered_or_fall_through_to_ai():
     source = read("src/Bot/ChromeNs/BuyerMessageBurstCoordinator.cs")
-    first = source.split("var firstReserved =", 1)[1].split("if (allowLocalShortReply)", 1)[0]
+    first = source.split("var firstReserved =", 1)[1].split(
+        "private static bool HasNewerSubstantiveConversationTurn", 1
+    )[0]
     assert first.index("firstOutcome == CanonicalPreMergeOutcome.Consumed") < first.index(
         "FirstInquiryFixedReplyService.MarkDelivered"
     ) < first.index("FirstInquiryFixedReplyService.ReleaseReservation") < first.index(
