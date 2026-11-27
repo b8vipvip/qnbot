@@ -222,7 +222,7 @@ def test_recovered_buyer_messages_reenter_authoritative_shop_scope():
     assert "decision,\n                        shopKey" in method
     assert "ResponseProgressTracker.ObserveQuestion(sellerNick, buyerNick, displayQuestion, detectedAt, shopKey)" in method
     assert "ShopKey = shopKey" in method
-    assert "if (string.IsNullOrWhiteSpace(shopKey))" in method
+    assert "if (shop == null || shopKey.Length == 0)" in method
 
 
 def test_runtime_scope_does_not_add_a_second_reflection_handler_wrapper():
