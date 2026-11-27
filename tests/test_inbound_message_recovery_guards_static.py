@@ -244,3 +244,15 @@ def test_order_event_hub_fallback_reads_bot_switch_under_validated_shop_scope():
     bot = method.index("botEnabledForShop = Params.Robot.CanUseRobotReal;")
     assert scope < bot
     assert "if (!botEnabledForShop)" in method
+
+
+def test_order_event_hub_auto_reply_diagnostic_uses_shop_scoped_value():
+    source = read("src/Bot/ChromeNs/BotActivityCoordinator.cs")
+    start = source.index("var eventTime = snapshot.EventTime")
+    end = source.index("if (fixedPreset)", start)
+    method = source[start:end]
+
+    scope = method.index("using (ShopSettingsScope.Enter(runtimeShop, false))")
+    auto_reply = method.index("autoReplyEnabledForShop = Params.Robot.GetIsAutoReply();")
+    assert scope < auto_reply
+    assert '", autoReply=" + autoReplyEnabledForShop' in method
