@@ -163,7 +163,7 @@ namespace Bot.ChromeNs
                 regenerated = "如果前面的步骤都试过仍无效，建议转人工进一步核查。";
 
             var duplicateValidation = PreSendAnswerValidator.Validate(
-                seller, buyer, question, regenerated, knowledge, true);
+                seller, buyer, question, regenerated, true, approvedV2ContextEvidence);
             ReplyQualityMetricsService.RecordValidation(
                 duplicateValidation.Action, duplicateValidation.Issues, true);
             if (duplicateValidation.Action != AnswerValidationAction.Pass)
