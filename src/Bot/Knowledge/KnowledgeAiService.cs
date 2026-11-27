@@ -25,11 +25,11 @@ namespace Bot.Knowledge
         public int DuplicateSkipped { get; set; }
         public int NewCategoryCount { get; set; }
         public int UnsupportedImageSkipped { get; set; }
-        public List<KnowledgeBaseEntry> AddedItems { get; set; }
+        public List<KnowledgeV2Record> AddedItems { get; set; }
 
         public KnowledgeImportResult()
         {
-            AddedItems = new List<KnowledgeBaseEntry>();
+            AddedItems = new List<KnowledgeV2Record>();
         }
     }
 
@@ -88,9 +88,10 @@ namespace Bot.Knowledge
         private const int ImagesPerBatch = 5;
 
         private const string SystemPrompt =
-            "你是电商客服知识库整理助手。只能根据输入资料生成答案，不允许编造价格、库存、发货时间、物流时效或售后承诺。" +
-            "每批最多生成20到40条问答。只输出严格JSON，不要输出解释、Markdown代码围栏或额外说明。" +
-            "输出结构必须是：{\"faqs\":[{\"category\":\"店铺规则\",\"question\":\"问题\",\"answer\":\"答案\",\"keywords\":[\"关键词\"]}]}。";
+            "你是 Knowledge Engine V2 的结构化知识整理助手。只能依据输入资料生成知识，禁止编造价格、库存、发货时间、物流时效或售后承诺。" +
+            "每批最多生成40条记录。只输出严格JSON，不要输出解释、Markdown代码围栏或额外说明。" +
+            "根对象必须包含 records 数组；每条记录使用 title,type,intent,subject,predicate,entities,aliases,answer,short_answer,conditions,exclusions,required_context,product_ids,risk_level,confidence,authority,status。" +
+            "禁止输出 faqs/category/question/keywords 等旧版字段；不确定的事实不要猜测，缺失字段用空字符串或空数组。";
 
         public bool SupportsDirectVideo
         {
@@ -311,7 +312,7 @@ namespace Bot.Knowledge
 
         private sealed class ParseResult
         {
-            public readonly List<KnowledgeBaseEntry> Items = new List<KnowledgeBaseEntry>();
+            public readonly List<KnowledgeV2Record> Items = new List<KnowledgeV2Record>();
             public int UnsupportedImages;
         }
 
@@ -547,60 +548,142 @@ namespace Bot.Knowledge
             };
         }
 
-        public static List<KnowledgeBaseEntry> ParseAiKnowledgeResult(string text)
+        public static List<KnowledgeV2Record> ParseAiKnowledgeResult(string text)
         {
             text = StripFence(text);
             var start = text.IndexOf('{');
             var end = text.LastIndexOf('}');
             if (start < 0 || end <= start)
-            {
-                throw new Exception("未找到JSON对象，可能是响应被截断");
-            }
+                throw new Exception("未找到 Knowledge V2 JSON 对象，可能是响应被截断。");
 
             var obj = JObject.Parse(text.Substring(start, end - start + 1));
-            var faqs = obj["faqs"] as JArray;
-            if (faqs == null)
+            if (obj["faqs"] != null || obj["question"] != null || obj["category"] != null || obj["keywords"] != null)
+                throw new Exception("AI 返回了旧版 FAQ 格式；当前只接受 Knowledge V2 records。");
+
+            var records = obj["records"] as JArray;
+            if (records == null)
             {
-                throw new Exception("缺少faqs数组");
-            }
-
-            var result = new List<KnowledgeBaseEntry>();
-            foreach (var faq in faqs.OfType<JObject>().Take(40))
-            {
-                var question = (faq["question"] ?? faq["title"] ?? string.Empty).ToString().Trim();
-                var answer = (faq["answer"] ?? string.Empty).ToString().Trim();
-                if (string.IsNullOrWhiteSpace(question) || string.IsNullOrWhiteSpace(answer)) continue;
-
-                var keywords = faq["keywords"] is JArray
-                    ? string.Join(",", ((JArray)faq["keywords"])
-                        .Select(x => x.ToString().Trim())
-                        .Where(x => x.Length > 0)
-                        .Distinct())
-                    : (faq["keywords"] ?? string.Empty).ToString();
-                var now = DateTime.Now.ToString("yyyy-MM-dd HH:mm:ss");
-
-                result.Add(new KnowledgeBaseEntry
+                foreach (var key in new[] { "knowledge", "items", "data", "result" })
                 {
-                    Enabled = true,
-                    Category = string.IsNullOrWhiteSpace((faq["category"] ?? string.Empty).ToString())
-                        ? "通用"
-                        : faq["category"].ToString().Trim(),
-                    Title = NormalizeDisplay(question),
-                    Answer = NormalizeDisplay(answer),
-                    Keywords = NormalizeDisplay(keywords),
-                    UpdatedAt = now,
+                    var nested = obj[key] as JArray;
+                    if (nested == null) continue;
+                    records = nested;
+                    break;
+                }
+            }
+            if (records == null && obj["answer"] != null && obj["title"] != null)
+                records = new JArray(obj);
+            if (records == null) throw new Exception("缺少 Knowledge V2 records 数组。");
+
+            var result = new List<KnowledgeV2Record>();
+            foreach (var item in records.OfType<JObject>().Take(40))
+            {
+                if (item["question"] != null || item["category"] != null || item["keywords"] != null)
+                    throw new Exception("records 中包含旧版 FAQ 字段，拒绝混合格式导入。");
+
+                var title = ReadText(item, "title");
+                var answer = ReadText(item, "answer");
+                if (title.Length == 0 || answer.Length == 0) continue;
+
+                var entities = ReadStrings(item, "entities");
+                if (entities.Count == 0)
+                    entities = KnowledgeEngineV2Semantics.ExtractEntities(title + " " + answer);
+                var aliases = ReadStrings(item, "aliases");
+                aliases.Insert(0, title);
+                var subject = ReadText(item, "subject");
+                if (subject.Length == 0) subject = KnowledgeEngineV2Semantics.ResolveSubject(title, entities);
+                var intent = ReadText(item, "intent");
+                if (intent.Length == 0) intent = KnowledgeEngineV2Semantics.DetectIntent(title + " " + answer);
+                var predicate = ReadText(item, "predicate");
+                if (predicate.Length == 0) predicate = KnowledgeEngineV2Semantics.DetectPredicate(title + " " + answer);
+                var risk = ReadText(item, "risk_level");
+                if (string.Equals(risk, "high", StringComparison.OrdinalIgnoreCase)
+                    || KnowledgeEngineV2Semantics.IsHighRisk(title + " " + answer))
+                    risk = "high";
+                else
+                    risk = "normal";
+
+                double confidence;
+                if (!double.TryParse(ReadText(item, "confidence"), out confidence)
+                    || double.IsNaN(confidence) || double.IsInfinity(confidence))
+                    confidence = 0.86;
+                confidence = Math.Max(0, Math.Min(1, confidence));
+                double authority;
+                if (!double.TryParse(ReadText(item, "authority"), out authority)
+                    || double.IsNaN(authority) || double.IsInfinity(authority))
+                    authority = 0.90;
+                authority = Math.Max(0, Math.Min(1, authority));
+
+                var now = DateTime.Now;
+                var candidate = string.Equals(ReadText(item, "status"), "candidate", StringComparison.OrdinalIgnoreCase)
+                    || risk == "high"
+                    || confidence < 0.72
+                    || authority < 0.70;
+                result.Add(new KnowledgeV2Record
+                {
                     Id = Guid.NewGuid().ToString("N"),
+                    Title = NormalizeDisplay(title),
+                    Type = candidate ? "learning_candidate" : KnowledgeEngineV2Semantics.NormalizeType(ReadText(item, "type")),
+                    Intent = KnowledgeEngineV2Semantics.NormalizeIntent(intent),
+                    Subject = subject,
+                    Predicate = KnowledgeEngineV2Semantics.NormalizePredicate(predicate),
+                    Entities = CleanStrings(entities),
+                    Aliases = CleanStrings(aliases),
+                    Answer = NormalizeDisplay(answer),
+                    ShortAnswer = BuildShortAnswer(ReadText(item, "short_answer"), answer),
+                    Conditions = CleanStrings(ReadStrings(item, "conditions")),
+                    Exclusions = CleanStrings(ReadStrings(item, "exclusions")),
+                    RequiredContext = CleanStrings(ReadStrings(item, "required_context")),
+                    ProductIds = CleanStrings(ReadStrings(item, "product_ids")),
+                    RiskLevel = risk,
+                    Confidence = confidence,
+                    Authority = authority,
+                    Enabled = !candidate,
+                    Status = candidate ? "candidate" : "active",
+                    SourceType = "chat_history_analysis",
                     CreatedAt = now,
-                    AiGenerated = true,
-                    SourceType = "智能导入"
+                    UpdatedAt = now,
+                    LastVerifiedAt = now
                 });
             }
 
-            if (result.Count < 1)
-            {
-                throw new Exception("没有有效问答");
-            }
+            if (result.Count < 1) throw new Exception("没有有效的 Knowledge V2 记录。");
             return result;
+        }
+
+        private static string ReadText(JObject obj, string name)
+        {
+            var token = obj == null ? null : obj[name];
+            return token == null || token.Type == JTokenType.Null ? string.Empty : Convert.ToString(token).Trim();
+        }
+
+        private static List<string> ReadStrings(JObject obj, string name)
+        {
+            var token = obj == null ? null : obj[name];
+            var array = token as JArray;
+            if (array != null)
+                return array.Select(x => Convert.ToString(x).Trim())
+                    .Where(x => x.Length > 0).Distinct(StringComparer.OrdinalIgnoreCase).Take(40).ToList();
+            var value = token == null ? string.Empty : Convert.ToString(token);
+            return string.IsNullOrWhiteSpace(value)
+                ? new List<string>()
+                : value.Split(new[] { ',', '，', ';', '；', '|', '\\r', '\\n' }, StringSplitOptions.RemoveEmptyEntries)
+                    .Select(x => x.Trim()).Where(x => x.Length > 0)
+                    .Distinct(StringComparer.OrdinalIgnoreCase).Take(40).ToList();
+        }
+
+        private static List<string> CleanStrings(IEnumerable<string> values)
+        {
+            return (values ?? Enumerable.Empty<string>()).Select(x => (x ?? string.Empty).Trim())
+                .Where(x => x.Length > 0).Distinct(StringComparer.OrdinalIgnoreCase).Take(40).ToList();
+        }
+
+        private static string BuildShortAnswer(string requested, string answer)
+        {
+            requested = (requested ?? string.Empty).Trim();
+            if (requested.Length > 0) return requested.Length <= 160 ? requested : requested.Substring(0, 160);
+            answer = (answer ?? string.Empty).Trim();
+            return answer.Length <= 100 ? answer : answer.Substring(0, 100);
         }
 
         public static string StripFence(string text)
@@ -617,20 +700,20 @@ namespace Bot.Knowledge
             return text;
         }
 
-        private KnowledgeImportResult SaveDeduped(List<KnowledgeBaseEntry> generated)
+        private KnowledgeImportResult SaveDeduped(List<KnowledgeV2Record> generated)
         {
-            generated = generated ?? new List<KnowledgeBaseEntry>();
+            generated = generated ?? new List<KnowledgeV2Record>();
             var shop = ShopSettingsScope.Current;
             if (shop == null || !shop.HasStableSellerId || string.IsNullOrWhiteSpace(shop.SellerNick))
                 throw new InvalidOperationException("历史/智能导入必须在精确 ShopKey 作用域内执行。");
 
             var existing = KnowledgeEngineV2Repository.LoadAll(shop.SellerNick)
                 ?? new List<KnowledgeV2Record>();
-            var oldCategories = new HashSet<string>(
+            var oldTypes = new HashSet<string>(
                 existing.Select(x => x.Type ?? string.Empty).Where(x => x.Length > 0),
                 StringComparer.OrdinalIgnoreCase);
             var seen = new HashSet<string>(existing.Select(x => ContentHash(x.Title, x.Answer)), StringComparer.Ordinal);
-            var added = new List<KnowledgeBaseEntry>();
+            var added = new List<KnowledgeV2Record>();
             var duplicateCount = 0;
 
             foreach (var item in generated)
@@ -645,16 +728,16 @@ namespace Bot.Knowledge
                 added.Add(item);
             }
 
-            // Analysis only: the caller must explicitly promote these DTOs through
-            // KnowledgeV2HistoryImportService. This method never writes a second store.
+            // Analysis only: the caller promotes these V2 records through the exact
+            // ShopKey-scoped history import service. No V1 DTO or JSON store exists.
             return new KnowledgeImportResult
             {
                 AiGenerated = generated.Count,
                 Added = added.Count,
                 DuplicateSkipped = duplicateCount,
                 NewCategoryCount = added
-                    .Select(x => x.Category ?? string.Empty)
-                    .Where(x => x.Length > 0 && !oldCategories.Contains(x))
+                    .Select(x => x.Type ?? string.Empty)
+                    .Where(x => x.Length > 0 && !oldTypes.Contains(x))
                     .Distinct(StringComparer.OrdinalIgnoreCase)
                     .Count(),
                 AddedItems = added
