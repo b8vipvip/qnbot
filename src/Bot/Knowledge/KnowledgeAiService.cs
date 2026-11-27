@@ -23,7 +23,7 @@ namespace Bot.Knowledge
         public int AiGenerated { get; set; }
         public int Added { get; set; }
         public int DuplicateSkipped { get; set; }
-        public int NewCategoryCount { get; set; }
+        public int NewTypeCount { get; set; }
         public int UnsupportedImageSkipped { get; set; }
         public List<KnowledgeV2Record> AddedItems { get; set; }
 
@@ -141,10 +141,10 @@ namespace Bot.Knowledge
             var existingV2 = currentShop == null || !currentShop.HasStableSellerId
                 ? new List<KnowledgeV2Record>()
                 : KnowledgeEngineV2Repository.LoadAll(currentShop.SellerNick);
-            var existingCategories = new HashSet<string>(
+            var existingTypes = new HashSet<string>(
                 existingV2.Select(x => x.Type ?? string.Empty).Where(x => x.Length > 0),
                 StringComparer.OrdinalIgnoreCase);
-            var importedCategories = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+            var importedTypes = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
 
             for (var i = 0; i < batches.Count; i++)
             {
@@ -217,12 +217,12 @@ namespace Bot.Knowledge
                 total.AddedItems.AddRange(save.AddedItems);
 
                 foreach (var category in save.AddedItems
-                    .Select(x => x.Category ?? string.Empty)
-                    .Where(x => x.Length > 0 && !existingCategories.Contains(x)))
+                    .Select(x => x.Type ?? string.Empty)
+                    .Where(x => x.Length > 0 && !existingTypes.Contains(x)))
                 {
-                    importedCategories.Add(category);
+                    importedTypes.Add(category);
                 }
-                total.NewCategoryCount = importedCategories.Count;
+                total.NewTypeCount = importedTypes.Count;
 
                 Log.Info(string.Format(
                     "SmartImport batch ok endpoint={0} model={1} batch={2}/{3} input_chars={4} batch_hash={5} elapsed_ms={6} timeout_seconds={7} parsed_items={8} added={9} dup={10}",
@@ -735,7 +735,7 @@ namespace Bot.Knowledge
                 AiGenerated = generated.Count,
                 Added = added.Count,
                 DuplicateSkipped = duplicateCount,
-                NewCategoryCount = added
+                NewTypeCount = added
                     .Select(x => x.Type ?? string.Empty)
                     .Where(x => x.Length > 0 && !oldTypes.Contains(x))
                     .Distinct(StringComparer.OrdinalIgnoreCase)
