@@ -305,9 +305,9 @@ namespace Bot.Knowledge
                 {
                     var all = state.Db.ReadRecords<KnowledgeV2RecordRow>(null)
                         .Select(FromRow).Where(x => x != null).ToList();
-                    var normalizedQuestion = KnowledgeV2Semantics.Compact(question);
+                    var normalizedQuestion = KnowledgeEngineV2Semantics.Compact(question);
                     var candidates = all.Where(x => string.Equals(
-                        KnowledgeV2Semantics.Compact(x.Title), normalizedQuestion, StringComparison.Ordinal))
+                        KnowledgeEngineV2Semantics.Compact(x.Title), normalizedQuestion, StringComparison.Ordinal))
                         .ToList();
                     if (!string.IsNullOrWhiteSpace(knowledgeId))
                         current = candidates.FirstOrDefault(x => string.Equals(x.Id, knowledgeId, StringComparison.Ordinal));
@@ -338,13 +338,13 @@ namespace Bot.Knowledge
                     var now = DateTime.Now;
                     var currentUpdated = CloneAndNormalize(current);
                     var rowsToSave = new List<object>();
-                    var oldAnswerKey = KnowledgeV2Semantics.Compact(oldAnswer);
-                    var currentAnswerKey = KnowledgeV2Semantics.Compact(answer);
+                    var oldAnswerKey = KnowledgeEngineV2Semantics.Compact(oldAnswer);
+                    var currentAnswerKey = KnowledgeEngineV2Semantics.Compact(answer);
                     if (oldAnswerKey.Length > 0 && oldAnswerKey != currentAnswerKey)
                     {
                         preserved = all.FirstOrDefault(x => x.Id != current.Id
-                            && string.Equals(KnowledgeV2Semantics.Compact(x.Title), normalizedQuestion, StringComparison.Ordinal)
-                            && string.Equals(KnowledgeV2Semantics.Compact(x.Answer), oldAnswerKey, StringComparison.Ordinal));
+                            && string.Equals(KnowledgeEngineV2Semantics.Compact(x.Title), normalizedQuestion, StringComparison.Ordinal)
+                            && string.Equals(KnowledgeEngineV2Semantics.Compact(x.Answer), oldAnswerKey, StringComparison.Ordinal));
                         if (preserved == null)
                         {
                             preserved = CloneAndNormalize(current);
