@@ -1207,8 +1207,8 @@ namespace Bot.ChromeNs
                 return Task.CompletedTask;
             }
 
-            // This is the authoritative business claim. It is intentionally the first dedupe write
-            // on the buyer path and is shared with background recovery.
+            // This is the authoritative business claim. It is shared with background recovery,
+            // but it is not treated as proof of successful ingress until a route accepts the event.
             if (!_handledBuyerMessageDeduplicator.TryAccept(messageKey))
             {
                 Log.Info("已实际处理的买家消息不再重复入队: key=" + messageKey);
@@ -1217,77 +1217,87 @@ namespace Bot.ChromeNs
 
             try
             {
-            ConversationContextStore.RefreshAndRecord(message, messageText);
-            MarkBuyerMessageObserved(sellerNick, buyerNick);
+                ConversationContextStore.RefreshAndRecord(message, messageText);
+                MarkBuyerMessageObserved(sellerNick, buyerNick);
 
-            OrderPlacedReplyPlan orderPlan;
-            if (OrderPlacedAutoReplyService.TryCreatePlan(
-                message,
-                messageText,
-                sellerNick,
-                buyerNick,
-                _messageSafetyStartedAt,
-                out orderPlan,
-                null,
-                ShopContextLocator.ResolveRuntimeBySeller(this).ShopKey))
-            {
-                if (orderPlan != null && orderPlan.IsBuyerFollowUp)
-                    ResponseProgressTracker.ObserveNewBuyerTurn(sellerNick, buyerNick, shopKey);
-                return orderPlan == null
-                    ? Task.CompletedTask
-                    : ProcessOrderPlacedReplyAsync(orderPlan);
-            }
+                OrderPlacedReplyPlan orderPlan;
+                if (OrderPlacedAutoReplyService.TryCreatePlan(
+                    message,
+                    messageText,
+                    sellerNick,
+                    buyerNick,
+                    _messageSafetyStartedAt,
+                    out orderPlan,
+                    null,
+                    shopKey))
+                {
+                    if (orderPlan != null && orderPlan.IsBuyerFollowUp)
+                        ResponseProgressTracker.ObserveNewBuyerTurn(sellerNick, buyerNick, shopKey);
+                    // ProcessOrderPlacedReplyAsync owns its durable action/confirmation ledger.
+                    return orderPlan == null
+                        ? Task.CompletedTask
+                        : ProcessOrderPlacedReplyAsync(orderPlan);
+                }
 
-            var decision = IncomingMessageSafety.Evaluate(message, messageText, _messageSafetyStartedAt, shopKey, CDP);
-            var displayQuestion = IncomingMessageSafety.GetDisplayText(message, messageText);
-            var visionDecision = VisionMessageDecision.Decide(
-                message,
-                messageText,
-                decision,
-                shopKey);
-            Log.Info("买家消息路由决策: seller=" + sellerNick
-                + ", buyer=" + buyerNick
-                + ", shopRef=" + MyWebSocketServer.DiagnosticRef("shop", shopKey)
-                + ", kind=" + (visionDecision == null ? "null" : visionDecision.Kind.ToString())
-                + ", label=" + (visionDecision == null ? string.Empty : visionDecision.QuestionLabel)
-                + ", note=" + (visionDecision == null ? string.Empty : visionDecision.Note));
+                var decision = IncomingMessageSafety.Evaluate(message, messageText, _messageSafetyStartedAt, shopKey, CDP);
+                var displayQuestion = IncomingMessageSafety.GetDisplayText(message, messageText);
+                var visionDecision = VisionMessageDecision.Decide(
+                    message,
+                    messageText,
+                    decision,
+                    shopKey);
+                Log.Info("买家消息路由决策: seller=" + sellerNick
+                    + ", buyer=" + buyerNick
+                    + ", shopRef=" + MyWebSocketServer.DiagnosticRef("shop", shopKey)
+                    + ", kind=" + (visionDecision == null ? "null" : visionDecision.Kind.ToString())
+                    + ", label=" + (visionDecision == null ? string.Empty : visionDecision.QuestionLabel)
+                    + ", note=" + (visionDecision == null ? string.Empty : visionDecision.Note));
 
-            if (!Params.Robot.CanUseRobotReal)
-            {
-                AddSkippedConversation(sellerNick, buyerNick, displayQuestion, "Bot已停用，未调用AI，也未发送给买家。");
+                if (!Params.Robot.CanUseRobotReal)
+                {
+                    AddSkippedConversation(sellerNick, buyerNick, displayQuestion, "Bot已停用，未调用AI，也未发送给买家。");
+                    return Task.CompletedTask;
+                }
+
+                if (visionDecision.Kind == VisionDecisionKind.Skip
+                    && !IncomingMessageSafety.IsMediaPlaceholder(displayQuestion))
+                {
+                    AddSkippedConversation(sellerNick, buyerNick, visionDecision.QuestionLabel, visionDecision.Note);
+                    Log.Info("买家消息安全跳过: buyer=" + buyerNick + ", reason=" + visionDecision.Note);
+                    return Task.CompletedTask;
+                }
+
+                ResponseProgressTracker.ObserveQuestion(sellerNick, buyerNick, displayQuestion, detectedAt, shopKey);
+                if (visionDecision.Kind == VisionDecisionKind.Text)
+                {
+                    BotFlowTestService.RecordCandidate(sellerNick, buyerNick, displayQuestion, detectedAt, shopKey);
+                }
+                Log.Info("买家消息已识别并展示: seller=" + sellerNick + ", buyer=" + buyerNick
+                    + ", detectedAt=" + detectedAt.ToString("HH:mm:ss.fff") + ", question=" + displayQuestion);
+
+                _buyerMessageBurstCoordinator.Enqueue(new BuyerMessageBurstItem
+                {
+                    ShopKey = shopKey,
+                    SellerNick = sellerNick,
+                    BuyerNick = buyerNick,
+                    MessageKey = messageKey,
+                    DisplayText = displayQuestion,
+                    Message = message,
+                    SafetyDecision = decision,
+                    VisionDecision = visionDecision,
+                    SortValue = IncomingMessageSafety.GetSortValue(message),
+                    ReceivedAt = detectedAt
+                });
                 return Task.CompletedTask;
             }
-
-            if (visionDecision.Kind == VisionDecisionKind.Skip
-                && !IncomingMessageSafety.IsMediaPlaceholder(displayQuestion))
+            catch (Exception ex)
             {
-                AddSkippedConversation(sellerNick, buyerNick, visionDecision.QuestionLabel, visionDecision.Note);
-                Log.Info("买家消息安全跳过: buyer=" + buyerNick + ", reason=" + visionDecision.Note);
-                return Task.CompletedTask;
+                // Release only synchronous pre-acceptance failures. If an order Task was
+                // returned, its durable action ledger owns retries and no claim is reopened.
+                _handledBuyerMessageDeduplicator.TryRelease(messageKey);
+                Log.ErrorWithMaxCount("买家消息同步入站处理异常，已释放去重占位以便后台补偿重试: " + ex.Message, 20);
+                throw;
             }
-
-            ResponseProgressTracker.ObserveQuestion(sellerNick, buyerNick, displayQuestion, detectedAt, shopKey);
-            if (visionDecision.Kind == VisionDecisionKind.Text)
-            {
-                BotFlowTestService.RecordCandidate(sellerNick, buyerNick, displayQuestion, detectedAt, shopKey);
-            }
-            Log.Info("买家消息已识别并展示: seller=" + sellerNick + ", buyer=" + buyerNick
-                + ", detectedAt=" + detectedAt.ToString("HH:mm:ss.fff") + ", question=" + displayQuestion);
-
-            _buyerMessageBurstCoordinator.Enqueue(new BuyerMessageBurstItem
-            {
-                ShopKey = shopKey,
-                SellerNick = sellerNick,
-                BuyerNick = buyerNick,
-                MessageKey = messageKey,
-                DisplayText = displayQuestion,
-                Message = message,
-                SafetyDecision = decision,
-                VisionDecision = visionDecision,
-                SortValue = IncomingMessageSafety.GetSortValue(message),
-                ReceivedAt = detectedAt
-            });
-            return Task.CompletedTask;
         }
 
         private async Task ProcessBuyerBurstAsync(BuyerMessageBurstLease lease)
@@ -2047,15 +2057,5 @@ namespace Bot.ChromeNs
         {
             return await cdp.GetCurrentConversationID();
         }
-    
-            }
-            catch (Exception ex)
-            {
-                // The claim is a processing reservation, not proof of successful ingress.
-                // If synchronous routing failed before an order/burst handler accepted it,
-                // release it so the background history recovery can retry the exact message.
-                _handledBuyerMessageDeduplicator.TryRelease(messageKey);
-                Log.ErrorWithMaxCount("买家消息同步入站处理异常，已释放去重占位以便后台补偿重试: " + ex.Message, 20);
-                throw;
-            }}
+    }
 }
