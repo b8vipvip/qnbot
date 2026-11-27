@@ -1,12 +1,5 @@
 using Bot.ChromeNs;
-using Bot.ShopScope;
-using BotLib;
 using System;
-using System.Collections.Concurrent;
-using System.Collections.Generic;
-using System.Linq;
-using System.Threading;
-using System.Threading.Tasks;
 
 namespace Bot.Knowledge
 {
@@ -45,12 +38,6 @@ namespace Bot.Knowledge
                 || IsAutoPublishedHumanEvidenceSource(sourceType);
         }
 
-        public static bool ShouldImportLegacyEntry(Bot.ChromeNs.KnowledgeBaseEntry entry)
-        {
-            if (entry == null || string.IsNullOrWhiteSpace(entry.Answer)) return false;
-            return IsTrustedProductionSource(entry.SourceType) || IsUnapprovedLegacyLearningEntry(entry);
-        }
-
         public static bool IsUnapprovedLegacyLearningEntry(Bot.ChromeNs.KnowledgeBaseEntry entry)
         {
             if (entry == null || IsTrustedProductionSource(entry.SourceType)) return false;
@@ -65,67 +52,6 @@ namespace Bot.Knowledge
                 || source.IndexOf("manual_ai_generated", StringComparison.OrdinalIgnoreCase) >= 0
                 || value.IndexOf("session", StringComparison.OrdinalIgnoreCase) >= 0
                 || value.IndexOf("AI生成", StringComparison.OrdinalIgnoreCase) >= 0;
-        }
-
-        public static bool IsPersistedStateSynchronized(KnowledgeV2Record record, Bot.ChromeNs.KnowledgeBaseEntry entry)
-        {
-            if (record == null || entry == null) return false;
-            var expectedSource = string.IsNullOrWhiteSpace(entry.SourceType) ? "legacy_learning" : entry.SourceType.Trim();
-            if (!string.Equals((record.SourceType ?? string.Empty).Trim(), expectedSource, StringComparison.OrdinalIgnoreCase))
-                return false;
-            // Candidate and disabled V2 records are intentionally disabled in the
-            // legacy mirror. Compare the effective mirror state, not the V2 editor toggle.
-            var isCandidate = IsCandidate(record);
-            var isDisabledStatus = string.Equals(record.Status, "disabled", StringComparison.OrdinalIgnoreCase)
-                || string.Equals(record.Status, "deleted", StringComparison.OrdinalIgnoreCase);
-            var expectedLegacyEnabled = record.Enabled
-                && !isCandidate
-                && !isDisabledStatus
-                && string.Equals(record.Status, "active", StringComparison.OrdinalIgnoreCase);
-            if (entry.Enabled != expectedLegacyEnabled) return false;
-            if (!record.Enabled || isDisabledStatus) return true;
-            if (isCandidate)
-                return string.Equals(record.Status, "candidate", StringComparison.OrdinalIgnoreCase)
-                    && string.Equals(record.Type, "learning_candidate", StringComparison.OrdinalIgnoreCase);
-
-            if (IsExplicitHumanConfirmationSource(expectedSource))
-            {
-                return string.Equals(record.Status, "active", StringComparison.OrdinalIgnoreCase)
-                    && !string.Equals(record.Type, "learning_candidate", StringComparison.OrdinalIgnoreCase)
-                    && record.Authority >= 0.98
-                    && record.Confidence >= 0.94;
-            }
-            if (IsAutoPublishedHumanEvidenceSource(expectedSource))
-            {
-                return string.Equals(record.Status, "active", StringComparison.OrdinalIgnoreCase)
-                    && !string.Equals(record.Type, "learning_candidate", StringComparison.OrdinalIgnoreCase)
-                    && record.Authority >= 0.90
-                    && record.Confidence >= 0.90;
-            }
-
-            return string.Equals(record.Status, "candidate", StringComparison.OrdinalIgnoreCase)
-                && string.Equals(record.Type, "learning_candidate", StringComparison.OrdinalIgnoreCase);
-        }
-
-        public static void ApplyImportedLegacyProvenance(KnowledgeV2Record record, Bot.ChromeNs.KnowledgeBaseEntry entry)
-        {
-            if (record == null || entry == null) return;
-            record.SourceType = string.IsNullOrWhiteSpace(entry.SourceType) ? "legacy_learning" : entry.SourceType;
-            record.SourceId = entry.Id;
-            if (IsExplicitHumanConfirmationSource(record.SourceType))
-            {
-                ApplyHumanConfirmed(record);
-                return;
-            }
-            if (IsAutoPublishedHumanEvidenceSource(record.SourceType))
-            {
-                ApplyAutoPublished(record);
-                return;
-            }
-
-            record.Type = "learning_candidate";
-            record.Status = "candidate";
-            record.Confidence = Math.Min(record.Confidence, 0.82);
         }
 
         public static KnowledgeV2Record NormalizeForRead(KnowledgeV2Record record)
