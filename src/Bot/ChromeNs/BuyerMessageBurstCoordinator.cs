@@ -482,14 +482,16 @@ namespace Bot.ChromeNs
                     // proves that the greeting was not sent. Continue image OCR/AI only when the
                     // transport failed before any physical send action; an indeterminate send must
                     // never fall through to a second answer for the same buyer turn.
-                    var failedBeforeSend = firstFailureReason.IndexOf(
-                            "发送ShopKey作用域确认", StringComparison.OrdinalIgnoreCase) >= 0
-                        || firstFailureReason.IndexOf(
-                            "会话确认", StringComparison.OrdinalIgnoreCase) >= 0
-                        || (firstOutcome == CanonicalPreMergeOutcome.Cancelled
-                            && qn.Rpa != null
-                            && qn.Rpa.LastSendWasCancelled
-                            && firstFailureReason.IndexOf("人工接管", StringComparison.OrdinalIgnoreCase) >= 0);
+                    var sendIsIndeterminate = qn.Rpa != null && qn.Rpa.LastSendWasIndeterminate;
+                    var failedBeforeSend = !sendIsIndeterminate
+                        && (firstFailureReason.IndexOf(
+                                "发送ShopKey作用域确认", StringComparison.OrdinalIgnoreCase) >= 0
+                            || firstFailureReason.IndexOf(
+                                "会话确认", StringComparison.OrdinalIgnoreCase) >= 0
+                            || (firstOutcome == CanonicalPreMergeOutcome.Cancelled
+                                && qn.Rpa != null
+                                && qn.Rpa.LastSendWasCancelled
+                                && firstFailureReason.IndexOf("人工接管", StringComparison.OrdinalIgnoreCase) >= 0));
                     var isImageQuestion = string.Equals(question, "[图片]", StringComparison.Ordinal);
                     if (!failedBeforeSend && !isImageQuestion) return firstOutcome;
 
