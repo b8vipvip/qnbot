@@ -1517,6 +1517,46 @@ namespace Bot.ChromeNs
             return list;
         }
 
+        // One-time V1 -> V2 migration must distinguish an intentionally empty
+        // store from corrupt/unreadable JSON. The ordinary legacy getter is
+        // deliberately forgiving for old UI callers, but migration must fail
+        // closed rather than mark the V2 schema complete after a parse failure.
+        public static bool TryGetKnowledgeBaseForMigration(
+            out List<KnowledgeBaseEntry> list, out string error)
+        {
+            list = null;
+            error = string.Empty;
+            try
+            {
+                var json = GetJson(KnowledgeKey);
+                if (string.IsNullOrWhiteSpace(json))
+                {
+                    list = new List<KnowledgeBaseEntry>();
+                    return true;
+                }
+
+                var parsed = JsonConvert.DeserializeObject<List<KnowledgeBaseEntry>>(json);
+                if (parsed == null)
+                {
+                    if (string.Equals(json.Trim(), "null", StringComparison.OrdinalIgnoreCase))
+                    {
+                        list = new List<KnowledgeBaseEntry>();
+                        return true;
+                    }
+                    error = "legacy_knowledge_root_invalid";
+                    return false;
+                }
+
+                list = parsed;
+                return true;
+            }
+            catch (Exception ex)
+            {
+                error = "legacy_knowledge_read_failed:" + ex.GetType().Name;
+                return false;
+            }
+        }
+
         public static void SaveKnowledgeBase(List<KnowledgeBaseEntry> list)
         {
             SaveJson(KnowledgeKey, JsonConvert.SerializeObject(list ?? new List<KnowledgeBaseEntry>(), Formatting.Indented));
