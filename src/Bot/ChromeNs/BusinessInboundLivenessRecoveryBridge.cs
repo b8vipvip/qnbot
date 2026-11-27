@@ -491,7 +491,12 @@ try {
                     _lastBusinessInboundProbeGapLogAt = DateTime.Now;
                 }
 
-                var historyCount = gapRecovery ? 100 : 20;
+                // The normal probe can run after a silent inbound-hook gap while one
+                // buyer burst is still in flight. BuyerMessageBurstCoordinator accepts up to
+                // 40 source messages per burst; a 20-row history response can silently omit
+                // the first half, then let an answered tail advance the durable checkpoint.
+                // Use the same 100-row window for normal and catch-up probes.
+                var historyCount = 100;
                 var history = await client.Invoke<JObject>("im.singlemsg.GetRemoteHisMsg", new
                 {
                     cid = new { ccode = ccode, type = 1 },
