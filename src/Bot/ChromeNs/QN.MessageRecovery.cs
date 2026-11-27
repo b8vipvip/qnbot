@@ -118,12 +118,18 @@ namespace Bot.ChromeNs
             }
             var seller = (e.Seller.Nick ?? string.Empty).Trim();
             if (string.IsNullOrWhiteSpace(seller)) return;
+            string buyer;
+            bool botEnabledForShop;
             try
             {
                 var shop = ResolveRecoveryShop(seller);
                 using (ShopSettingsScope.Enter(shop, false))
                 {
                     BuyerIdentityAliasService.Observe(seller, e.Buyer.Nick, e.Buyer.Display, e.Buyer.TargetId);
+                    buyer = ResolveBuyerInternalNickInShop(seller, e.Buyer.Nick);
+                    // This notification callback runs outside the UI thread's shop scope.
+                    // Never consult the process-global BotEnabled fallback for this shop.
+                    botEnabledForShop = Params.Robot.CanUseRobotReal;
                 }
             }
             catch (Exception ex)
@@ -131,9 +137,8 @@ namespace Bot.ChromeNs
                 Log.ErrorWithMaxCount("后台消息补偿无法绑定事件来源ShopKey，已跳过: " + ex.Message, 20);
                 return;
             }
-            var buyer = ResolveBuyerInternalNickInShop(seller, e.Buyer.Nick);
             if (string.IsNullOrWhiteSpace(buyer)) return;
-            if (!Params.Robot.CanUseRobotReal) return;
+            if (!botEnabledForShop) return;
 
             var key = RecoveryKey(seller, buyer);
             var scheduledAt = DateTime.Now;
