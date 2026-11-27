@@ -35,6 +35,8 @@ namespace Bot.ChromeNs
         public bool LocalOcrCacheHit { get; set; }
         public string LocalOcrEngine { get; set; }
         public string KnowledgeV2ContextPromptAddon { get; set; }
+        public string ApprovedV2KnowledgeEvidence { get; set; }
+        public bool IsKnowledgeV2DirectAnswer { get; set; }
         public string ConditionalAdviceKey { get; set; }
         public string ConditionalAdviceOrderId { get; set; }
         public string ConditionalAdviceItemId { get; set; }
@@ -380,7 +382,9 @@ namespace Bot.ChromeNs
                     LocalOcrConfidence = ocr.Confidence,
                     LocalOcrCacheHit = true,
                     LocalOcrLatencyMs = ocr.ElapsedMs,
-                    LocalOcrEngine = ocr.Engine
+                    LocalOcrEngine = ocr.Engine,
+                    ApprovedV2KnowledgeEvidence = localDecision == null
+                        ? string.Empty : localDecision.ApprovedV2KnowledgeEvidence ?? string.Empty
                 };
             }
             catch (OperationCanceledException) { return null; }
@@ -463,8 +467,11 @@ namespace Bot.ChromeNs
         private static void ApplyImageKnowledgeContext(
             VisionRequestResult result, VisionRequestResult localDecision)
         {
-            if (result == null || localDecision == null
-                || string.IsNullOrWhiteSpace(localDecision.MatchedImageKnowledgeId)) return;
+            if (result == null || localDecision == null) return;
+
+            result.KnowledgeV2ContextPromptAddon = localDecision.KnowledgeV2ContextPromptAddon ?? string.Empty;
+            result.ApprovedV2KnowledgeEvidence = localDecision.ApprovedV2KnowledgeEvidence ?? string.Empty;
+            if (string.IsNullOrWhiteSpace(localDecision.MatchedImageKnowledgeId)) return;
 
             result.MatchedImageKnowledgeId = localDecision.MatchedImageKnowledgeId;
             result.ImageKnowledgeScore = localDecision.ImageKnowledgeScore;
