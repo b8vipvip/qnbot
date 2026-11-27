@@ -38,22 +38,6 @@ namespace Bot.Knowledge
                 || IsAutoPublishedHumanEvidenceSource(sourceType);
         }
 
-        public static bool IsUnapprovedLegacyLearningEntry(Bot.ChromeNs.KnowledgeBaseEntry entry)
-        {
-            if (entry == null || IsTrustedProductionSource(entry.SourceType)) return false;
-            // AiGenerated is authoritative provenance even when an older writer left
-            // SourceType/Category blank. A generic manual source label alone is not
-            // enough to demote a human-authored legacy FAQ.
-            if (entry.AiGenerated) return true;
-            var source = entry.SourceType ?? string.Empty;
-            var value = source + " " + (entry.Category ?? string.Empty);
-            return value.IndexOf("学习", StringComparison.OrdinalIgnoreCase) >= 0
-                || value.IndexOf("人工回复", StringComparison.OrdinalIgnoreCase) >= 0
-                || source.IndexOf("manual_ai_generated", StringComparison.OrdinalIgnoreCase) >= 0
-                || value.IndexOf("session", StringComparison.OrdinalIgnoreCase) >= 0
-                || value.IndexOf("AI生成", StringComparison.OrdinalIgnoreCase) >= 0;
-        }
-
         public static KnowledgeV2Record NormalizeForRead(KnowledgeV2Record record)
         {
             if (record != null && IsExplicitHumanConfirmationSource(record.SourceType))
