@@ -62,17 +62,19 @@ def test_shop_scoped_reply_dispatch_remains_owned_by_same_buyer_coordinator():
 def test_first_inquiry_is_sent_locally_and_committed_only_after_real_send():
     canonical = canonical_block()
 
-    resolve = canonical.index("FirstInquiryFixedReplyService.TryResolve(")
+    manual = canonical.index("var manualDecision = BotFeatureStore.EvaluateAutoReplyRule(question)")
+    local_short = canonical.index("if (allowLocalShortReply", manual)
+    local_resolve = canonical.index("LocalShortReplyService.TryResolve(", local_short)
+    resolve = canonical.index("FirstInquiryFixedReplyService.TryResolve(", local_resolve)
     invoke_send = canonical.index("var firstOutcome = await SendFixedAsync(", resolve)
     success = canonical.index("if (firstOutcome == CanonicalPreMergeOutcome.Consumed)", invoke_send)
     mark = canonical.index("FirstInquiryFixedReplyService.MarkDelivered(", success)
     failure = canonical.index("else", mark)
     release = canonical.index("FirstInquiryFixedReplyService.ReleaseReservation(", failure)
-    local_short = canonical.index("if (allowLocalShortReply)", release)
-    failure_block = canonical[failure:local_short]
+    failure_block = canonical[failure:canonical.index("private static bool HasNewerSubstantiveConversationTurn", failure)]
     sender = canonical.index("qn.SendTextWithRetryAsync(")
 
-    assert resolve < invoke_send < success < mark < failure < release < local_short
+    assert manual < local_short < local_resolve < resolve < invoke_send < success < mark < failure < release
     assert sender > release
     assert "首条咨询固定回复" in canonical
     assert "ReleaseReservation(" in failure_block
