@@ -1186,9 +1186,20 @@ namespace Bot.ChromeNs
                     Log.Info("重复卖家回显已跳过: key=" + messageKey);
                     return Task.CompletedTask;
                 }
-                ConversationContextStore.RefreshAndRecord(message, messageText);
-                RecordSellerEcho(message.toid.nick, messageText);
-                return Task.CompletedTask;
+                try
+                {
+                    ConversationContextStore.RefreshAndRecord(message, messageText);
+                    RecordSellerEcho(message.toid.nick, messageText);
+                    return Task.CompletedTask;
+                }
+                catch (Exception ex)
+                {
+                    // A transport claim is not delivery evidence. If timeline/echo recording
+                    // fails synchronously, let the same seller echo be replayed from history.
+                    _incomingMessageDeduplicator.TryRelease(messageKey);
+                    Log.ErrorWithMaxCount("卖家发送回显记录失败，已释放传输去重占位以便历史补偿重试: " + ex.Message, 20);
+                    throw;
+                }
             }
             if (!IsBuyerMessage(message)) return Task.CompletedTask;
 
