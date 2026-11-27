@@ -15,6 +15,22 @@ using Newtonsoft.Json.Linq;
 
 namespace Bot.Knowledge
 {
+    public sealed class KnowledgeV2ImportEvidence
+    {
+        public string Token { get; set; }
+        public string EvidenceType { get; set; }
+        public List<string> QuestionMessageIds { get; set; }
+        public List<string> AnswerMessageIds { get; set; }
+        public List<string> ContextMessageIds { get; set; }
+
+        public KnowledgeV2ImportEvidence()
+        {
+            QuestionMessageIds = new List<string>();
+            AnswerMessageIds = new List<string>();
+            ContextMessageIds = new List<string>();
+        }
+    }
+
     public class KnowledgeImportResult
     {
         public int TextChars { get; set; }
@@ -26,10 +42,12 @@ namespace Bot.Knowledge
         public int NewTypeCount { get; set; }
         public int UnsupportedImageSkipped { get; set; }
         public List<KnowledgeV2Record> AddedItems { get; set; }
+        public Dictionary<string, KnowledgeV2ImportEvidence> SourceEvidenceByToken { get; set; }
 
         public KnowledgeImportResult()
         {
             AddedItems = new List<KnowledgeV2Record>();
+            SourceEvidenceByToken = new Dictionary<string, KnowledgeV2ImportEvidence>(StringComparer.Ordinal);
         }
     }
 
@@ -90,7 +108,8 @@ namespace Bot.Knowledge
         private const string SystemPrompt =
             "你是 Knowledge Engine V2 的结构化知识整理助手。只能依据输入资料生成知识，禁止编造价格、库存、发货时间、物流时效或售后承诺。" +
             "每批最多生成40条记录。只输出严格JSON，不要输出解释、Markdown代码围栏或额外说明。" +
-            "根对象必须包含 records 数组；每条记录使用 title,type,intent,subject,predicate,entities,aliases,answer,short_answer,conditions,exclusions,required_context,product_ids,risk_level,confidence,authority,status。" +
+            "根对象必须包含 records 数组；每条记录使用 title,type,intent,subject,predicate,entities,aliases,answer,short_answer,conditions,exclusions,required_context,product_ids,risk_level,confidence,authority,status,source_evidence_ids。" +
+            "source_evidence_ids只能复制输入资料中明确给出的source_evidence_id令牌，不能编造、改写或借用其他问答的令牌；没有明确来源令牌时必须输出空数组。" +
             "禁止输出 faqs/category/question/keywords 等旧版字段；不确定的事实不要猜测，缺失字段用空字符串或空数组。";
 
         public bool SupportsDirectVideo
@@ -492,7 +511,7 @@ namespace Bot.Knowledge
             CancellationToken token)
         {
             var userText = string.Format(
-                "请整理以下资料为客服问答知识库。每批最多20到40条问答，max_tokens受限时优先保证JSON完整。资料文本：\n{0}",
+                "请整理以下资料为客服问答知识库。每批最多20到40条问答，max_tokens受限时优先保证JSON完整。若资料含source_evidence_id，records中每条知识必须返回实际支撑它的source_evidence_ids；不得使用不相关令牌。资料文本：\n{0}",
                 text ?? string.Empty);
             JToken content = userText;
 
@@ -641,6 +660,7 @@ namespace Bot.Knowledge
                     Enabled = !candidate,
                     Status = candidate ? "candidate" : "active",
                     SourceType = "chat_history_analysis",
+                    ImportEvidenceTokens = ReadStrings(item, "source_evidence_ids"),
                     CreatedAt = now,
                     UpdatedAt = now,
                     LastVerifiedAt = now
