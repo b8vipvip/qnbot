@@ -1301,6 +1301,7 @@ namespace Bot.ChromeNs
                 var detectedAt = burst.Items.Min(x => x.ReceivedAt);
                 ResponseProgressTracker.BeginAnswer(
                     burst.SellerNick, burst.BuyerNick, burst.CombinedQuestion, detectedAt, burst.ShopKey);
+                lease.MarkFailed("buyer_burst_input_overflow");
                 ResponseProgressTracker.Fail(
                     burst.SellerNick, burst.BuyerNick, note, burst.ShopKey);
                 Log.ErrorWithMaxCount("买家连续消息超过安全处理上限，已拒绝将截断预览发送给文本/视觉AI: seller="

@@ -64,7 +64,10 @@ namespace Bot.ChromeNs
         {
             get
             {
-                return Items.Any(
+                // Overflow bursts carry a diagnostic preview only. Mark them non-replyable
+                // so every optional runtime wrapper delegates to the canonical handler, which
+                // records the visible fail-closed outcome without sending the preview to a model.
+                return !InputOverflow && Items.Any(
                     x => x != null
                         && x.VisionDecision != null
                         && x.VisionDecision.Kind != VisionDecisionKind.Skip);
@@ -134,10 +137,25 @@ namespace Bot.ChromeNs
 
             var parts = new List<string>();
             var accumulatedCharacters = 0;
+            var processedItems = 0;
             foreach (var item in orderedItems)
             {
+                processedItems++;
+                if (processedItems > MaxBurstMessageCount)
+                {
+                    inputOverflow = true;
+                    break;
+                }
                 var text = NormalizeDisplay(item.DisplayText);
                 if (string.IsNullOrWhiteSpace(text)) continue;
+                if (text.Length > MaxBurstQuestionCharacters)
+                {
+                    inputOverflow = true;
+                    var remainingPreview = Math.Max(0, OverflowPreviewCharacters - accumulatedCharacters);
+                    if (remainingPreview > 0)
+                        parts.Add(text.Substring(0, Math.Min(remainingPreview, text.Length)));
+                    break;
+                }
                 var normalized = NormalizeCompare(text);
                 if (parts.Count > 0)
                 {
@@ -148,13 +166,14 @@ namespace Bot.ChromeNs
                         && normalized.Length > previousNormalized.Length
                         && normalized.StartsWith(previousNormalized, StringComparison.Ordinal))
                     {
-                        accumulatedCharacters += text.Length - previous.Length;
-                        parts[parts.Count - 1] = text;
-                        if (accumulatedCharacters > MaxBurstQuestionCharacters)
+                        var projectedCharacters = accumulatedCharacters + text.Length - previous.Length;
+                        if (projectedCharacters > MaxBurstQuestionCharacters)
                         {
                             inputOverflow = true;
                             break;
                         }
+                        accumulatedCharacters = projectedCharacters;
+                        parts[parts.Count - 1] = text;
                         continue;
                     }
                     if (normalized.Length <= 8
@@ -165,14 +184,17 @@ namespace Bot.ChromeNs
                     }
                 }
 
-                accumulatedCharacters += text.Length + (parts.Count == 0 ? 0 : 1);
-                parts.Add(text);
-                if (parts.Count > MaxBurstMessageCount
-                    || accumulatedCharacters > MaxBurstQuestionCharacters)
+                var projectedLength = accumulatedCharacters + text.Length + (parts.Count == 0 ? 0 : 1);
+                if (projectedLength > MaxBurstQuestionCharacters)
                 {
                     inputOverflow = true;
+                    var previewRemaining = Math.Max(0, OverflowPreviewCharacters - accumulatedCharacters);
+                    if (previewRemaining > 0)
+                        parts.Add(text.Substring(0, Math.Min(previewRemaining, text.Length)));
                     break;
                 }
+                accumulatedCharacters = projectedLength;
+                parts.Add(text);
             }
 
             var combined = string.Join("\n", parts);

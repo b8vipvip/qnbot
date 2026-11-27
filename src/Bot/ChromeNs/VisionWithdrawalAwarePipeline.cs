@@ -85,8 +85,11 @@ namespace Bot.ChromeNs
             BuyerMessageBurstLease lease)
         {
             var burst = lease == null ? null : lease.Burst;
-            if (qn == null || burst == null || burst.Items == null || burst.Items.Count < 1)
+            if (qn == null || burst == null || burst.Items == null || burst.Items.Count < 1
+                || burst.InputOverflow)
             {
+                // The canonical handler owns the visible fail-closed overflow outcome. Do not
+                // rebind/cache/recognize an image using a diagnostic-only truncated question.
                 await next(lease);
                 return;
             }
