@@ -114,6 +114,17 @@ namespace Bot.Knowledge
             public bool IsBotReply;
         }
 
+        private sealed class HistoryEvidencePair
+        {
+            public string Question;
+            public string Answer;
+            public string Context;
+            public string EvidenceToken;
+            public List<string> QuestionMessageIds = new List<string>();
+            public List<string> AnswerMessageIds = new List<string>();
+            public List<string> ContextMessageIds = new List<string>();
+        }
+
         // Only explicitly Bot-marked seller echoes are matched to buyer turns.
         // Never treat a human operator's seller reply as an automatic Bot reply.
         internal static Dictionary<string, string> MatchBotRepliesToBuyerTurns(
@@ -661,7 +672,8 @@ namespace Bot.Knowledge
             }
 
             token.ThrowIfCancellationRequested();
-            var transcript = BuildTranscript(histories, options);
+            Dictionary<string, KnowledgeV2ImportEvidence> sourceEvidenceByToken;
+            var transcript = BuildTranscript(histories, options, out sourceEvidenceByToken);
             var pairCount = CountTranscriptPairs(transcript);
             if (string.IsNullOrWhiteSpace(transcript) || pairCount < 1)
             {
@@ -681,6 +693,8 @@ namespace Bot.Knowledge
                     token,
                     () => token.IsCancellationRequested ? SmartImportCancelSource.UserCancel : SmartImportCancelSource.None,
                     text => Report(progress, text, orderedContacts.Count, orderedContacts.Count, string.Empty, totalMessages, pairCount, transcript.Length));
+                if (importResult != null)
+                    importResult.SourceEvidenceByToken = sourceEvidenceByToken;
             }
 
             Report(progress, "历史聊天扫描完成。", orderedContacts.Count, orderedContacts.Count, string.Empty, totalMessages, pairCount, transcript.Length);
@@ -1540,37 +1554,53 @@ namespace Bot.Knowledge
             return value;
         }
 
-        private static string BuildTranscript(List<ContactHistory> histories, ChatHistoryScanOptions options)
+        private static string BuildTranscript(
+            List<ContactHistory> histories,
+            ChatHistoryScanOptions options,
+            out Dictionary<string, KnowledgeV2ImportEvidence> sourceEvidenceByToken)
         {
+            sourceEvidenceByToken = new Dictionary<string, KnowledgeV2ImportEvidence>(StringComparer.Ordinal);
             var sb = new StringBuilder();
             sb.AppendLine("以下资料来自同一店铺的历史客服聊天。只使用未标记为Bot的真人客服回复作为知识事实；[A]/[AI]自动回复不能作为答案证据。只生成可复用、客服已经明确回答且不依赖某个具体订单/买家身份的知识库问答。");
             sb.AppendLine("忽略退款成功卡片、系统通知、寒暄、纯表情、未回答问题和一次性订单状态；账号、手机号、订单号等必须泛化为字段说明，不得保留个人数据。");
-            sb.AppendLine("当买家只回复数字、账号、型号等短内容时，必须结合同一块中的“客服前置提问”理解含义。");
+            sb.AppendLine("每条历史问答都带有不含原始消息ID的source_evidence_id令牌。生成知识时必须只复制真正支撑该知识的令牌；无法确认来源时不提供令牌，该知识不得自动发布。");
+            sb.AppendLine("当买家只回复数字、账号、型号等短内容时，必须结合同一块中的客服前置提问理解含义。");
             sb.AppendLine();
             var seen = new HashSet<string>(StringComparer.Ordinal);
-            foreach (var history in histories)
+            foreach (var history in histories ?? new List<ContactHistory>())
             {
                 foreach (var pair in BuildPairs(history))
                 {
-                    var key = KnowledgeAiService.ContentHash(pair.Item1, pair.Item2);
+                    var key = KnowledgeAiService.ContentHash(pair.Question, pair.Answer);
                     if (!seen.Add(key)) continue;
+                    sourceEvidenceByToken[pair.EvidenceToken] = new KnowledgeV2ImportEvidence
+                    {
+                        Token = pair.EvidenceToken,
+                        EvidenceType = "historical_human_reply",
+                        QuestionMessageIds = pair.QuestionMessageIds.ToList(),
+                        AnswerMessageIds = pair.AnswerMessageIds.ToList(),
+                        ContextMessageIds = pair.ContextMessageIds.ToList()
+                    };
                     sb.AppendLine("【历史会话问答】");
-                    sb.AppendLine("买家：" + history.Buyer);
-                    if (!string.IsNullOrWhiteSpace(pair.Item3)) sb.AppendLine("客服前置提问：" + pair.Item3);
-                    sb.AppendLine("买家问题：" + pair.Item1);
-                    sb.AppendLine("客服回答：" + pair.Item2);
+                    if (!string.IsNullOrWhiteSpace(pair.Context))
+                        sb.AppendLine("客服前置提问：" + pair.Context);
+                    sb.AppendLine("买家问题：" + pair.Question);
+                    sb.AppendLine("真人客服回答：" + pair.Answer);
+                    sb.AppendLine("source_evidence_id：" + pair.EvidenceToken);
                     sb.AppendLine();
                 }
             }
             return sb.ToString().Trim();
         }
 
-        private static List<Tuple<string, string, string>> BuildPairs(ContactHistory history)
+        private static List<HistoryEvidencePair> BuildPairs(ContactHistory history)
         {
-            var result = new List<Tuple<string, string, string>>();
-            var buyers = new List<string>();
-            var sellers = new List<string>();
+            var result = new List<HistoryEvidencePair>();
+            if (history == null || history.Turns == null) return result;
+            var buyers = new List<HistoryTurn>();
+            var sellers = new List<HistoryTurn>();
             var previousSeller = string.Empty;
+            var previousSellerMessageId = string.Empty;
             var previousSellerTime = DateTime.MinValue;
             var botAnsweredPendingQuestion = false;
 
@@ -1578,14 +1608,40 @@ namespace Bot.Knowledge
             {
                 if (buyers.Count > 0 && sellers.Count > 0)
                 {
-                    var question = NormalizeText(string.Join(" ", buyers));
-                    var answer = NormalizeText(string.Join(" ", sellers));
-                    if (IsUsefulPair(question, answer))
-                        result.Add(Tuple.Create(question, answer, previousSeller));
+                    var question = NormalizeText(string.Join(" ", buyers.Select(x => x.Text)));
+                    var answer = NormalizeText(string.Join(" ", sellers.Select(x => x.Text)));
+                    var questionIds = buyers.Select(x => (x.MessageKey ?? string.Empty).Trim())
+                        .Where(x => x.Length > 0 && !x.StartsWith("scan-turn:", StringComparison.Ordinal))
+                        .Distinct(StringComparer.Ordinal).ToList();
+                    var answerIds = sellers.Select(x => (x.MessageKey ?? string.Empty).Trim())
+                        .Where(x => x.Length > 0 && !x.StartsWith("scan-turn:", StringComparison.Ordinal))
+                        .Distinct(StringComparer.Ordinal).ToList();
+                    var contextIds = string.IsNullOrWhiteSpace(previousSellerMessageId)
+                        ? new List<string>()
+                        : new List<string> { previousSellerMessageId };
+                    if (IsUsefulPair(question, answer)
+                        && questionIds.Count == buyers.Count
+                        && answerIds.Count == sellers.Count
+                        && questionIds.Count > 0
+                        && answerIds.Count > 0
+                        && !questionIds.Intersect(answerIds, StringComparer.Ordinal).Any())
+                    {
+                        result.Add(new HistoryEvidencePair
+                        {
+                            Question = question,
+                            Answer = answer,
+                            Context = previousSeller,
+                            EvidenceToken = "ev_" + Guid.NewGuid().ToString("N"),
+                            QuestionMessageIds = questionIds,
+                            AnswerMessageIds = answerIds,
+                            ContextMessageIds = contextIds
+                        });
+                    }
                 }
                 buyers.Clear();
                 sellers.Clear();
                 previousSeller = string.Empty;
+                previousSellerMessageId = string.Empty;
                 previousSellerTime = DateTime.MinValue;
                 botAnsweredPendingQuestion = false;
             };
@@ -1603,6 +1659,7 @@ namespace Bot.Knowledge
                         // later human reply to a different buyer turn.
                         buyers.Clear();
                         previousSeller = string.Empty;
+                        previousSellerMessageId = string.Empty;
                         previousSellerTime = DateTime.MinValue;
                         botAnsweredPendingQuestion = false;
                     }
@@ -1612,9 +1669,10 @@ namespace Bot.Knowledge
                         && turn.Time - previousSellerTime > TimeSpan.FromMinutes(30))
                     {
                         previousSeller = string.Empty;
+                        previousSellerMessageId = string.Empty;
                         previousSellerTime = DateTime.MinValue;
                     }
-                    buyers.Add(turn.Text);
+                    buyers.Add(turn);
                     continue;
                 }
 
@@ -1628,7 +1686,7 @@ namespace Bot.Knowledge
 
                 if (buyers.Count > 0)
                 {
-                    sellers.Add(turn.Text);
+                    sellers.Add(turn);
                     botAnsweredPendingQuestion = false;
                 }
                 else
@@ -1636,6 +1694,7 @@ namespace Bot.Knowledge
                     // A human seller message before the buyer's short answer is context,
                     // not an answer. Bot echoes are deliberately excluded above.
                     previousSeller = turn.Text;
+                    previousSellerMessageId = (turn.MessageKey ?? string.Empty).Trim();
                     previousSellerTime = turn.Time;
                 }
             }
