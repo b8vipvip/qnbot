@@ -186,7 +186,7 @@ namespace Bot.Knowledge
                     _cts.Token);
 
                 _summary.Text = "聊天扫描完成，正在把整理结果标准化为当前 Knowledge V2...";
-                var promoted = KnowledgeV2LegacyDeltaImportService.PromoteHistoryImport(_seller, _shopKey, scan.ImportResult);
+                var promoted = KnowledgeV2HistoryImportService.PromoteHistoryImport(_seller, _shopKey, scan.ImportResult);
                 var sb = new StringBuilder();
                 sb.Append("整理完成：联系人 ").Append(scan.ScannedContacts).Append("/").Append(scan.ContactCount);
                 sb.Append("，有效聊天消息 ").Append(scan.MessageCount);
