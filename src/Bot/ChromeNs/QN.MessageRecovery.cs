@@ -488,12 +488,12 @@ namespace Bot.ChromeNs
                 await ProcessIncomingMessageAsync(message).ConfigureAwait(false);
         }
 
-        private async Task ProcessRecoveredBuyerMessageAfterMissAsync(
+        private Task ProcessRecoveredBuyerMessageAfterMissAsync(
             QNChatMessage message,
             string sellerNick,
             string buyerNick)
         {
-            if (message == null) return;
+            if (message == null) return Task.CompletedTask;
             ShopContext shop;
             string shopKey;
             try
@@ -506,14 +506,14 @@ namespace Bot.ChromeNs
             catch (Exception ex)
             {
                 Log.ErrorWithMaxCount("后台补偿买家消息无法确认唯一ShopKey，已阻止恢复回复: " + ex.Message, 20);
-                return;
+                return Task.CompletedTask;
             }
             var messageText = GetMessageText(message);
             string nonBuyerReason;
             if (NonBuyerConversationGuard.ShouldBlockMessage(message, sellerNick, messageText, out nonBuyerReason))
             {
                 Log.Info("后台补偿非买家买家候选已丢弃，未进入首问/订单/AI链: reason=" + nonBuyerReason);
-                return;
+                return Task.CompletedTask;
             }
             var messageKey = IncomingMessageSafety.BuildMessageKey(message, messageText);
             var detectedAt = DateTime.Now;
@@ -521,7 +521,7 @@ namespace Bot.ChromeNs
             {
                 Log.Info("后台补偿跳过已由权威业务链处理的买家消息: seller=" + sellerNick
                     + ", buyer=" + buyerNick + ", key=" + messageKey);
-                return;
+                return Task.CompletedTask;
             }
 
             var accepted = false;
@@ -545,13 +545,17 @@ namespace Bot.ChromeNs
                         null,
                         shopKey))
                     {
-                        // The order handler owns its durable action ledger once a plan exists.
-                        accepted = true;
-                        if (orderPlan != null && orderPlan.IsBuyerFollowUp)
+                        if (orderPlan == null)
+                        {
+                            accepted = true;
+                            return Task.CompletedTask;
+                        }
+                        if (orderPlan.IsBuyerFollowUp)
                             ResponseProgressTracker.ObserveNewBuyerTurn(sellerNick, buyerNick, shopKey);
-                        if (orderPlan != null)
-                            await ProcessOrderPlacedReplyAsync(orderPlan).ConfigureAwait(false);
-                        return;
+                        // ProcessOrderPlacedReplyAsync re-enters and retains this exact ShopKey scope
+                        // for its asynchronous durable action/confirmation lifecycle.
+                        accepted = true;
+                        return ProcessOrderPlacedReplyAsync(orderPlan);
                     }
 
                     var decision = IncomingMessageSafety.Evaluate(message, messageText, _messageSafetyStartedAt, shopKey, CDP);
@@ -564,18 +568,18 @@ namespace Bot.ChromeNs
 
                     if (!Params.Robot.CanUseRobotReal)
                     {
-                        accepted = true;
                         AddSkippedConversation(sellerNick, buyerNick, displayQuestion, "Bot已停用，未调用AI，也未发送给买家。");
-                        return;
+                        accepted = true;
+                        return Task.CompletedTask;
                     }
 
                     if (visionDecision.Kind == VisionDecisionKind.Skip
                         && !IncomingMessageSafety.IsMediaPlaceholder(displayQuestion))
                     {
-                        accepted = true;
                         AddSkippedConversation(sellerNick, buyerNick, visionDecision.QuestionLabel, visionDecision.Note);
                         Log.Info("后台补偿买家消息安全跳过: buyer=" + buyerNick + ", reason=" + visionDecision.Note);
-                        return;
+                        accepted = true;
+                        return Task.CompletedTask;
                     }
 
                     ResponseProgressTracker.ObserveQuestion(sellerNick, buyerNick, displayQuestion, detectedAt, shopKey);
@@ -601,6 +605,7 @@ namespace Bot.ChromeNs
                         ReceivedAt = detectedAt
                     });
                     accepted = true;
+                    return Task.CompletedTask;
                 }
             }
             catch
