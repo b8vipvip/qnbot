@@ -83,3 +83,20 @@ def test_failed_seller_echo_recording_releases_transport_claim_for_history_repla
     assert "RecordSellerEcho(message.toid.nick, messageText);" in seller
     assert "_incomingMessageDeduplicator.TryRelease(messageKey);" in seller
     assert "catch (Exception ex)" in seller
+
+
+def test_recovered_order_handoff_keeps_claim_after_durable_order_ledger_owns_it():
+    source = read("src/Bot/ChromeNs/QN.MessageRecovery.cs")
+    method = source[
+        source.index("private Task ProcessRecoveredBuyerMessageAfterMissAsync"):
+        source.index("private static bool IsPotentialRecoveredOrderCard")
+    ]
+    order = method[
+        method.index("if (OrderPlacedAutoReplyService.TryCreatePlan("):
+        method.index("var decision = IncomingMessageSafety.Evaluate")
+    ]
+
+    assert "accepted = true;" in order
+    assert order.index("ResponseProgressTracker.ObserveNewBuyerTurn") < order.index("accepted = true;")
+    assert order.index("accepted = true;") < order.index("return ProcessOrderPlacedReplyAsync(orderPlan);")
+    assert "if (!accepted)" in method
