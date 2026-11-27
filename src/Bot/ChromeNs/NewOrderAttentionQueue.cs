@@ -275,7 +275,16 @@ namespace Bot.ChromeNs
         {
             var snapshot = item == null ? null : item.Snapshot;
             if (snapshot == null || string.IsNullOrWhiteSpace(snapshot.Buyer)) return Denied("订单缺少买家信息");
-            if (!Params.Robot.CanUseRobotReal) return Denied("Bot当前未启用");
+            ShopContext shop;
+            try { shop = ShopContextLocator.ResolveRuntimeByShopKey(snapshot.ShopKey); }
+            catch { return Denied("订单来源ShopKey无法确认"); }
+            if (shop == null
+                || !string.Equals(shop.SellerNick, (snapshot.Seller ?? string.Empty).Trim(), StringComparison.Ordinal))
+                return Denied("订单来源店铺身份无法确认");
+            bool botEnabledForShop;
+            using (ShopSettingsScope.Enter(shop, false))
+                botEnabledForShop = Params.Robot.CanUseRobotReal;
+            if (!botEnabledForShop) return Denied("Bot当前未启用");
             if (!TryRefreshOrderAttentionSource(item)) return Denied("订单来源店铺身份或千牛CDP会话已变化");
             if (_incomingMessageGate.CurrentCount < 1) return Denied("正在处理千牛新消息");
             if (_sendGate.CurrentCount < 1) return Denied("正在切换会话或发送消息");

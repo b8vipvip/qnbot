@@ -408,7 +408,6 @@ try {
 
         internal async Task ProbeActiveConversationForMissedInboundAsync()
         {
-            if (!Params.Robot.CanUseRobotReal) return;
             var client = CDP;
             var seller = Seller == null ? string.Empty : (Seller.Nick ?? string.Empty).Trim();
             if (client == null || client.IsInvalidated || client.IsShopIdentityRetired || seller.Length == 0) return;
@@ -426,6 +425,10 @@ try {
             EnsureBusinessInboundCheckpointLoaded(shop);
             try
             {
+                // This is a timer-driven path with no ambient UI scope. Read the master switch
+                // only after binding the exact ShopKey; the process-global fallback is not
+                // authoritative for multi-shop recovery.
+                if (!Params.Robot.CanUseRobotReal) return;
                 if (!ReferenceEquals(CDP, client)
                     || !server.IsAuthoritativeShopSession(shop.ShopKey, client.SessionId)) return;
                 var probeStartedAt = DateTime.Now;
@@ -566,6 +569,7 @@ try {
                         + ", recovery=remote-history");
                 }
 
+                var replayFailed = false;
                 foreach (var message in missedToReplay)
                 {
                     if (!ReferenceEquals(CDP, client)
@@ -574,18 +578,48 @@ try {
                     var messageKey = IncomingMessageSafety.BuildMessageKey(message, text);
                     if (!_businessInboundHistoryProbeLedger.TryAccept(messageKey)) continue;
 
-                    Log.Info("unseen-buyer-message-detected: seller=" + seller + ", buyer=" + buyer
-                        + ", key=" + messageKey + ", source=remote-history");
+                    try
+                    {
+                        Log.Info("unseen-buyer-message-detected: seller=" + seller + ", buyer=" + buyer
+                            + ", key=" + messageKey + ", source=remote-history");
 
-                    // Never implement a second reply pipeline here. The normal path owns business
-                    // dedupe, Knowledge V2/AI routing, burst coalescing and send verification.
-                    await ProcessIncomingMessageAsync(message).ConfigureAwait(false);
+                        // Never implement a second reply pipeline here. The normal path owns business
+                        // dedupe, Knowledge V2/AI routing, burst coalescing and send verification.
+                        // Release only a synchronous ingress failure: once a Task is returned, the
+                        // order action ledger or buyer burst coordinator owns the accepted work.
+                        Task processingTask;
+                        try
+                        {
+                            processingTask = ProcessIncomingMessageAsync(message);
+                        }
+                        catch
+                        {
+                            _businessInboundHistoryProbeLedger.TryRelease(messageKey);
+                            throw;
+                        }
+                        if (processingTask != null && !processingTask.IsCompleted)
+                        {
+                            // The order action ledger owns the accepted async work. Do not hold the
+                            // per-shop liveness gate while an order reply is generated or sent.
+                            _ = ObserveInboundProcessingAsync(processingTask);
+                        }
+                        else if (processingTask != null)
+                        {
+                            await processingTask.ConfigureAwait(false);
+                        }
 
-                    Log.Info("recovered-inbound-replay: seller=" + seller + ", buyer=" + buyer
-                        + ", key=" + messageKey + ", route=ProcessIncomingMessageAsync");
+                        Log.Info("recovered-inbound-replay: seller=" + seller + ", buyer=" + buyer
+                            + ", key=" + messageKey + ", route=ProcessIncomingMessageAsync");
+                    }
+                    catch (Exception ex)
+                    {
+                        replayFailed = true;
+                        Log.ErrorWithMaxCount("单条远端历史买家消息重放失败，已继续处理后续候选: seller="
+                            + seller + ", buyer=" + buyer + ", error=" + ex.Message, 20);
+                    }
                 }
 
-                if (unanswered.Count == 0)
+                if (unanswered.Count == 0 && !replayFailed)
                 {
                     PersistBusinessInboundCheckpoint(shop, DateTime.Now);
                 }
@@ -603,7 +637,8 @@ try {
                         + MyWebSocketServer.DiagnosticRef("shop", shop.ShopKey)
                         + ", seller=" + seller + ", buyer=" + buyer
                         + ", unansweredCount=" + unanswered.Count
-                        + ", replayedCount=" + missedToReplay.Count);
+                        + ", replayedCount=" + missedToReplay.Count
+                        + ", replayFailed=" + replayFailed);
                 }
             }
             catch (Exception ex)

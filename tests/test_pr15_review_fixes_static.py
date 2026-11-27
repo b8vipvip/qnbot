@@ -57,9 +57,11 @@ def test_text_send_fails_closed_without_exact_draft_or_target_buyer():
 
 def test_order_auto_reply_cannot_bypass_bot_master_switch():
     source = read("src/Bot/ChromeNs/OrderPlacedAutoReplyService.cs")
-    master_switch = source.index("if (!Params.Robot.CanUseRobotReal) return false;")
+    shop_scope = source.index("using (ShopSettingsScope.Enter(shop, false))")
+    master_switch = source.index("botEnabledForShop = Params.Robot.CanUseRobotReal;")
     config_read = source.index("BotFeatureStore.GetAutoReplyRules()")
-    assert master_switch < config_read
+    assert shop_scope < master_switch < config_read
+    assert "if (!botEnabledForShop) return false;" in source
 
 
 def test_real_flow_test_is_bound_to_the_original_shopkey_not_just_seller_nickname():

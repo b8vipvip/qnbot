@@ -42,6 +42,25 @@ namespace Bot.ChromeNs
                 return true;
             }
         }
+        
+        // Roll back a business-message claim only when synchronous ingress failed
+        // before the message was accepted by an order or buyer-burst handler.
+        // Rebuild the FIFO as well as the set: leaving a stale queue entry would let
+        // a later eviction remove a newer claim for the same message key.
+        public bool TryRelease(string key)
+        {
+            if (string.IsNullOrWhiteSpace(key)) return false;
+            lock (_sync)
+            {
+                if (!_seen.Remove(key)) return false;
+                var retained = _order
+                    .Where(existing => !string.Equals(existing, key, StringComparison.Ordinal))
+                    .ToList();
+                _order.Clear();
+                foreach (var existing in retained) _order.Enqueue(existing);
+                return true;
+            }
+        }
     }
 
     internal static class NonBuyerConversationGuard

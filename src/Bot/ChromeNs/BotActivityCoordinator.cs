@@ -483,7 +483,10 @@ namespace Bot.ChromeNs
                 return;
             }
 
-            if (!Params.Robot.CanUseRobotReal)
+            bool botEnabledForShop;
+            using (ShopSettingsScope.Enter(runtimeShop, false))
+                botEnabledForShop = Params.Robot.CanUseRobotReal;
+            if (!botEnabledForShop)
             {
                 Log.Info("[订单自动回复] 未发送原因=Bot已停用, orderId=" + snapshot.OrderId
                     + ", buyer=" + snapshot.Buyer);
@@ -491,10 +494,14 @@ namespace Bot.ChromeNs
             }
 
             AutoReplyRuleConfig cfg;
+            bool autoReplyEnabledForShop;
             // Hub fallback runs from a timer, not necessarily from a QN event's
-            // AsyncLocal scope. Bind settings lookup to the validated runtime ShopKey.
+            // AsyncLocal scope. Bind every shop-specific setting read to the validated ShopKey.
             using (ShopSettingsScope.Enter(runtimeShop, false))
+            {
                 cfg = BotFeatureStore.GetAutoReplyRules();
+                autoReplyEnabledForShop = Params.Robot.GetIsAutoReply();
+            }
             if (cfg == null || !cfg.EnableOrderPlacedReply)
             {
                 Log.Info("[订单自动回复] 未发送原因=本店下单自动发送关闭, orderId=" + snapshot.OrderId
@@ -540,7 +547,7 @@ namespace Bot.ChromeNs
                 + ", source=" + snapshot.Source
                 + ", hubAcceptedAt=" + hubSeenAt.ToString("yyyy-MM-dd HH:mm:ss.fff")
                 + ", mode=" + mode
-                + ", autoReply=" + Params.Robot.GetIsAutoReply());
+                + ", autoReply=" + autoReplyEnabledForShop);
 
             // Fixed presets are mandatory immediate business replies. Render whatever fields are
             // already present in the accepted event and let RenderTemplate safely remove unavailable

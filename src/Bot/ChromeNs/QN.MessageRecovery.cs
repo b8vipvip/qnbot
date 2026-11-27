@@ -118,12 +118,18 @@ namespace Bot.ChromeNs
             }
             var seller = (e.Seller.Nick ?? string.Empty).Trim();
             if (string.IsNullOrWhiteSpace(seller)) return;
+            string buyer;
+            bool botEnabledForShop;
             try
             {
                 var shop = ResolveRecoveryShop(seller);
                 using (ShopSettingsScope.Enter(shop, false))
                 {
                     BuyerIdentityAliasService.Observe(seller, e.Buyer.Nick, e.Buyer.Display, e.Buyer.TargetId);
+                    buyer = ResolveBuyerInternalNickInShop(seller, e.Buyer.Nick);
+                    // This notification callback runs outside the UI thread's shop scope.
+                    // Never consult the process-global BotEnabled fallback for this shop.
+                    botEnabledForShop = Params.Robot.CanUseRobotReal;
                 }
             }
             catch (Exception ex)
@@ -131,9 +137,8 @@ namespace Bot.ChromeNs
                 Log.ErrorWithMaxCount("后台消息补偿无法绑定事件来源ShopKey，已跳过: " + ex.Message, 20);
                 return;
             }
-            var buyer = ResolveBuyerInternalNickInShop(seller, e.Buyer.Nick);
             if (string.IsNullOrWhiteSpace(buyer)) return;
-            if (!Params.Robot.CanUseRobotReal) return;
+            if (!botEnabledForShop) return;
 
             var key = RecoveryKey(seller, buyer);
             var scheduledAt = DateTime.Now;
@@ -494,11 +499,14 @@ namespace Bot.ChromeNs
             string buyerNick)
         {
             if (message == null) return Task.CompletedTask;
+            ShopContext shop;
             string shopKey;
             try
             {
-                shopKey = ShopContextLocator.ResolveRuntimeBySeller(this).ShopKey;
-                if (string.IsNullOrWhiteSpace(shopKey)) throw new InvalidOperationException("ShopKey为空");
+                shop = ShopContextLocator.ResolveRuntimeBySeller(this);
+                shopKey = shop == null ? string.Empty : (shop.ShopKey ?? string.Empty).Trim();
+                if (shop == null || shopKey.Length == 0)
+                    throw new InvalidOperationException("ShopKey为空");
             }
             catch (Exception ex)
             {
@@ -520,71 +528,97 @@ namespace Bot.ChromeNs
                     + ", buyer=" + buyerNick + ", key=" + messageKey);
                 return Task.CompletedTask;
             }
-            MarkBuyerMessageObserved(sellerNick, buyerNick);
 
-            OrderPlacedReplyPlan orderPlan;
-            if (OrderPlacedAutoReplyService.TryCreatePlan(
-                message,
-                messageText,
-                sellerNick,
-                buyerNick,
-                _messageSafetyStartedAt,
-                out orderPlan,
-                null,
-                shopKey))
+            var accepted = false;
+            try
             {
-                if (orderPlan != null && orderPlan.IsBuyerFollowUp)
-                    ResponseProgressTracker.ObserveNewBuyerTurn(sellerNick, buyerNick, shopKey);
-                return orderPlan == null
-                    ? Task.CompletedTask
-                    : ProcessOrderPlacedReplyAsync(orderPlan);
+                using (ShopSettingsScope.Enter(shop))
+                {
+                    // Match live ingress: record the exact buyer message under its ShopKey
+                    // before order routing, safety classification, or reply generation.
+                    ConversationContextStore.RefreshAndRecord(message, messageText, shopKey);
+                    MarkBuyerMessageObserved(sellerNick, buyerNick);
+
+                    OrderPlacedReplyPlan orderPlan;
+                    if (OrderPlacedAutoReplyService.TryCreatePlan(
+                        message,
+                        messageText,
+                        sellerNick,
+                        buyerNick,
+                        _messageSafetyStartedAt,
+                        out orderPlan,
+                        null,
+                        shopKey))
+                    {
+                        if (orderPlan == null)
+                        {
+                            accepted = true;
+                            return Task.CompletedTask;
+                        }
+                        if (orderPlan.IsBuyerFollowUp)
+                            ResponseProgressTracker.ObserveNewBuyerTurn(sellerNick, buyerNick, shopKey);
+                        // ProcessOrderPlacedReplyAsync re-enters and retains this exact ShopKey scope
+                        // for its asynchronous durable action/confirmation lifecycle.
+                        accepted = true;
+                        return ProcessOrderPlacedReplyAsync(orderPlan);
+                    }
+
+                    var decision = IncomingMessageSafety.Evaluate(message, messageText, _messageSafetyStartedAt, shopKey, CDP);
+                    var displayQuestion = IncomingMessageSafety.GetDisplayText(message, messageText);
+                    var visionDecision = VisionMessageDecision.Decide(
+                        message,
+                        messageText,
+                        decision,
+                        shopKey);
+
+                    if (!Params.Robot.CanUseRobotReal)
+                    {
+                        AddSkippedConversation(sellerNick, buyerNick, displayQuestion, "Bot已停用，未调用AI，也未发送给买家。");
+                        accepted = true;
+                        return Task.CompletedTask;
+                    }
+
+                    if (visionDecision.Kind == VisionDecisionKind.Skip
+                        && !IncomingMessageSafety.IsMediaPlaceholder(displayQuestion))
+                    {
+                        AddSkippedConversation(sellerNick, buyerNick, visionDecision.QuestionLabel, visionDecision.Note);
+                        Log.Info("后台补偿买家消息安全跳过: buyer=" + buyerNick + ", reason=" + visionDecision.Note);
+                        accepted = true;
+                        return Task.CompletedTask;
+                    }
+
+                    ResponseProgressTracker.ObserveQuestion(sellerNick, buyerNick, displayQuestion, detectedAt, shopKey);
+                    if (visionDecision.Kind == VisionDecisionKind.Text)
+                    {
+                        BotFlowTestService.RecordCandidate(sellerNick, buyerNick, displayQuestion, detectedAt, shopKey);
+                    }
+                    Log.Info("后台补偿买家消息已进入权威回复队列: seller=" + sellerNick + ", buyer=" + buyerNick
+                        + ", detectedAt=" + detectedAt.ToString("HH:mm:ss.fff") + ", question=" + displayQuestion
+                        + ", key=" + messageKey);
+
+                    _buyerMessageBurstCoordinator.Enqueue(new BuyerMessageBurstItem
+                    {
+                        ShopKey = shopKey,
+                        SellerNick = sellerNick,
+                        BuyerNick = buyerNick,
+                        MessageKey = messageKey,
+                        DisplayText = displayQuestion,
+                        Message = message,
+                        SafetyDecision = decision,
+                        VisionDecision = visionDecision,
+                        SortValue = IncomingMessageSafety.GetSortValue(message),
+                        ReceivedAt = detectedAt
+                    });
+                    accepted = true;
+                    return Task.CompletedTask;
+                }
             }
-
-            var decision = IncomingMessageSafety.Evaluate(message, messageText, _messageSafetyStartedAt, shopKey, CDP);
-            var displayQuestion = IncomingMessageSafety.GetDisplayText(message, messageText);
-            var visionDecision = VisionMessageDecision.Decide(
-                message,
-                messageText,
-                decision,
-                shopKey);
-
-            if (!Params.Robot.CanUseRobotReal)
+            catch
             {
-                AddSkippedConversation(sellerNick, buyerNick, displayQuestion, "Bot已停用，未调用AI，也未发送给买家。");
-                return Task.CompletedTask;
+                if (!accepted)
+                    _handledBuyerMessageDeduplicator.TryRelease(messageKey);
+                throw;
             }
-
-            if (visionDecision.Kind == VisionDecisionKind.Skip
-                && !IncomingMessageSafety.IsMediaPlaceholder(displayQuestion))
-            {
-                AddSkippedConversation(sellerNick, buyerNick, visionDecision.QuestionLabel, visionDecision.Note);
-                Log.Info("后台补偿买家消息安全跳过: buyer=" + buyerNick + ", reason=" + visionDecision.Note);
-                return Task.CompletedTask;
-            }
-
-            ResponseProgressTracker.ObserveQuestion(sellerNick, buyerNick, displayQuestion, detectedAt, shopKey);
-            if (visionDecision.Kind == VisionDecisionKind.Text)
-            {
-                BotFlowTestService.RecordCandidate(sellerNick, buyerNick, displayQuestion, detectedAt, shopKey);
-            }
-            Log.Info("后台补偿买家消息已进入权威回复队列: seller=" + sellerNick + ", buyer=" + buyerNick
-                + ", detectedAt=" + detectedAt.ToString("HH:mm:ss.fff") + ", question=" + displayQuestion
-                + ", key=" + messageKey);
-
-            _buyerMessageBurstCoordinator.Enqueue(new BuyerMessageBurstItem
-            {
-                ShopKey = shopKey,
-                SellerNick = sellerNick,
-                BuyerNick = buyerNick,
-                MessageKey = messageKey,
-                DisplayText = displayQuestion,
-                Message = message,
-                SafetyDecision = decision,
-                VisionDecision = visionDecision,
-                SortValue = IncomingMessageSafety.GetSortValue(message),
-                ReceivedAt = detectedAt
-            });
-            return Task.CompletedTask;
         }
 
         private static bool IsPotentialRecoveredOrderCard(QNChatMessage message)

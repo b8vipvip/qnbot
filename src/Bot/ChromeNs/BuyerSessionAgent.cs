@@ -156,11 +156,10 @@ namespace Bot.ChromeNs
                     state.ShopKey = shopKey;
                 state.SellerNick = Normalize(sellerNick);
                 state.BuyerNick = Normalize(buyerNick);
-                state.LastObservedAt = observedAt == default(DateTime) ? DateTime.Now : observedAt;
-                state.LastSortValue = Math.Max(state.LastSortValue, sortValue);
-                state.LastBuyerEventSortValue = Math.Max(state.LastBuyerEventSortValue, sortValue);
-                if (state.LastBuyerEventAt < state.LastObservedAt) state.LastBuyerEventAt = state.LastObservedAt;
 
+                // Check transport duplicates before advancing the buyer-event watermark.
+                // A replayed copy is not a new buyer turn and must not make a later seller
+                // reply look stale or reset the burst quiet window.
                 messageKey = Normalize(messageKey);
                 if (!string.IsNullOrWhiteSpace(messageKey) && state.RecentMessageKeySet.Contains(messageKey))
                 {
@@ -182,6 +181,11 @@ namespace Bot.ChromeNs
                         ReusedCoalescingGeneration = false
                     };
                 }
+
+                state.LastObservedAt = observedAt == default(DateTime) ? DateTime.Now : observedAt;
+                state.LastSortValue = Math.Max(state.LastSortValue, sortValue);
+                state.LastBuyerEventSortValue = Math.Max(state.LastBuyerEventSortValue, sortValue);
+                if (state.LastBuyerEventAt < state.LastObservedAt) state.LastBuyerEventAt = state.LastObservedAt;
 
                 RememberMessageKeyLocked(state, messageKey);
                 hadParallelGeneration = state.ActiveGenerations.Count > 0;

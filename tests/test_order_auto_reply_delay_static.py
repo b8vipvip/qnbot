@@ -62,7 +62,7 @@ def test_direct_order_event_is_dispatched_before_normal_message_loop_and_uses_sh
     qn = read("src/Bot/ChromeNs/QN.cs")
     bridge = read("src/Bot/ChromeNs/DirectOrderEventBridge.cs")
     event_raise = 'EvRecieveNewMessage(this, e);'
-    normal_loop = 'await ProcessIncomingMessageAsync(message);'
+    normal_loop = 'var processingTask = ProcessIncomingMessageAsync(message);'
     assert qn.index(event_raise) < qn.index(normal_loop)
     assert 'qn.EvRecieveNewMessage += OnReceiveNewMessage;' in bridge
     assert 'await qn.ProcessDirectOrderMessageAsync' in bridge

@@ -258,9 +258,13 @@ namespace Bot.ChromeNs
             }
             if (runtimeShop == null || string.IsNullOrWhiteSpace(runtimeShop.ShopKey)) return;
             AutoReplyRuleConfig cfg;
+            bool botEnabledForShop;
             using (ShopSettingsScope.Enter(runtimeShop, false))
+            {
                 cfg = BotFeatureStore.GetAutoReplyRules();
-            if (!ShouldOwnConfiguredTemplate(cfg) || !Params.Robot.CanUseRobotReal) return;
+                botEnabledForShop = Params.Robot.CanUseRobotReal;
+            }
+            if (!ShouldOwnConfiguredTemplate(cfg) || !botEnabledForShop) return;
 
             try
             {
