@@ -256,3 +256,17 @@ def test_order_event_hub_auto_reply_diagnostic_uses_shop_scoped_value():
     auto_reply = method.index("autoReplyEnabledForShop = Params.Robot.GetIsAutoReply();")
     assert scope < auto_reply
     assert '", autoReply=" + autoReplyEnabledForShop' in method
+
+
+def test_rich_order_payload_bot_switch_is_checked_under_resolved_shop_scope():
+    source = read("src/Bot/Options/OrderPlacedReplyDelaySettings.cs")
+    method = source[
+        source.index("internal async Task ProcessRichOrderSnapshotAsync"):
+        source.index("\n        }\n    }\n}", source.index("internal async Task ProcessRichOrderSnapshotAsync"))
+    ]
+
+    resolve = method.index("ShopContextLocator.ResolveRuntimeBySeller(this)")
+    scope = method.index("using (ShopSettingsScope.Enter(shop, false))")
+    bot = method.index("botEnabledForShop = Params.Robot.CanUseRobotReal;")
+    assert resolve < scope < bot
+    assert "if (!botEnabledForShop) return;" in method
