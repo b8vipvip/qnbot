@@ -580,3 +580,35 @@ def test_active_streaming_smart_reply_does_not_mark_failed_send_as_completed():
     assert "var sendFailureReason = qn.Rpa == null" in terminal
     assert terminal.index("if (sendOk)") < terminal.index("ResponseProgressTracker.Complete(")
     assert terminal.index("ResponseProgressTracker.Complete(") < terminal.index("ResponseProgressTracker.Fail(")
+
+
+def test_specialized_knowledge_and_vision_send_failures_do_not_complete_progress_cards():
+    memory = read("src/Bot/ChromeNs/KnowledgeMemoryEngine.cs")
+    v2 = read("src/Bot/ChromeNs/KnowledgeEngineV2RuntimeBridge.cs")
+    vision = read("src/Bot/ChromeNs/VisionWithdrawalAwarePipeline.cs")
+
+    memory_terminal = memory.split("var sendCancelled = !sendOk && qn.Rpa != null && qn.Rpa.LastSendWasCancelled;", 1)[1]
+    assert "else if (sendOk)" in memory_terminal
+    assert "ResponseProgressTracker.Fail(" in memory_terminal
+    assert "Knowledge Memory答案已生成，但实际发送未确认：" in memory_terminal
+
+    v2_terminal = v2.split("var sendCancelled = !sendOk && qn.Rpa != null && qn.Rpa.LastSendWasCancelled;", 1)[1]
+    assert "else if (sendOk)" in v2_terminal
+    assert "ResponseProgressTracker.Fail(" in v2_terminal
+    assert "Knowledge Engine V2答案已生成，但实际发送未确认：" in v2_terminal
+
+    vision_main = vision.split("var sendCancelled = !sendOk && qn.Rpa != null && qn.Rpa.LastSendWasCancelled;", 1)[1].split(
+        "private static async Task SendCacheMissFallbackAsync", 1
+    )[0]
+    assert "ResponseProgressTracker.Cancel(" in vision_main
+    assert "if (sendOk)" in vision_main
+    assert "ResponseProgressTracker.Complete(" in vision_main
+    assert "ResponseProgressTracker.Fail(" in vision_main
+    assert "图片撤回保护视觉答案已生成，但实际发送未确认：" in vision_main
+
+    vision_fallback = vision.split("var sendCancelled = !sent && qn.Rpa != null && qn.Rpa.LastSendWasCancelled;", 1)[1].split(
+        "private static bool TryRebindRecentCachedImage", 1
+    )[0]
+    assert "else if (sent)" in vision_fallback
+    assert "ResponseProgressTracker.Fail(" in vision_fallback
+    assert "图片缓存兜底回复发送未确认：" in vision_fallback
