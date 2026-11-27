@@ -1806,6 +1806,11 @@ namespace Bot.ChromeNs
 
         public static string BuildPromptAddon(string question)
         {
+            return BuildPromptAddon(question, true);
+        }
+
+        public static string BuildPromptAddon(string question, bool includeKnowledgeBase)
+        {
             var policy = GetMessagePolicy();
             var sb = new StringBuilder();
             sb.AppendLine();
@@ -1817,7 +1822,7 @@ namespace Bot.ChromeNs
             if (!string.IsNullOrWhiteSpace(policy.BannedWords)) sb.AppendLine("- 不要使用这些词：" + policy.BannedWords);
             sb.AppendLine("- 价格、库存、物流、订单、退款、赔偿等以平台页面和人工确认为准，不要编造。");
 
-            if (policy.EnableKnowledgeBase)
+            if (includeKnowledgeBase && policy.EnableKnowledgeBase)
             {
                 var matches = MatchKnowledge(question);
                 if (matches.Count > 0)
