@@ -1,5 +1,6 @@
 from pathlib import Path
 
+
 ROOT = Path(__file__).resolve().parents[1]
 
 
@@ -7,61 +8,67 @@ def read(path: str) -> str:
     return (ROOT / path).read_text(encoding="utf-8-sig")
 
 
-def test_v2_legacy_learning_sync_dispatches_by_exact_shopkey_not_seller_nickname():
-    bridge = read("src/Bot/ChromeNs/KnowledgeEngineV2LearningBridge.cs")
-    dispatch = bridge[
-        bridge.index("private static void OnLegacyKnowledgeChanged"):
-        bridge.index("private static void QueueSynchronizeShop")
+def test_v2_cloud_sync_dispatches_by_exact_shopkey_not_seller_nickname():
+    service = read("src/Bot/Knowledge/KnowledgeV2CloudSyncService.cs")
+    queue = service[
+        service.index("private static void Queue(ShopContext shop)"):
+        service.index("internal static void QueueSync")
     ]
 
-    assert "QN.CurQN" in dispatch
-    assert "ShopContextLocator.ResolveRuntimeBySeller(qn)" in dispatch
-    assert "scheduled.Add(shop.ShopKey)" in dispatch
-    assert "QueueSynchronizeShop(shop, qn.Seller.Nick.Trim())" in dispatch
-    assert "Distinct(StringComparer.Ordinal)" not in dispatch
-    assert "ResolveBySellerNick" not in dispatch
+    assert "shop.ShopKey" in queue
+    assert "States.GetOrAdd(shop.ShopKey" in queue
+    assert "Interlocked.Exchange(ref state.Syncing,1)" in queue
+    assert "sellerNick" not in queue
+    assert "ResolveBySellerNick" not in queue
 
 
-def test_v2_legacy_learning_import_keeps_all_repository_work_in_one_shop_scope():
-    bridge = read("src/Bot/ChromeNs/KnowledgeEngineV2LearningBridge.cs")
-    importer = bridge[
-        bridge.index("private static void ImportLearningChanges(ShopContext shop"):
-        bridge.index("private static bool Same")
+def test_v2_cloud_sync_keeps_network_and_repository_operations_in_one_shop_scope():
+    service = read("src/Bot/Knowledge/KnowledgeV2CloudSyncService.cs")
+    sync = service[
+        service.index("private static async Task SyncOnce"):
+        service.index("private static State LoadState")
     ]
 
-    scope_start = importer.index("using (ShopSettingsScope.Enter(shop))")
-    scope_end = importer.index("\n                }\n\n                if (changed > 0)", scope_start)
-    scoped = importer[scope_start:scope_end]
+    scope_start = sync.index("using(ShopSettingsScope.Enter(shop))")
+    scope_end = sync.rindex("\n            }")
+    scoped = sync[scope_start:scope_end]
 
-    assert scoped.index("BotFeatureStore.GetKnowledgeBase()") < scoped.index("KnowledgeEngineV2Repository.LoadAll(seller)")
-    assert scoped.index("KnowledgeEngineV2Repository.LoadAll(seller)") < scoped.index("KnowledgeEngineV2Repository.Save(seller, record)")
-    assert scoped.index("KnowledgeEngineV2Repository.Save(seller, record)") < scoped.index("KnowledgeEngineV2Service.Warm(seller)")
-    assert "KnowledgePolicyProfileService.GetProfile(entry)" in scoped
+    assert "new ShopControlPlaneConnectionStore(shop,Paths)" in scoped
+    assert "KnowledgeEngineV2Repository.LoadAll(shop.DisplayName)" in scoped
+    assert "X-Shop-Key" in scoped
+    assert "ShopRuntimeCredentialAuthority.SendWithUnauthorizedRecoveryAsync" in scoped
+    assert "KnowledgeEngineV2Repository.TryReplaceAllIfUnchanged" in scoped
+    assert "KnowledgeEngineV2Service.ReplaceSnapshot" not in scoped
 
 
-def test_v2_legacy_learning_sync_coalesces_updates_without_dropping_midflight_changes():
-    bridge = read("src/Bot/ChromeNs/KnowledgeEngineV2LearningBridge.cs")
-    queue = bridge[
-        bridge.index("private static void QueueSynchronizeShop"):
-        bridge.index("internal static void SynchronizeSeller")
+def test_v2_cloud_sync_serializes_jobs_per_shopkey_and_does_not_drop_manual_sync():
+    service = read("src/Bot/Knowledge/KnowledgeV2CloudSyncService.cs")
+    queue = service[
+        service.index("private static void Queue(ShopContext shop)"):
+        service.index("internal static void QueueSync")
+    ]
+    manual = service[
+        service.index("internal static async Task SyncNowAsync"):
+        service.index("private static async Task SyncOnce")
     ]
 
-    assert "SynchronizingShops.TryAdd(shop.ShopKey, 0)" in queue
-    assert "PendingShopSynchronizations[shop.ShopKey] = 0;" in queue
-    assert "while (PendingShopSynchronizations.TryRemove(shop.ShopKey, out ignored));" in queue
-    assert "if (PendingShopSynchronizations.TryRemove(shop.ShopKey, out ignored))" in queue
-    assert "QueueSynchronizeShop(shop, seller);" in queue
+    assert "Interlocked.Exchange(ref state.Syncing,1)" in queue
+    assert "finally" in queue
+    assert "Interlocked.Exchange(ref state.Syncing,0)" in queue
+    assert "Interlocked.CompareExchange(ref state.Syncing, 1, 0)" in manual
+    assert "本店 Knowledge V2 正在同步" in manual
+    assert "await SyncOnce(shop, state)" in manual
 
 
-
-def test_knowledge_v2_corrupt_list_json_fails_closed_instead_of_becoming_empty_metadata():
+def test_v2_corrupt_list_json_fails_closed_instead_of_becoming_empty_metadata():
     repository = read("src/Bot/Knowledge/KnowledgeEngineV2.Repository.cs")
     parser = repository[
         repository.index("private static List<string> ParseList"):
-        repository.index("private static void MirrorOneToLegacy")
+        repository.index("private static ShopContext ResolveShopRequired")
     ]
     assert "string.IsNullOrWhiteSpace(json)" in parser
     assert "JsonConvert.DeserializeObject<List<string>>(json)" in parser
     assert "throw new InvalidDataException" in parser
     assert "静默丢失知识元数据" in parser
     assert "catch { return new List<string>(); }" not in parser
+    assert "MirrorOneToLegacy" not in repository
