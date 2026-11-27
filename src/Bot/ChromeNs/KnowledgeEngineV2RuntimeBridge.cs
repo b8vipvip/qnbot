@@ -216,17 +216,9 @@ namespace Bot.ChromeNs
                 return KnowledgeV2RuntimeResult.Continue(commercePrompt);
             }
 
-            if (!KnowledgeEngineV2Service.IsSnapshotReady(burst.SellerNick))
-            {
-                QueueWarm(burst.ShopKey, burst.SellerNick);
-                Log.Info("Knowledge Engine V2索引尚未就绪，本轮不阻塞买家消息，直接继续兼容回复链路: buyer="
-                    + burst.BuyerNick);
-                var warmContext = conditionalOnly
-                    ? ConditionalBusinessAdviceService.BuildPromptAddon(conditionalAdviceEvidence, false)
-                        + CommerceContextService.BuildPromptAddon(commerceAuthority.CommerceContext)
-                    : string.Empty;
-                return KnowledgeV2RuntimeResult.Continue(warmContext);
-            }
+            // Do not skip retrieval on the first buyer turn after startup. Resolve()
+            // builds the exact ShopKey snapshot under its per-shop build lock when cold;
+            // the background warmup remains an optimization, not a correctness gate.
 
             KnowledgeV2Decision decision;
             try
