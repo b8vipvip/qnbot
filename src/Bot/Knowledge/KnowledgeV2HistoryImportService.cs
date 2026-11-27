@@ -4,6 +4,7 @@ using BotLib;
 using System;
 using System.Collections.Generic;
 using System.Linq;
+using Newtonsoft.Json;
 
 namespace Bot.Knowledge
 {
@@ -43,7 +44,7 @@ namespace Bot.Knowledge
             using (ShopSettingsScope.Enter(shop))
             {
                 importResult = importResult ?? new KnowledgeImportResult();
-                var sourceItems = (importResult.AddedItems ?? new List<KnowledgeBaseEntry>())
+                var sourceItems = (importResult.AddedItems ?? new List<KnowledgeV2Record>())
                     .Where(x => x != null).ToList();
                 var result = new KnowledgeV2HistoryPromotionResult { SourceItems = sourceItems.Count };
                 var existingHashes = new HashSet<string>(
@@ -53,10 +54,10 @@ namespace Bot.Knowledge
                 var importId = "chat-history-" + DateTime.Now.ToString("yyyyMMddHHmmss")
                     + "-" + Guid.NewGuid().ToString("N").Substring(0, 8);
 
-                foreach (var entry in sourceItems)
+                foreach (var source in sourceItems)
                 {
-                    var title = (entry.Title ?? string.Empty).Trim();
-                    var answer = (entry.Answer ?? string.Empty).Trim();
+                    var title = (source.Title ?? string.Empty).Trim();
+                    var answer = (source.Answer ?? string.Empty).Trim();
                     if (title.Length < 4 || answer.Length < 2) continue;
                     var hash = KnowledgeAiService.ContentHash(title, answer);
                     if (!existingHashes.Add(hash))
@@ -65,47 +66,43 @@ namespace Bot.Knowledge
                         continue;
                     }
 
+                    var record = JsonConvert.DeserializeObject<KnowledgeV2Record>(
+                        JsonConvert.SerializeObject(source)) ?? new KnowledgeV2Record();
                     var parsed = KnowledgeEngineV2Semantics.Parse(title, null);
-                    var text = title + " " + answer;
-                    var risk = KnowledgeEngineV2Semantics.IsHighRisk(text);
-                    var aliases = (entry.Keywords ?? string.Empty)
-                        .Split(new[] { ',', '，', ';', '；', '\n', '\r' }, StringSplitOptions.RemoveEmptyEntries)
-                        .Select(x => (x ?? string.Empty).Trim())
-                        .Where(x => x.Length >= 2 && x.Length <= 80)
-                        .Distinct(StringComparer.OrdinalIgnoreCase)
-                        .Take(20)
-                        .ToList();
-                    aliases.Insert(0, title);
-
-                    var record = new KnowledgeV2Record
-                    {
-                        Id = Guid.NewGuid().ToString("N"),
-                        Type = KnowledgeEngineV2Semantics.NormalizeType(entry.Category),
-                        Title = title,
-                        Intent = KnowledgeEngineV2Semantics.NormalizeIntent(parsed.Intent),
-                        Subject = string.IsNullOrWhiteSpace(parsed.Subject)
-                            ? KnowledgeEngineV2Semantics.ResolveSubject(title, parsed.Entities)
-                            : parsed.Subject,
-                        Predicate = KnowledgeEngineV2Semantics.NormalizePredicate(parsed.Predicate),
-                        Entities = parsed.Entities == null ? new List<string>() : parsed.Entities.ToList(),
-                        Aliases = Clean(aliases),
-                        Answer = answer,
-                        ShortAnswer = answer.Length > 160 ? answer.Substring(0, 160) : answer,
-                        Conditions = new List<string>(),
-                        Exclusions = new List<string>(),
-                        RequiredContext = new List<string>(),
-                        ProductIds = new List<string>(),
-                        RiskLevel = risk ? "high" : "normal",
-                        SourceType = "chat_history_import",
-                        SourceId = importId,
-                        Authority = risk ? 0.55 : 0.90,
-                        Confidence = risk ? 0.55 : 0.82,
-                        Enabled = !risk,
-                        Status = risk ? "candidate" : "active",
-                        CreatedAt = DateTime.Now,
-                        UpdatedAt = DateTime.Now,
-                        LastVerifiedAt = DateTime.Now
-                    };
+                    var risk = string.Equals(record.RiskLevel, "high", StringComparison.OrdinalIgnoreCase)
+                        || KnowledgeEngineV2Semantics.IsHighRisk(title + " " + answer);
+                    record.Id = string.IsNullOrWhiteSpace(record.Id) ? Guid.NewGuid().ToString("N") : record.Id;
+                    record.Title = title;
+                    record.Answer = answer;
+                    record.Type = risk ? "learning_candidate" : KnowledgeEngineV2Semantics.NormalizeType(record.Type);
+                    record.Intent = KnowledgeEngineV2Semantics.NormalizeIntent(
+                        string.IsNullOrWhiteSpace(record.Intent) ? parsed.Intent : record.Intent);
+                    record.Subject = string.IsNullOrWhiteSpace(record.Subject)
+                        ? KnowledgeEngineV2Semantics.ResolveSubject(title, parsed.Entities)
+                        : record.Subject;
+                    record.Predicate = KnowledgeEngineV2Semantics.NormalizePredicate(
+                        string.IsNullOrWhiteSpace(record.Predicate) ? parsed.Predicate : record.Predicate);
+                    record.Entities = record.Entities == null || record.Entities.Count == 0
+                        ? (parsed.Entities == null ? new List<string>() : parsed.Entities.ToList())
+                        : record.Entities;
+                    record.Aliases = Clean((record.Aliases ?? new List<string>()).Concat(new[] { title }));
+                    record.ShortAnswer = string.IsNullOrWhiteSpace(record.ShortAnswer)
+                        ? (answer.Length > 160 ? answer.Substring(0, 160) : answer)
+                        : record.ShortAnswer;
+                    record.Conditions = Clean(record.Conditions);
+                    record.Exclusions = Clean(record.Exclusions);
+                    record.RequiredContext = Clean(record.RequiredContext);
+                    record.ProductIds = Clean(record.ProductIds);
+                    record.RiskLevel = risk ? "high" : "normal";
+                    record.SourceType = "chat_history_import";
+                    record.SourceId = importId;
+                    record.Authority = risk ? Math.Min(record.Authority, 0.55) : Math.Max(record.Authority, 0.82);
+                    record.Confidence = risk ? Math.Min(record.Confidence, 0.55) : Math.Max(record.Confidence, 0.82);
+                    record.Enabled = !risk && string.Equals(record.Status, "active", StringComparison.OrdinalIgnoreCase);
+                    record.Status = record.Enabled ? "active" : "candidate";
+                    record.CreatedAt = record.CreatedAt == DateTime.MinValue ? DateTime.Now : record.CreatedAt;
+                    record.UpdatedAt = DateTime.Now;
+                    record.LastVerifiedAt = DateTime.Now;
 
                     KnowledgeEngineV2Repository.Save(seller, record);
                     result.AddedItems.Add(record);
