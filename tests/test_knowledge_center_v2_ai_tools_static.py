@@ -73,10 +73,23 @@ def test_v2_ai_sources_are_in_wpf_compile_list():
     assert "KnowledgeCenterV2AiToolsUi.cs" in props
 
 
-def test_legacy_smart_import_remains_unchanged_for_preview_reference():
+def test_legacy_smart_import_and_knowledge_manager_write_paths_are_retired():
     legacy = read("src/Bot/Knowledge/KnowledgeAiService.cs")
-    preview = read("src/Bot/Knowledge/LegacyKnowledgePreviewWindow.cs")
+    v2 = read("src/Bot/Knowledge/KnowledgeV2SmartImportService.cs")
+    ui = read("src/Bot/Knowledge/KnowledgeCenterV2AiToolsUi.cs")
+    repository = read("src/Bot/Knowledge/KnowledgeEngineV2.Repository.cs")
+
+    assert not (ROOT / "src/Bot/Knowledge/KnowledgeManagerControl.cs").exists()
+    assert not (ROOT / "src/Bot/Knowledge/KnowledgeEditWindow.cs").exists()
+    assert not (ROOT / "src/Bot/Knowledge/KnowledgeImportControl.cs").exists()
+    assert not (ROOT / "src/Bot/Knowledge/KnowledgeOptimizationService.cs").exists()
+    assert not (ROOT / "src/Bot/Knowledge/KnowledgeOptimizationUi.cs").exists()
     assert "SaveDeduped(parsed.Items)" in legacy
-    assert "BotFeatureStore.SaveKnowledgeBase(existing)" in legacy
-    assert "KnowledgeImportControl" in preview
-    assert "AiOptimizationHistoryControl" in preview
+    assert "Analysis only:" in legacy
+    assert "BotFeatureStore.SaveKnowledgeBase" not in legacy
+    assert "KnowledgeEngineV2Repository.Save(seller, record)" in v2
+    assert "KnowledgeV2SmartImportService" in ui
+    assert "BotFeatureStore.SaveKnowledgeBase" not in v2
+    assert "MirrorOneToLegacy" not in repository
+
+
