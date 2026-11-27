@@ -166,6 +166,7 @@ namespace Bot.ChromeNs
                 () => TryPostSafeMainSendMouseMessage(preSendGuard),
                 "发送按钮HWND安全消息",
                 UiActionTimeoutMs).ConfigureAwait(false);
+            if (!hwndPosted && LastSendWasIndeterminate) return false;
             if (hwndPosted)
             {
                 if (await WaitForTextSubmissionAcceptedAsync(
@@ -203,6 +204,7 @@ namespace Bot.ChromeNs
                     && TryInvokeCachedSendButtonNow(),
                 "发送按钮左侧UIA安全调用（原生前置）",
                 UiActionTimeoutMs).ConfigureAwait(false);
+            if (!safeUiaInvoked && LastSendWasIndeterminate) return false;
             if (safeUiaInvoked)
             {
                 if (await WaitForTextSubmissionAcceptedAsync(
