@@ -10,8 +10,9 @@ using System.Threading.Tasks;
 namespace Bot.ChromeNs
 {
     // Retained as a presentation state for the existing answer pipeline. It is
-    // no longer a knowledge retriever; Knowledge V2 performs the only retrieval
-    // and direct-answer decision in KnowledgeEngineV2RuntimeBridge.
+    // no longer a knowledge retriever; Knowledge V2 performs the only retrieval.
+    // AI-first keeps approved V2 matches as prompt context; Local-first may use
+    // the V2 runtime bridge's high-confidence direct-answer fast path.
     internal enum SmartReplyRouteKind
     {
         DirectKnowledge,
