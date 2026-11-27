@@ -1076,7 +1076,7 @@ namespace Bot.ChromeNs
                 contextForRules.Append(' ').Append(turn.Text);
             }
             dynamicSystemPrompt += BotFeatureStore.BuildPromptAddon(
-                contextForRules.ToString(), false);
+                contextForRules.ToString());
             dynamicSystemPrompt += SmartReplyRouterService.BuildPromptAddon(plan);
             dynamicSystemPrompt += knowledgeV2ContextAddon ?? string.Empty;
             dynamicSystemPrompt += ReceptionFlowPolicy.BuildPromptAddon(seller, buyer, question);
