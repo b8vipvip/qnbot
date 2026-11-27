@@ -1510,13 +1510,6 @@ namespace Bot.ChromeNs
             catch { return def; }
         }
 
-        public static List<KnowledgeBaseEntry> GetKnowledgeBase()
-        {
-            var list = Read(KnowledgeKey, new List<KnowledgeBaseEntry>());
-            if (list == null) list = new List<KnowledgeBaseEntry>();
-            return list;
-        }
-
         // One-time V1 -> V2 migration must distinguish an intentionally empty
         // store from corrupt/unreadable JSON. The ordinary legacy getter is
         // deliberately forgiving for old UI callers, but migration must fail
@@ -1555,11 +1548,6 @@ namespace Bot.ChromeNs
                 error = "legacy_knowledge_read_failed:" + ex.GetType().Name;
                 return false;
             }
-        }
-
-        public static void SaveKnowledgeBase(List<KnowledgeBaseEntry> list)
-        {
-            SaveJson(KnowledgeKey, JsonConvert.SerializeObject(list ?? new List<KnowledgeBaseEntry>(), Formatting.Indented));
         }
 
         public static int GetSmartImportTimeoutSeconds()
