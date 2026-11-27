@@ -15,60 +15,6 @@ namespace Bot.Knowledge
             @"^(这个|那个|这款|那款|这种|那种|它|这样|那样|上面|前面|刚才|然后呢|那呢|这个呢|那个呢)|^(可以吗|行吗|对吗|是不是|怎么弄|怎么办)$",
             RegexOptions.Compiled | RegexOptions.IgnoreCase);
 
-        public static KnowledgeV2Record FromLegacy(KnowledgeBaseEntry entry, KnowledgePolicyProfile profile)
-        {
-            if (entry == null) return null;
-            var text = (entry.Title ?? string.Empty) + " " + (entry.Keywords ?? string.Empty) + " " + (entry.Answer ?? string.Empty);
-            var query = Parse(entry.Title ?? string.Empty, null);
-            var type = ResolveType(entry.Category, query.Intent, query.Predicate, entry.Answer, entry.SourceType);
-            var isUnapprovedLearning = KnowledgeV2AuthorityPolicy.IsUnapprovedLegacyLearningEntry(entry)
-                || IsPendingCandidate(entry.SourceType, entry.Category);
-            if (isUnapprovedLearning) type = "learning_candidate";
-            var entities = ExtractEntities(text);
-            var aliases = new List<string> { entry.Title ?? string.Empty };
-            aliases.AddRange(SplitTerms(entry.Keywords));
-            aliases.AddRange(entities);
-            var confidence = profile == null || profile.Confidence <= 0 ? 0.80 : profile.Confidence;
-            var reliability = profile == null ? 0.75 : profile.ReliabilityScore;
-            var authority = ResolveAuthority(entry.SourceType, profile);
-            var now = DateTime.Now;
-            DateTime parsedUpdated;
-            if (!DateTime.TryParse(entry.UpdatedAt, out parsedUpdated)) parsedUpdated = now;
-            return new KnowledgeV2Record
-            {
-                Id = !string.IsNullOrWhiteSpace(entry.Id)
-                    ? entry.Id.Trim()
-                    : KnowledgeAiService.ContentHash(entry.Title ?? string.Empty, entry.Answer ?? string.Empty),
-                Type = type,
-                Title = (entry.Title ?? string.Empty).Trim(),
-                Intent = query.Intent,
-                Subject = ResolveSubject(entry.Title, entities),
-                Predicate = query.Predicate,
-                Entities = entities,
-                Aliases = aliases.Where(x => !string.IsNullOrWhiteSpace(x)).Distinct(StringComparer.OrdinalIgnoreCase).ToList(),
-                Answer = (entry.Answer ?? string.Empty).Trim(),
-                ShortAnswer = BuildShortAnswer(entry.Answer),
-                Conditions = profile == null ? new List<string>() : SplitTerms(profile.ApplyWhen).ToList(),
-                Exclusions = profile == null ? new List<string>() : SplitTerms(profile.DoNotApplyWhen).ToList(),
-                RequiredContext = profile == null ? new List<string>() : SplitTerms(profile.RequiredContext).ToList(),
-                ProductIds = ExtractProductIds(text),
-                RiskLevel = HighRisk.IsMatch(text) ? "high" : "normal",
-                SourceType = string.IsNullOrWhiteSpace(entry.SourceType) ? "legacy" : entry.SourceType,
-                SourceId = entry.Id,
-                Authority = authority,
-                Confidence = Clamp(confidence * 0.55 + reliability * 0.45),
-                UseCount = 0,
-                AcceptedCount = profile == null ? 0 : profile.AcceptedCount,
-                CorrectionCount = profile == null ? 0 : profile.SellerCorrectionCount,
-                WithdrawCount = profile == null ? 0 : profile.SellerWithdrawCount,
-                Enabled = entry.Enabled,
-                Status = isUnapprovedLearning ? "candidate" : "active",
-                CreatedAt = parsedUpdated,
-                UpdatedAt = parsedUpdated,
-                LastVerifiedAt = parsedUpdated
-            };
-        }
-
         public static KnowledgeV2Query Parse(string message, KnowledgeV2WorkingMemory memory)
         {
             message = (message ?? string.Empty).Trim();
@@ -464,57 +410,6 @@ namespace Bot.Knowledge
                 .Distinct(StringComparer.Ordinal)
                 .OrderBy(x => x, StringComparer.Ordinal)
                 .Take(max));
-        }
-
-        private static string ResolveType(string category, string intent, string predicate, string answer, string sourceType)
-        {
-            var value = (category ?? string.Empty) + " " + (sourceType ?? string.Empty);
-            if (IsLearningSource(sourceType, category)) return "learning_candidate";
-            if (HighRisk.IsMatch(answer ?? string.Empty)) return "safety_rule";
-            if (Regex.IsMatch(value, @"售后|退款")) return "after_sale";
-            if (Regex.IsMatch(value, @"订单|下单|付款")) return "order_rule";
-            if (Regex.IsMatch(value, @"短消息|固定|首条|寒暄")) return "fixed_reply";
-            if (intent == "how_to" || predicate == "activation_method" || predicate == "account_binding") return "procedure";
-            if (Regex.IsMatch(value, @"商品|SKU", RegexOptions.IgnoreCase)) return "product_knowledge";
-            if (intent == "capability" || intent == "purchase" || intent == "price") return "presale";
-            return "business_fact";
-        }
-
-        private static bool IsLearningSource(string sourceType, string category)
-        {
-            var value = (sourceType ?? string.Empty) + " " + (category ?? string.Empty);
-            return Regex.IsMatch(value, @"自动学习|会话学习|人工回复学习|学习候选", RegexOptions.IgnoreCase);
-        }
-
-        private static bool IsPendingCandidate(string sourceType, string category)
-        {
-            var value = (sourceType ?? string.Empty) + " " + (category ?? string.Empty);
-            return Regex.IsMatch(value, @"自动学习|会话学习|人工回复学习|学习候选|pending|candidate|AI生成", RegexOptions.IgnoreCase);
-        }
-
-        private static double ResolveAuthority(string sourceType, KnowledgePolicyProfile profile)
-        {
-            var source = (sourceType ?? string.Empty).ToLowerInvariant();
-            var authority = source.Contains("人工") || source.Contains("manual") ? 0.98
-                : (source.Contains("导入") || source.Contains("fixed") ? 0.95 : 0.90);
-            if (profile != null && profile.AcceptedCount >= 3) authority = Math.Max(authority, 0.96);
-            if (profile != null && profile.SellerCorrectionCount > profile.AcceptedCount) authority = Math.Min(authority, 0.78);
-            return Clamp(authority);
-        }
-
-        private static string BuildShortAnswer(string answer)
-        {
-            answer = (answer ?? string.Empty).Trim();
-            if (answer.Length <= 80) return answer;
-            var split = Regex.Split(answer, @"[。！？!?\r\n]").FirstOrDefault(x => !string.IsNullOrWhiteSpace(x));
-            return string.IsNullOrWhiteSpace(split) ? answer.Substring(0, 80) : split.Trim();
-        }
-
-        private static IEnumerable<string> SplitTerms(string value)
-        {
-            return (value ?? string.Empty)
-                .Split(new[] { ',', '，', ';', '；', '|', '/', '\r', '\n' }, StringSplitOptions.RemoveEmptyEntries)
-                .Select(x => x.Trim()).Where(x => x.Length >= 2);
         }
 
         private static List<string> ExtractProductIds(string text)
