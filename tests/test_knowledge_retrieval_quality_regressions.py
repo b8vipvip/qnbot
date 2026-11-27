@@ -586,3 +586,18 @@ def test_v2_direct_reply_runs_transcript_sanitizer_and_store_output_policy_befor
     dedup = method.index("ReplyDeduplicationService.EnsureDistinct(")
     assert sanitize < output_policy < suffix < dedup
     assert "knowledge_v2_output_policy_empty" in method
+
+
+
+def test_legacy_knowledge_prompt_injection_is_disabled_when_v2_is_authoritative():
+    options = read("src/Bot/Options/CtlRobotOptions.xaml.cs")
+    streaming = read("src/Bot/ChromeNs/BuyerStreamingReplyPipeline.cs")
+    legacy = read("src/Bot/ChromeNs/MyOpenAI.cs")
+
+    assert "BuildPromptAddon(string question, bool includeKnowledgeBase)" in options
+    assert "if (includeKnowledgeBase && policy.EnableKnowledgeBase)" in options
+    assert "allowLegacyKnowledgePrompt = !KnowledgeEngineV2Service.IsEnabled(seller)" in streaming
+    assert "BuildPromptAddon(" in streaming
+    assert "contextForRules.ToString(), allowLegacyKnowledgePrompt" in streaming
+    assert "allowLegacyKnowledgePrompt = !KnowledgeEngineV2Service.IsEnabled(seller)" in legacy
+    assert "contextForKnowledge.ToString(), allowLegacyKnowledgePrompt" in legacy
