@@ -300,7 +300,8 @@ namespace Bot.ChromeNs
         Consumed = 1,
         Failed = 2,
         Cancelled = 3,
-        Suppressed = 4 // Policy consumed the turn without physical delivery.
+        Suppressed = 4, // Policy consumed the turn without physical delivery.
+        Indeterminate = 5 // A physical send may have happened; never send a second answer.
     }
 
     /// <summary>
@@ -556,23 +557,29 @@ namespace Bot.ChromeNs
                     // invitation to try a different answer for this same turn.
                     if (firstOutcome == CanonicalPreMergeOutcome.Suppressed) return firstOutcome;
 
-                    // A pre-send ShopKey/session rejection or an explicit human-takeover cancellation
-                    // proves that the greeting was not sent. Continue image OCR/AI only when the
-                    // transport failed before any physical send action; an indeterminate send must
-                    // never fall through to a second answer for the same buyer turn.
+                    // An indeterminate physical send or human takeover must stop this turn.
+                    // Only a verified pre-send ShopKey/session rejection can fall through to
+                    // the normal image/text route; never let an image exception bypass this gate.
+                    var humanTakeoverCancelled = firstOutcome == CanonicalPreMergeOutcome.Cancelled
+                        && qn.Rpa != null
+                        && qn.Rpa.LastSendWasCancelled
+                        && firstFailureReason.IndexOf("人工接管", StringComparison.OrdinalIgnoreCase) >= 0;
+                    if (humanTakeoverCancelled)
+                    {
+                        Log.Info("首条咨询固定回复被人工接管取消，停止本轮自动回复，不继续调用视觉/文本AI: seller="
+                            + item.SellerNick + ", buyer=" + item.BuyerNick);
+                        return firstOutcome;
+                    }
+
                     var failedBeforeSend = !sendIsIndeterminate
                         && (firstFailureReason.IndexOf(
                                 "发送ShopKey作用域确认", StringComparison.OrdinalIgnoreCase) >= 0
                             || firstFailureReason.IndexOf(
-                                "会话确认", StringComparison.OrdinalIgnoreCase) >= 0
-                            || (firstOutcome == CanonicalPreMergeOutcome.Cancelled
-                                && qn.Rpa != null
-                                && qn.Rpa.LastSendWasCancelled
-                                && firstFailureReason.IndexOf("人工接管", StringComparison.OrdinalIgnoreCase) >= 0));
-                    var isImageQuestion = string.Equals(question, "[图片]", StringComparison.Ordinal);
-                    if (!failedBeforeSend && !isImageQuestion) return firstOutcome;
+                                "会话确认", StringComparison.OrdinalIgnoreCase) >= 0);
+                    if (!failedBeforeSend) return firstOutcome;
 
-                    Log.Info("首条咨询固定回复未确认送达，已释放首条资格并继续当前消息的后续视觉理解/AI: seller="
+                    var isImageQuestion = string.Equals(question, "[图片]", StringComparison.Ordinal);
+                    Log.Info("首条咨询固定回复在物理发送前被店铺/会话门禁拒绝，已释放首条资格并继续当前消息的后续视觉理解/AI: seller="
                         + item.SellerNick + ", buyer=" + item.BuyerNick
                         + ", image=" + isImageQuestion + ", reason=" + firstFailureReason);
                 }
@@ -777,7 +784,9 @@ namespace Bot.ChromeNs
                     ? CanonicalPreMergeOutcome.Consumed
                     : sendCancelled
                         ? CanonicalPreMergeOutcome.Cancelled
-                        : CanonicalPreMergeOutcome.Failed;
+                        : qn.Rpa != null && qn.Rpa.LastSendWasIndeterminate
+                            ? CanonicalPreMergeOutcome.Indeterminate
+                            : CanonicalPreMergeOutcome.Failed;
             }
             catch (OperationCanceledException)
             {
