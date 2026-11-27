@@ -98,7 +98,6 @@ namespace Bot.ChromeNs
         {
             var total = Stopwatch.StartNew();
             if (candidate == null) return Failure("没有可用的测试问题。", total);
-            if (!Params.Robot.CanUseRobotReal) return Failure("Bot 总开关已停用。", total, candidate);
             var shopKey = (candidate.ShopKey ?? string.Empty).Trim();
             if (shopKey.Length == 0)
                 return Failure("测试问题缺少可信ShopKey，已阻止按客服昵称猜测店铺。", total, candidate);
@@ -123,6 +122,11 @@ namespace Bot.ChromeNs
                 || !string.Equals((qn.Seller.Nick ?? string.Empty).Trim(), (candidate.Seller ?? string.Empty).Trim(), StringComparison.Ordinal))
             {
                 return Failure("目标客服账号校验失败，已阻止跨店铺执行测试。", total, candidate);
+            }
+            using (ShopSettingsScope.Enter(shop, false))
+            {
+                if (!Params.Robot.CanUseRobotReal)
+                    return Failure("目标店铺的Bot总开关已停用。", total, candidate);
             }
 
             var detectedAt = DateTime.Now;
@@ -271,7 +275,7 @@ namespace Bot.ChromeNs
                 try { shop = ShopContextLocator.ResolveRuntimeBySeller(qn); }
                 catch { shop = null; }
                 if (shop == null || string.IsNullOrWhiteSpace(shop.ShopKey)
-                    || !string.Equals((shop.SellerNick ?? string.Empty).Trim(), qn.Seller.Nick.Trim(), StringComparison.Ordinal))
+                    || !string.Equals((shop.SellerNick ?? string.Empty).Trim(), (qn.Seller.Nick ?? string.Empty).Trim(), StringComparison.Ordinal))
                     return null;
 
                 var history = await qn.CDP.Invoke<JObject>("im.singlemsg.GetRemoteHisMsg", new
