@@ -570,3 +570,19 @@ def test_v2_direct_reply_uses_shop_outgoing_guard_before_ready_and_at_transport(
     assert "ShopReceptionPolicy.BlockOutgoing(" in pre_send
     assert "outgoingPolicySuppressed = true" in pre_send
     assert "knowledge_v2_business_guard_suppressed" in method
+
+
+
+def test_v2_direct_reply_runs_transcript_sanitizer_and_store_output_policy_before_send():
+    runtime = read("src/Bot/ChromeNs/KnowledgeEngineV2RuntimeBridge.cs")
+    method = runtime[
+        runtime.index("internal static async Task<KnowledgeV2RuntimeResult> TryHandleWithContextAsync"):
+        runtime.index("internal static string BuildContextPromptAddon")
+    ]
+
+    sanitize = method.index("ReplyTranscriptSanitizer.Sanitize(decision.Answer)")
+    output_policy = method.index("BotFeatureStore.ApplyOutputPolicy(answer)")
+    suffix = method.index("BotMessageSuffixService.Apply(burst.SellerNick, answer)")
+    dedup = method.index("ReplyDeduplicationService.EnsureDistinct(")
+    assert sanitize < output_policy < suffix < dedup
+    assert "knowledge_v2_output_policy_empty" in method
