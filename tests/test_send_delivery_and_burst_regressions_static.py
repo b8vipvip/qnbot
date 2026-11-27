@@ -532,3 +532,35 @@ def test_ambiguous_physical_send_is_non_retryable_and_keeps_delivery_watchdog():
     assert retry_send < retry_indeterminate
     assert "WaitForSellerEchoGraceAsync(buyer, text, sendStartedAt, 2800, cancellationToken)" in send
     assert "保留SendDeliveryWatchdog等待提交/回显核验" in send
+
+
+def test_legacy_text_send_failure_is_not_reported_as_completed_progress():
+    qn = read("src/Bot/ChromeNs/QN.cs")
+    method = qn.split("private async Task ProcessTextBurstAsync", 1)[1].split(
+        "private async Task ProcessVisionBurstAsync", 1
+    )[0]
+    send = method.index("var sendOk = await SendTextWithRetryAsync(")
+    terminal = method[method.index("if (sendCancelled)", send):]
+    assert "else if (sendOk)" in terminal
+    assert "ResponseProgressTracker.Complete(" in terminal
+    assert "ResponseProgressTracker.Fail(" in terminal
+    assert "文本答案已生成，但实际发送未确认：" in terminal
+    assert terminal.index("else if (sendOk)") < terminal.index("ResponseProgressTracker.Complete(")
+    assert terminal.index("ResponseProgressTracker.Complete(") < terminal.index("ResponseProgressTracker.Fail(")
+    assert "var sendFailureReason = rpa == null" in method
+
+
+def test_legacy_vision_send_failure_is_not_reported_as_completed_progress():
+    qn = read("src/Bot/ChromeNs/QN.cs")
+    method = qn.split("private async Task ProcessVisionBurstAsync", 1)[1].split(
+        "private void AddSkippedConversation", 1
+    )[0]
+    send = method.index("sendOk = await SendTextWithRetryAsync(")
+    terminal = method[method.index("if (sendCancelled)", send):]
+    assert "else if (sendOk)" in terminal
+    assert "ResponseProgressTracker.Complete(" in terminal
+    assert "ResponseProgressTracker.Fail(" in terminal
+    assert "视觉答案已生成，但实际发送未确认：" in terminal
+    assert terminal.index("else if (sendOk)") < terminal.index("ResponseProgressTracker.Complete(")
+    assert terminal.index("ResponseProgressTracker.Complete(") < terminal.index("ResponseProgressTracker.Fail(")
+    assert "var sendFailureReason = rpa == null" in method
