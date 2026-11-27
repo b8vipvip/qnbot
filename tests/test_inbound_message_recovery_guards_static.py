@@ -28,7 +28,9 @@ def test_live_receive_failure_does_not_abort_remaining_messages_in_same_payload(
     loop = method[method.index("foreach (var message in messages)"):]
 
     assert "try" in loop
-    assert "await ProcessIncomingMessageAsync(message);" in loop
+    assert "var processingTask = ProcessIncomingMessageAsync(message);" in loop
+    assert "processingTask != null && !processingTask.IsCompleted" in loop
+    assert "_ = ObserveInboundProcessingAsync(processingTask);" in loop
     assert "catch (Exception ex)" in loop
     assert "已隔离并继续处理同批次后续消息" in loop
     assert loop.index("catch (Exception ex)") < loop.index("await Task.Delay(30)")
@@ -96,7 +98,7 @@ def test_recovered_order_handoff_keeps_claim_after_durable_order_ledger_owns_it(
         method.index("var decision = IncomingMessageSafety.Evaluate")
     ]
 
-    handoff = order[order.index("if (orderPlan != null && orderPlan.IsBuyerFollowUp)"):]
+    handoff = order[order.index("if (orderPlan.IsBuyerFollowUp)"): ]
     assert "accepted = true;" in order
     assert handoff.index("ResponseProgressTracker.ObserveNewBuyerTurn") < handoff.index("accepted = true;")
     assert handoff.index("accepted = true;") < handoff.index("return ProcessOrderPlacedReplyAsync(orderPlan);")
