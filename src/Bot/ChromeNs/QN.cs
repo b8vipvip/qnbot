@@ -1290,7 +1290,28 @@ namespace Bot.ChromeNs
         private async Task ProcessBuyerBurstAsync(BuyerMessageBurstLease lease)
         {
             var burst = lease == null ? null : lease.Burst;
-            if (burst == null || burst.Items.Count < 1 || string.IsNullOrWhiteSpace(burst.CombinedQuestion)) return;
+            if (burst == null || burst.Items.Count < 1) return;
+
+            if (burst.InputOverflow)
+            {
+                if (!lease.IsCurrent) return;
+                var note = string.IsNullOrWhiteSpace(burst.InputOverflowReason)
+                    ? "本轮买家连续消息超过安全处理上限，已停止自动回复，避免因截断造成答非所问。"
+                    : burst.InputOverflowReason;
+                var detectedAt = burst.Items.Min(x => x.ReceivedAt);
+                ResponseProgressTracker.BeginAnswer(
+                    burst.SellerNick, burst.BuyerNick, burst.CombinedQuestion, detectedAt, burst.ShopKey);
+                ResponseProgressTracker.Fail(
+                    burst.SellerNick, burst.BuyerNick, note, burst.ShopKey);
+                Log.ErrorWithMaxCount("买家连续消息超过安全处理上限，已拒绝将截断预览发送给文本/视觉AI: seller="
+                    + burst.SellerNick + ", buyer=" + burst.BuyerNick
+                    + ", itemCount=" + burst.Items.Count
+                    + ", previewChars=" + (burst.CombinedQuestion ?? string.Empty).Length
+                    + ", shopRef=" + MyWebSocketServer.DiagnosticRef("shop", burst.ShopKey), 20);
+                return;
+            }
+
+            if (string.IsNullOrWhiteSpace(burst.CombinedQuestion)) return;
 
             if (!burst.HasReplyableItem)
             {
