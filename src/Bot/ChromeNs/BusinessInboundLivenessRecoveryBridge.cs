@@ -313,8 +313,12 @@ try {
                 }
                 else
                 {
+                    // The live coordinator computes the next quiet delay immediately after
+                    // the previous buyer item enters the burst. Simulate that timestamp, not the
+                    // next item's arrival time; otherwise a fragment arriving just after the
+                    // four-second burst age would incorrectly see the 80ms post-cap delay.
                     var quietDelay = BuyerMessageBurstCoordinator.QuietDelayMilliseconds(
-                        groupItems, groupStartedAt, pair.Value);
+                        groupItems, groupStartedAt, previousBuyerTime);
                     var gapMs = (pair.Value - previousBuyerTime).TotalMilliseconds;
                     if (gapMs > quietDelay)
                     {
