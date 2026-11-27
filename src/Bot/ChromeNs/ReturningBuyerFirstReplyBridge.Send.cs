@@ -10,6 +10,7 @@ namespace Bot.ChromeNs
     {
         private static async Task SendAsync(QN qn, string shopKey, string seller, string buyer, string question, DateTime detectedAt, string key)
         {
+            var sendConfirmed = false;
             try
             {
                 var shop = ShopContextLocator.ResolveRuntimeBySeller(qn);
@@ -62,26 +63,55 @@ namespace Bot.ChromeNs
                     KnowledgeLearningService.RegisterAnswerSource(seller, buyer, question, answer, "首条咨询固定回复-10分钟回访");
                     var ok = await qn.SendTextWithRetryAsync(
                         buyer, answer, 1, CancellationToken.None, preSendGuard).ConfigureAwait(false);
+                    sendConfirmed = ok;
                     if (ok)
                     {
+                        DateTime ignored;
+                        IndeterminateReservations.TryRemove(key, out ignored);
                         FirstInquiryFixedReplyService.MarkDelivered(seller, buyer, shop.ShopKey);
                         ReplyDeduplicationService.RememberDelivered(seller, buyer, answer, shop.ShopKey);
                         Log.Info("回访买家超过10分钟无互动，首次固定回复已发送: seller=" + seller + ", buyer=" + buyer);
+                    }
+                    else if (qn.Rpa != null && qn.Rpa.LastSendWasIndeterminate)
+                    {
+                        RetainIndeterminateReservation(key);
+                        Log.ErrorWithMaxCount("回访首答发送结果不确定，已保留本店买家资格占位，禁止重复触发: seller="
+                            + seller + ", buyer=" + buyer, 20);
                     }
                     else Release(key);
                 }
             }
             catch (Exception ex)
             {
-                Release(key);
+                if (sendConfirmed)
+                {
+                    // The physical send already returned success; a later bookkeeping/logging
+                    // exception must not reopen this message's reservation and allow a duplicate.
+                    DateTime ignored;
+                    IndeterminateReservations.TryRemove(key, out ignored);
+                    Reservations[key] = DateTime.Now;
+                }
+                else if (qn != null && qn.Rpa != null && qn.Rpa.LastSendWasIndeterminate)
+                    RetainIndeterminateReservation(key);
+                else
+                    Release(key);
                 Log.ErrorWithMaxCount("回访首答发送失败：" + ex.Message, 10);
             }
+        }
+
+        private static void RetainIndeterminateReservation(string key)
+        {
+            if (string.IsNullOrWhiteSpace(key)) return;
+            var now = DateTime.Now;
+            Reservations[key] = now;
+            IndeterminateReservations[key] = now;
         }
 
         private static void Release(string key)
         {
             DateTime ignored;
             Reservations.TryRemove(key, out ignored);
+            IndeterminateReservations.TryRemove(key, out ignored);
         }
     }
 }

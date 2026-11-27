@@ -337,3 +337,33 @@ def test_retry_rechecks_delayed_seller_echo_after_buyer_activation():
     send = retry.index("ok = await SendTextAsync", guard)
     assert activate < final_echo < guard < send
     assert "break;" in retry[final_echo:guard]
+
+
+def test_returning_buyer_fixed_reply_retains_reservation_after_indeterminate_send():
+    send = read("src/Bot/ChromeNs/ReturningBuyerFirstReplyBridge.Send.cs")
+    bootstrap = read("src/Bot/ChromeNs/ReturningBuyerFirstReplyBridge.Bootstrap.cs")
+
+    failure = send.split("else if (qn.Rpa != null && qn.Rpa.LastSendWasIndeterminate)", 1)[1].split(
+        "else Release(key);", 1
+    )[0]
+    assert "RetainIndeterminateReservation(key)" in failure
+    assert "禁止重复触发" in failure
+    catch = send.split("catch (Exception ex)", 1)[1].split("private static void RetainIndeterminateReservation", 1)[0]
+    assert "qn.Rpa.LastSendWasIndeterminate" in catch
+    assert "RetainIndeterminateReservation(key)" in catch
+    assert "if (sendConfirmed)" in catch
+    assert "Reservations[key] = DateTime.Now" in catch
+    assert "var sendConfirmed = false;" in send
+    assert "sendConfirmed = ok;" in send
+    retain = send.split("private static void RetainIndeterminateReservation", 1)[1].split(
+        "private static void Release", 1
+    )[0]
+    assert "Reservations[key] = now" in retain
+    assert "IndeterminateReservations[key] = now" in retain
+    assert "IndeterminateReservations.TryRemove(key, out ignored)" in send
+
+    assert "ConcurrentDictionary<string, DateTime> IndeterminateReservations" in bootstrap
+    cleanup = bootstrap.split("var now = DateTime.Now;", 1)[1].split("finally", 1)[0]
+    assert "IndeterminateReservations.ContainsKey(x.Key)" in cleanup
+    assert "ExistingSessionResetMinutes" in cleanup
+    assert "ReturningBuyerIdleMinutes" in cleanup
