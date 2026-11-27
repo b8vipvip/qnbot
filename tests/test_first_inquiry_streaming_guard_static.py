@@ -106,3 +106,36 @@ def test_old_reflection_guard_no_longer_rewraps_runtime_handler():
     assert '"_handler"' not in guard
     assert "handlerField.SetValue" not in guard
     assert "不再动态重包消息handler" in guard
+
+def test_indeterminate_first_greeting_keeps_reservation_and_never_falls_through_to_ai():
+    canonical = canonical_block()
+    first = canonical.split("var firstReserved =", 1)[1].split(
+        "private static bool HasNewerSubstantiveConversationTurn", 1
+    )[0]
+    assert "CanonicalPreMergeOutcome.Indeterminate" in first
+    assert "var sendIsIndeterminate = firstOutcome == CanonicalPreMergeOutcome.Indeterminate;" in first
+    assert "if (sendIsIndeterminate)" in first
+    assert "保留首条资格占位等待回显核验" in first
+    assert "if (!failedBeforeSend) return firstOutcome;" in first
+
+
+def test_manual_takeover_of_first_greeting_stops_the_entire_automatic_turn_including_images():
+    canonical = canonical_block()
+    first = canonical.split("var firstReserved =", 1)[1].split(
+        "private static bool HasNewerSubstantiveConversationTurn", 1
+    )[0]
+    takeover = first.index("var humanTakeoverCancelled =")
+    stop = first.index("if (humanTakeoverCancelled)", takeover)
+    return_turn = first.index("return firstOutcome;", stop)
+    failed_before_send = first.index("var failedBeforeSend =", return_turn)
+    assert takeover < stop < return_turn < failed_before_send
+    assert "不继续调用视觉/文本AI" in first[stop:failed_before_send]
+
+
+def test_late_delivery_confirmation_commits_first_inquiry_dedupe_after_indeterminate_send():
+    progress = read("src/Bot/ChromeNs/ResponseProgressTracker.cs")
+    method = progress.split("private static void MarkDeliveryConfirmedCore", 1)[1].split(
+        "public static void MarkDeliveryTimedOut", 1
+    )[0]
+    assert 'string.Equals(ui.Source, "首条咨询固定回复", StringComparison.Ordinal)' in method
+    assert "FirstInquiryFixedReplyService.MarkDelivered(seller, buyer, shopKey)" in method
