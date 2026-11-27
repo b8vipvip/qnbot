@@ -103,6 +103,7 @@ namespace Bot.ChromeNs
             if (qn == null
                 || burst == null
                 || burst.Items.Count < 1
+                || burst.InputOverflow
                 || !burst.HasReplyableItem
                 || burst.LatestVisionItem != null)
             {
