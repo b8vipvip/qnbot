@@ -36,19 +36,21 @@ def test_session_learning_rejects_bot_only_and_high_risk_self_learning():
     assert "manual_correction" in source
 
 
-def test_reviewed_knowledge_prefers_strong_human_corrections():
+def test_reviewed_knowledge_writes_only_verified_human_evidence_to_v2():
     source = read("src/Bot/ChromeNs/ReviewedKnowledgeLearningService.cs")
 
-    assert 'evidenceType == "manual_correction"' in source
-    assert 'evidenceType == "withdrawn_bot_then_manual"' in source
-    assert "existingLooksCurated" in source
-    assert "confidence < 0.95" in source
+    assert 'evidenceType != "manual_correction"' in source
+    assert 'evidenceType != "withdrawn_bot_then_manual"' in source
+    assert 'evidenceType != "manual_reply"' in source
+    assert "confidence < 0.90" in source
     assert "double.IsNaN(confidence)" in source
     assert "double.IsInfinity(confidence)" in source
     assert "confidence > 1.0" in source
-    assert "existing.AiGenerated = false" in source
-    assert 'SourceType = sourceType' in source
-
+    assert "shop == null || !shop.HasStableSellerId" in source
+    assert "KnowledgeEngineV2Repository.TrySaveReviewedDirectAnswer" in source
+    assert "KnowledgeEngineV2Repository.Save(shop.SellerNick, record)" in source
+    assert "BotFeatureStore.GetKnowledgeBase" not in source
+    assert "BotFeatureStore.SaveKnowledgeBase" not in source
 
 def test_runtime_bridge_uses_exact_seller_and_injects_store_style_as_system_context():
     source = read("src/Bot/ChromeNs/ConversationSessionLearningRuntimeBridge.cs")
@@ -130,16 +132,23 @@ def test_learning_history_refresh_is_typed_and_shop_scoped():
 
 
 def test_idle_learning_resolves_shop_before_structured_ai_call():
-    source=read("src/Bot/ChromeNs/ConversationSessionLearningService.cs")
-    analysis=source[source.index("private static async Task FinalizeAsync"):source.index("private static async Task<JObject> AnalyzeAsync")]
-    assert "ShopContextLocator.ResolveRuntimeByShopKey(session.ShopKey)" in analysis
-    assert "var shop = ShopContextLocator.ResolveBySellerNick(session.Seller);" not in analysis
-    assert "using (ShopSettingsScope.Enter(shop))" in analysis
-    assert "analysis = await AnalyzeAsync(" in analysis
-    assert "styleBefore, localFirst, workflowEvidenceContext);" in analysis
-    assert analysis.index("using (ShopSettingsScope.Enter(shop))") < analysis.index("analysis = await AnalyzeAsync")
-    assert analysis.index("analysis = await AnalyzeAsync") < analysis.index("ReviewedKnowledgeLearningService.ApplyReviewedKnowledge")
+    source = read("src/Bot/ChromeNs/ConversationSessionLearningService.cs")
+    finalize = source[
+        source.index("private static async Task FinalizeAsync"):
+        source.index("private static async Task<JObject> AnalyzeAsync")
+    ]
 
+    assert "ShopContextLocator.ResolveRuntimeByShopKey(session.ShopKey)" in finalize
+    assert "var shop = ShopContextLocator.ResolveBySellerNick(session.Seller);" not in finalize
+    assert "using (ShopSettingsScope.Enter(shop))" in finalize
+    assert "analysis = await AnalyzeAsync(" in finalize
+    assert "AnalyzeKnowledgeCorpusAsync(" in finalize
+    assert "ApplyVerifiedCorpusNewKnowledge(" in finalize
+    assert "ApplyVerifiedCorpusCorrections(" in finalize
+    assert "ReviewedKnowledgeLearningService.ApplyReviewedKnowledge" not in finalize
+    assert finalize.index("using (ShopSettingsScope.Enter(shop))") < finalize.index("analysis = await AnalyzeAsync")
+    assert finalize.index("analysis = await AnalyzeAsync") < finalize.index("AnalyzeKnowledgeCorpusAsync")
+    assert finalize.index("AnalyzeKnowledgeCorpusAsync") < finalize.index("ApplyVerifiedCorpusNewKnowledge")
 
 def test_session_learning_pages_complete_remote_history_and_recreates_state_after_restart():
     context = read("src/Bot/ChromeNs/ConversationContextStore.cs")
@@ -187,29 +196,46 @@ def test_session_learning_does_not_silently_truncate_turns_or_bot_cards():
     assert "TrimConversationUnsafe" not in history
 
 
-def test_incomplete_session_history_is_fail_closed_and_learning_defaults_to_dry_run():
+def test_incomplete_history_fails_closed_while_verified_v2_learning_auto_publishes():
     service = read("src/Bot/ChromeNs/ConversationSessionLearningService.cs")
-    finalize = service[service.index("private static async Task FinalizeAsync"):
-                      service.index("private static async Task<JObject> AnalyzeAsync")]
+    finalize = service[
+        service.index("private static async Task FinalizeAsync"):
+        service.index("private static async Task<JObject> AnalyzeAsync")
+    ]
+    new_add = service[
+        service.index("private static int ApplyVerifiedCorpusNewKnowledge"):
+        service.index("private static bool CanAutoApplyVerifiedNewKnowledge")
+    ]
+    corrections = service[
+        service.index("private static int ApplyVerifiedCorpusCorrections"):
+        service.index("private static bool CanAutoApplyVerifiedCorpusCorrection")
+    ]
 
-    assert "if (historyCoverage == null || !historyCoverage.IsComplete)" in finalize
-    assert "remote_history_turn_count_mismatch" in finalize
+    history_gate = finalize.index("if (historyCoverage == null || !historyCoverage.IsComplete)")
+    ai_call = finalize.index("analysis = await AnalyzeAsync")
+    assert history_gate < ai_call
     assert "未达到完整历史覆盖门槛，未调用AI，也未写入生产知识库" in finalize
+    assert "remote_history_turn_count_mismatch" in finalize
+
+    # Only unverified generic suggestions remain dry-run. Evidence-backed V2
+    # additions and corrections are enabled and publish directly after full gates.
     assert "private const bool EnableAutomaticWrites = false;" in service
     assert "private const bool EnableVerifiedCorpusCorrectionWrites = true;" in service
-    assert "ApplyVerifiedCorpusCorrections(session, corpusAnalysis, expectedCurrentFingerprint, out corpusSkipped)" in finalize
-    assert "ApplyVerifiedCorpusNewKnowledge(" in finalize
-    assert "EnableVerifiedCorpusNewKnowledgeWrites = true" in service
-    assert "ApplyVerifiedCorpusNewKnowledge(" in finalize
-    assert "EnableVerifiedCorpusNewKnowledgeWrites = true" in service
-    assert '"ai_auto_publish_new_knowledge_and_verified_updates"' in finalize
+    assert "private const bool EnableVerifiedCorpusNewKnowledgeWrites = true;" in service
     assert "genericSuggestionWriteMode" in finalize
-    assert "通用会话AI建议仍为dry-run" in finalize
-    assert finalize.index("if (!EnableAutomaticWrites)") < finalize.index(
-        "ReviewedKnowledgeLearningService.ApplyReviewedKnowledge"
-    )
-    assert "corpusApplied = ApplyVerifiedCorpusCorrections" in finalize
+    assert "缺少完整的 Knowledge V2 真人消息证据链，保留候选" in finalize
+    assert '"newKnowledgeWriteMode"] = EnableVerifiedCorpusNewKnowledgeWrites' in finalize
+    assert "ai_auto_publish_verified_human_evidence" in finalize
+    assert "ReviewedKnowledgeLearningService.ApplyReviewedKnowledge" not in finalize
 
+    assert "!analysis.Complete" in new_add
+    assert "!analysis.NewCandidateAnalysisComplete" in new_add
+    assert "analysis.SourceFingerprint, analysis.AfterFingerprint" in new_add
+    assert "TryCreateVerifiedSessionKnowledge(" in new_add
+
+    assert "!analysis.Complete" in corrections
+    assert "analysis.SourceFingerprint, analysis.AfterFingerprint" in corrections
+    assert "TryApplyVerifiedSessionCorrection(" in corrections
 
 def test_myopenai_endpoint_discovery_is_scoped_in_learning():
     myopenai=read("src/Bot/ChromeNs/MyOpenAI.cs")
