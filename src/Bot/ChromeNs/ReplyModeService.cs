@@ -12,9 +12,9 @@ namespace Bot.ChromeNs
 
     /// <summary>
     /// Shop-scoped reply routing preference.
-    /// AiFirst keeps the knowledge base as AI context and lets AI produce the final answer.
-    /// LocalFirst permits only SmartReplyRouter's existing high-confidence DirectKnowledge route
-    /// to return without an AI call; all other questions continue through the normal AI pipeline.
+    /// AiFirst keeps approved Knowledge V2 matches as AI context and lets AI produce the final answer.
+    /// LocalFirst permits only the Knowledge V2 runtime bridge's high-confidence direct-answer
+    /// decision to return without an AI call; all other questions continue through the normal AI pipeline.
     /// </summary>
     internal static class ReplyModeService
     {
