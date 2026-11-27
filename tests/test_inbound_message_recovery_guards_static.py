@@ -64,3 +64,21 @@ def test_recovered_buyer_replay_uses_exact_shop_scope_and_refreshes_timeline():
     assert "_handledBuyerMessageDeduplicator.TryRelease(messageKey);" in method
     assert "await ProcessOrderPlacedReplyAsync(orderPlan).ConfigureAwait(false);" in method
     assert "_buyerMessageBurstCoordinator.Enqueue(new BuyerMessageBurstItem" in method
+
+
+def test_failed_seller_echo_recording_releases_transport_claim_for_history_replay():
+    source = read("src/Bot/ChromeNs/QN.cs")
+    method = source[
+        source.index("private Task ProcessIncomingMessageAsync"):
+        source.index("private async Task ProcessBuyerBurstAsync")
+    ]
+    seller = method[
+        method.index("if (IsSellerMessage(message))"):
+        method.index("if (!IsBuyerMessage(message))")
+    ]
+
+    assert "_incomingMessageDeduplicator.TryAccept(messageKey)" in seller
+    assert "ConversationContextStore.RefreshAndRecord(message, messageText);" in seller
+    assert "RecordSellerEcho(message.toid.nick, messageText);" in seller
+    assert "_incomingMessageDeduplicator.TryRelease(messageKey);" in seller
+    assert "catch (Exception ex)" in seller
