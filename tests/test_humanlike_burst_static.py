@@ -84,6 +84,13 @@ def test_wecom_notification_contains_buyer_message_text_only():
     assert "[手机号]" in bridge
     assert "[API_KEY]" in bridge
 
+def test_historical_burst_quiet_delay_accepts_simulated_arrival_time():
+    coordinator = text("src/Bot/ChromeNs/BuyerMessageBurstCoordinator.cs")
+    assert "QuietDelayMilliseconds(items, startedAt, DateTime.Now)" in coordinator
+    assert "DateTime now)" in coordinator
+    assert "now - startedAt >= TimeSpan.FromSeconds(4)" in coordinator
+    assert "AdaptiveReplyTimingService.AdjustDelay(" in coordinator
+
 def test_buyer_burst_never_silently_discards_early_messages_or_truncates_to_a_sendable_preview():
     coordinator = text("src/Bot/ChromeNs/BuyerMessageBurstCoordinator.cs")
     qn = text("src/Bot/ChromeNs/QN.cs")
