@@ -117,7 +117,7 @@ def test_restart_recovery_skips_buyer_messages_with_a_later_seller_reply_in_remo
 def test_durable_checkpoint_is_not_advanced_past_an_unanswered_or_inflight_buyer_turn():
     text = source()
     method = text.split("internal async Task ProbeActiveConversationForMissedInboundAsync()", 1)[1]
-    assert "if (unanswered.Count == 0)" in method
+    assert "if (unanswered.Count == 0 && !replayFailed)" in method
     assert "Do not advance past an unanswered buyer turn" in method
     assert "if (!_businessInboundCheckpointRestored)" in method
     assert "PersistBusinessInboundCheckpoint(shop, safeBaseline)" in method
