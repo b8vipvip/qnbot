@@ -34,7 +34,7 @@ def test_ai_failure_does_not_lower_the_normal_v2_direct_answer_threshold():
 
     assert "DirectThreshold" in service
     assert "MinConfidence" in service
-    assert "var latest = KnowledgeEngineV2Service.Resolve(seller, buyer, question);" in client
+    assert "var latest = KnowledgeEngineV2Service.Resolve(seller, buyer, v2Question);" in client
     assert "latest.CanDirectReply" in client
     assert "latest.Answer, approvedDecision.Answer, StringComparison.Ordinal" in client
     assert "MinimumFallbackScore" not in client
@@ -64,7 +64,7 @@ def test_ai_failure_fallback_is_exact_shop_scoped_and_rejects_stale_or_withdrawn
     assert "shop.SellerNick, (seller ?? string.Empty).Trim(), StringComparison.Ordinal" in method
     assert "KnowledgeEngineV2Service.IsEnabled(seller)" in method
     assert "KnowledgeEngineV2Service.IsSnapshotReady(seller)" in method
-    assert "KnowledgeEngineV2Service.Resolve(seller, buyer, question)" in method
+    assert "KnowledgeEngineV2Service.Resolve(seller, buyer, v2Question)" in method
     assert "latestMatch.Record.Id, priorMatch.Record.Id, StringComparison.Ordinal" in method
     assert "KnowledgeV2AuthorityPolicy.IsProductionApproved(persisted)" in method
     assert "ConversationContextStore.IsWithdrawnAnswer(seller, buyer, answer)" in method
