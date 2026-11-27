@@ -339,11 +339,11 @@ namespace Bot.Knowledge
             document.Blocks.Add(LabelBlock("导出V2完整包", "包含全部结构化知识、V2 设置和 Schema Version；推荐在批量操作或调整生产设置前使用。"));
             document.Blocks.Add(LabelBlock("导入V2完整包", "会替换当前店铺的 V2 结构化知识和包内设置；客户端会先自动创建 JSON 备份，并要求 Yes/No 确认。"));
             document.Blocks.Add(LabelBlock("仅导出结构化知识", "只导出记录，不包含完整 V2 设置，适合审阅或转换。"));
-            document.Blocks.Add(LabelBlock("从旧知识重新迁移", "会清空并重建当前店铺 V2 数据；必须先导出完整包，只在确认需要重新迁移时使用。"));
+            document.Blocks.Add(LabelBlock("V2 完整包恢复", "只支持导入 Knowledge V2 完整包；导入前自动备份当前 V2 数据，不读取旧版知识库。"));
 
             document.Blocks.Add(HeadingBlock("单一知识引擎"));
             document.Blocks.Add(BodyBlock(
-                "客户端运行时只使用 Knowledge Engine V2：SQLite 是唯一知识事实源，结构化索引、Working Memory、检索、自动学习、修订、反馈、云同步和审计均围绕 V2 工作。旧版知识库页面、旧版检索/自动回复和旧版写入路径已退役；首次迁移只用于把既有数据导入 V2，不会在运行时双写或回退到 V1。"));
+                "客户端运行时只使用 Knowledge Engine V2：SQLite 是唯一知识事实源，结构化索引、Working Memory、检索、自动学习、修订、反馈、云同步和审计均围绕 V2 工作。旧版知识库页面、数据模型、检索/自动回复、写入、迁移镜像和同步协议均已删除；新安装只初始化空 V2 数据库，恢复只接受 V2 完整包或本店 V2 云同步数据。"));
 
             document.Blocks.Add(HeadingBlock("为什么没有本地直答"));
             document.Blocks.Add(Numbered(
