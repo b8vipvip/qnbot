@@ -238,8 +238,6 @@ namespace Bot.ChromeNs
             string shopKey = null)
         {
             plan = null;
-            if (!Params.Robot.CanUseRobotReal) return false;
-
             ShopContext shop;
             try
             {
@@ -265,6 +263,10 @@ namespace Bot.ChromeNs
                 return true;
             }
             shopKey = shop.ShopKey;
+            bool botEnabledForShop;
+            using (ShopSettingsScope.Enter(shop, false))
+                botEnabledForShop = Params.Robot.CanUseRobotReal;
+            if (!botEnabledForShop) return false;
 
             string classificationReason;
             if (!OrderMessageClassifier.IsConfirmedOrderEvent(message, messageText, out classificationReason))
