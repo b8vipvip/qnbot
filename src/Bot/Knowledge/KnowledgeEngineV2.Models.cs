@@ -103,6 +103,10 @@ namespace Bot.Knowledge
         public string RiskLevel { get; set; }
         public string SourceType { get; set; }
         public string SourceId { get; set; }
+        // Import-only evidence tokens are mapped to exact local source message IDs
+        // before promotion; never persist model-supplied tokens as knowledge facts.
+        [JsonIgnore]
+        public List<string> ImportEvidenceTokens { get; set; }
         public double Authority { get; set; }
         public double Confidence
         {
@@ -127,6 +131,7 @@ namespace Bot.Knowledge
             Exclusions = new List<string>();
             RequiredContext = new List<string>();
             ProductIds = new List<string>();
+            ImportEvidenceTokens = new List<string>();
         }
 
         public string ConfidenceText
