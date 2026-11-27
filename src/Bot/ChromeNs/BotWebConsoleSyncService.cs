@@ -1095,9 +1095,10 @@ namespace Bot.ChromeNs
             if (payload == null) throw new Exception("V2 运行设置参数为空");
             var seller = (state.Shop.DisplayName ?? string.Empty).Trim();
             if (seller.Length == 0) throw new Exception("本店客服账号未识别，不能保存 V2 运行设置");
-            var enabled = payload.Value<bool?>("enabled") ?? true;
-            var mode = (payload.Value<string>("mode") ?? "production").Trim().ToLowerInvariant();
-            if (mode != "production" && mode != "shadow") throw new Exception("V2 运行模式无效");
+            // The remote setting contract may still send an old "enabled" or
+            // "shadow" field, but Knowledge V2 is now mandatory and production-only.
+            var enabled = true;
+            var mode = "production";
             var threshold = payload.Value<double?>("direct_threshold") ?? 0.82;
             var confidence = payload.Value<double?>("min_confidence") ?? 0.72;
             if (threshold < 0.70 || threshold > 0.96) throw new Exception("V2 本地直答匹配阈值必须在 0.70~0.96");
