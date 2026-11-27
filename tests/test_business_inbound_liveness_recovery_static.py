@@ -98,8 +98,8 @@ def test_restart_recovery_skips_buyer_messages_with_a_later_seller_reply_in_remo
     )[0]
     assert "IsSellerMessage(message)" in helper
     assert "AreBuyerAliasesEquivalentInShop(seller, message.toid.nick, buyer)" in helper
-    assert "sellerSort > buyerSort" in helper
-    assert "sellerSort < nextBuyerSort" in helper
+    assert "sellerSort <= buyerSort" in helper
+    assert "sellerSort >= nextBuyerSort" in helper
     method = text.split("internal async Task ProbeActiveConversationForMissedInboundAsync()", 1)[1]
     assert "business-inbound-recovery-skipped-already-answered" in method
     assert "var unanswered = candidates" in method
