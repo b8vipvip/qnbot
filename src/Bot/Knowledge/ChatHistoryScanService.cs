@@ -1684,7 +1684,20 @@ namespace Bot.Knowledge
                     continue;
                 }
 
-                if (buyers.Count > 0)
+                if (buyers.Count > 0 && botAnsweredPendingQuestion && sellers.Count == 0)
+                {
+                    // A human reply after an already-sent Bot answer is not automatically
+                    // proof that the Bot's earlier answer was wrong or withdrawn. Keep it
+                    // as context for a later buyer turn; explicit correction learning
+                    // handles withdrawn_bot_then_manual evidence separately.
+                    buyers.Clear();
+                    sellers.Clear();
+                    previousSeller = turn.Text;
+                    previousSellerMessageId = (turn.MessageKey ?? string.Empty).Trim();
+                    previousSellerTime = turn.Time;
+                    botAnsweredPendingQuestion = false;
+                }
+                else if (buyers.Count > 0)
                 {
                     sellers.Add(turn);
                     botAnsweredPendingQuestion = false;
