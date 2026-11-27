@@ -1164,6 +1164,9 @@ namespace Bot.ChromeNs
             var sendOk = await qn.SendTextWithRetryAsync(
                 burst.BuyerNick, answer, 1, lease.CancellationToken, preSendGuard);
             var sendCancelled = !sendOk && qn.Rpa != null && qn.Rpa.LastSendWasCancelled;
+            var sendFailureReason = qn.Rpa == null
+                ? "发送器不可用，未能确认实际送达状态"
+                : qn.Rpa.GetSendFailureReason();
             if (sendOk)
             {
                 ReplyDeduplicationService.RememberDelivered(
@@ -1188,7 +1191,7 @@ namespace Bot.ChromeNs
                         ? "已发送（Knowledge Memory本地直答，无AI调用）"
                         : sendCancelled
                             ? "未发送：人工接管或会话状态变化，已安全取消"
-                            : "发送失败：" + (qn.Rpa == null ? string.Empty : qn.Rpa.GetSendFailureReason()));
+                            : "发送失败：" + sendFailureReason);
             }
             Log.Info("Knowledge Memory本地直答完成: buyer=" + burst.BuyerNick
                 + ", success=" + sendOk + ", cancelled=" + sendCancelled
@@ -1196,8 +1199,12 @@ namespace Bot.ChromeNs
             if (sendCancelled)
                 ResponseProgressTracker.Cancel(
                     burst.SellerNick, burst.BuyerNick, "Knowledge Memory发送前会话门禁取消", burst.ShopKey);
-            else
+            else if (sendOk)
                 ResponseProgressTracker.Complete(burst.SellerNick, burst.BuyerNick, burst.ShopKey);
+            else
+                ResponseProgressTracker.Fail(
+                    burst.SellerNick, burst.BuyerNick,
+                    "Knowledge Memory答案已生成，但实际发送未确认：" + sendFailureReason, burst.ShopKey);
         }
     }
 }

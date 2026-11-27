@@ -408,7 +408,9 @@ namespace Bot.ChromeNs
                 ReceptionWorkflowRuntimeService.CancelDecision(workflowDecision);
                 lifecycleLease.MarkFailed("vision_answer_invalid");
                 if (ctl != null) ctl.SetSendResult(false, "未发送：AI错误");
-                ResponseProgressTracker.Complete(burst.SellerNick, burst.BuyerNick, burst.ShopKey);
+                ResponseProgressTracker.Fail(
+                    burst.SellerNick, burst.BuyerNick,
+                    "视觉AI未返回有效答案，未发送给买家", burst.ShopKey);
                 return;
             }
             if (!lifecycleLease.IsCurrent)
@@ -535,6 +537,9 @@ namespace Bot.ChromeNs
                 ReceptionWorkflowRuntimeService.CompleteDecision(workflowDecision, false);
                 if (lifecycleLease.IsCurrent) lifecycleLease.MarkFailed("vision_send_cancelled");
                 if (ctl != null) ctl.SetSendResult(false, "未发送：视觉generation已取消");
+                ResponseProgressTracker.Cancel(
+                    burst.SellerNick, burst.BuyerNick,
+                    "图片撤回保护视觉发送期间generation已失效", burst.ShopKey);
                 return;
             }
             var sendCancelled = !sendOk && qn.Rpa != null && qn.Rpa.LastSendWasCancelled;
@@ -554,6 +559,9 @@ namespace Bot.ChromeNs
                     burst.SellerNick, burst.BuyerNick, "视觉回复发送前会话门禁取消", burst.ShopKey);
                 return;
             }
+            var sendFailureReason = qn.Rpa == null
+                ? "发送器不可用，未能确认实际送达状态"
+                : qn.Rpa.GetSendFailureReason();
             if (conditionalAdviceReserved)
                 ConditionalBusinessAdviceService.CompleteDelivery(
                     burst.ShopKey, burst.SellerNick, burst.BuyerNick,
@@ -589,15 +597,19 @@ namespace Bot.ChromeNs
                     sendOk,
                     sendOk
                         ? "已发送（使用本地完整图片缓存，合并图片与最新提问）"
-                        : "识别完成，但目标买家会话未确认，未发送。原因："
-                            + (qn.Rpa == null ? string.Empty : qn.Rpa.GetSendFailureReason()));
+                        : "识别完成，但目标买家会话未确认，未发送。原因：" + sendFailureReason);
             }
             Log.Info("图片撤回保护视觉流程完成: buyer=" + burst.BuyerNick
                 + ", withdrawn=" + withdrawn
                 + ", followUp=" + hasFollowUpText
                 + ", cacheComplete=" + cacheComplete
                 + ", success=" + sendOk);
-            ResponseProgressTracker.Complete(burst.SellerNick, burst.BuyerNick, burst.ShopKey);
+            if (sendOk)
+                ResponseProgressTracker.Complete(burst.SellerNick, burst.BuyerNick, burst.ShopKey);
+            else
+                ResponseProgressTracker.Fail(
+                    burst.SellerNick, burst.BuyerNick,
+                    "图片撤回保护视觉答案已生成，但实际发送未确认：" + sendFailureReason, burst.ShopKey);
         }
 
         private static async Task SendCacheMissFallbackAsync(
@@ -657,6 +669,9 @@ namespace Bot.ChromeNs
             catch (OperationCanceledException)
             {
                 if (lifecycleLease.IsCurrent) lifecycleLease.MarkFailed("vision_cache_miss_fallback_cancelled");
+                ResponseProgressTracker.Cancel(
+                    burst.SellerNick, burst.BuyerNick,
+                    "图片缓存兜底发送期间generation已失效", burst.ShopKey);
                 return;
             }
             var sendCancelled = !sent && qn.Rpa != null && qn.Rpa.LastSendWasCancelled;
@@ -672,8 +687,14 @@ namespace Bot.ChromeNs
             if (sendCancelled)
                 ResponseProgressTracker.Cancel(
                     burst.SellerNick, burst.BuyerNick, "图片缓存兜底发送前会话门禁取消", burst.ShopKey);
-            else
+            else if (sent)
                 ResponseProgressTracker.Complete(burst.SellerNick, burst.BuyerNick, burst.ShopKey);
+            else
+                ResponseProgressTracker.Fail(
+                    burst.SellerNick, burst.BuyerNick,
+                    "图片缓存兜底回复发送未确认：" + (qn.Rpa == null
+                        ? "发送器不可用"
+                        : qn.Rpa.GetSendFailureReason()), burst.ShopKey);
         }
 
         private static bool TryRebindRecentCachedImage(
