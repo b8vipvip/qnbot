@@ -46,7 +46,8 @@ namespace Bot.ChromeNs
             string question,
             string candidateAnswer,
             CancellationToken cancellationToken,
-            bool preserveTrustedAnswer)
+            bool preserveTrustedAnswer,
+            string approvedV2ContextEvidence = null)
         {
             cancellationToken.ThrowIfCancellationRequested();
             if (!string.IsNullOrWhiteSpace(seller))
@@ -67,7 +68,7 @@ namespace Bot.ChromeNs
                     using (ShopSettingsScope.Enter(resolvedShop))
                     {
                         return EnsureDistinct(seller, buyer, question, candidateAnswer,
-                            cancellationToken, preserveTrustedAnswer);
+                            cancellationToken, preserveTrustedAnswer, approvedV2ContextEvidence);
                     }
                 }
             }
@@ -119,7 +120,7 @@ namespace Bot.ChromeNs
                 && !candidateAnswer.StartsWith("错误：", StringComparison.Ordinal))
             {
                 var validation = PreSendAnswerValidator.Validate(
-                    seller, buyer, question, candidateAnswer, knowledge, false);
+                    seller, buyer, question, candidateAnswer, knowledge, false, approvedV2ContextEvidence);
                 ReplyQualityMetricsService.RecordValidation(
                     validation.Action, validation.Issues, false);
                 if (validation.Action == AnswerValidationAction.Manual)
@@ -129,7 +130,7 @@ namespace Bot.ChromeNs
                     cancellationToken.ThrowIfCancellationRequested();
                     var repaired = RegenerateInvalidAnswer(
                         seller, buyer, question, candidateAnswer, knowledge, validation,
-                        cancellationToken);
+                        approvedV2ContextEvidence, cancellationToken);
                     repaired = BotFeatureStore.ApplyOutputPolicy(repaired);
                     if (string.IsNullOrWhiteSpace(repaired)
                         || repaired.StartsWith("错误：", StringComparison.Ordinal))
@@ -139,7 +140,7 @@ namespace Bot.ChromeNs
                     }
 
                     var secondValidation = PreSendAnswerValidator.Validate(
-                        seller, buyer, question, repaired, knowledge, true);
+                        seller, buyer, question, repaired, knowledge, true, approvedV2ContextEvidence);
                     ReplyQualityMetricsService.RecordValidation(
                         secondValidation.Action, secondValidation.Issues, true);
                     if (secondValidation.Action != AnswerValidationAction.Pass)
@@ -317,11 +318,25 @@ namespace Bot.ChromeNs
             string question,
             string candidateAnswer)
         {
+            // In V2 mode, a legacy mirror hit is not proof that V2 approved this record
+            // for the current query. Contextual AI answers are validated against the
+            // explicit V2 evidence passed by the runtime bridge instead.
+            try
+            {
+                if (KnowledgeEngineV2Service.IsEnabled(seller)) return null;
+            }
+            catch
+            {
+                return null;
+            }
+
             var answerKey = Canonical(candidateAnswer);
             var knowledge = BotFeatureStore.GetKnowledgeBase()
                 .FirstOrDefault(x => x != null
                     && x.Enabled
                     && !string.IsNullOrWhiteSpace(x.Answer)
+                    && !KnowledgeV2AuthorityPolicy.IsUnapprovedLegacyLearningEntry(x)
+                    && !ShopReceptionPolicy.IsQuarantined(seller, x.Id, x.Title, x.Answer)
                     && (Canonical(x.Answer) == answerKey
                         || Canonical(BotFeatureStore.ApplyOutputPolicy(x.Answer)) == answerKey));
             if (knowledge != null) return knowledge;
@@ -338,6 +353,7 @@ namespace Bot.ChromeNs
             string invalidAnswer,
             KnowledgeBaseEntry knowledge,
             AnswerValidationResult validation,
+            string approvedV2ContextEvidence,
             CancellationToken cancellationToken)
         {
             try
@@ -345,6 +361,8 @@ namespace Bot.ChromeNs
                 cancellationToken.ThrowIfCancellationRequested();
                 var timeline = ConversationContextStore.BuildTimelineText(seller, buyer, question, 12);
                 var evidence = PreSendAnswerValidator.BuildEvidenceText(knowledge);
+                if (!string.IsNullOrWhiteSpace(approvedV2ContextEvidence))
+                    evidence = (evidence + "\n" + approvedV2ContextEvidence).Trim();
                 var messages = new JArray
                 {
                     new JObject
@@ -568,6 +586,23 @@ namespace Bot.ChromeNs
             score = 0;
             question = (question ?? string.Empty).Trim();
             if (string.IsNullOrWhiteSpace(question)) return false;
+
+            // The V2 runtime already decided whether a local record is applicable and
+            // safe for this query. A legacy 50% outage fallback must never undo that decision.
+            try
+            {
+                if (KnowledgeEngineV2Service.IsEnabled(seller))
+                {
+                    Log.Info("Knowledge V2已启用，拒绝legacy AI异常知识兜底: seller=" + seller);
+                    return false;
+                }
+            }
+            catch (Exception ex)
+            {
+                Log.ErrorWithMaxCount("无法确认Knowledge V2权威状态，拒绝legacy AI异常知识兜底: " + ex.Message, 10);
+                return false;
+            }
+
             if (!IsAuthenticatedControlPlaneUpstreamFailure(aiError)) return false;
 
             var policy = BotFeatureStore.GetMessagePolicy();
@@ -587,7 +622,9 @@ namespace Bot.ChromeNs
             }
 
             foreach (var item in BotFeatureStore.GetKnowledgeBase()
-                .Where(x => x != null && x.Enabled && !string.IsNullOrWhiteSpace(x.Answer)))
+                .Where(x => x != null && x.Enabled && !string.IsNullOrWhiteSpace(x.Answer))
+                .Where(x => !KnowledgeV2AuthorityPolicy.IsUnapprovedLegacyLearningEntry(x))
+                .Where(x => !ShopReceptionPolicy.IsQuarantined(seller, x.Id, x.Title, x.Answer)))
             {
                 var currentScore = Score(item, question, false);
                 if (latestAgentPrompt != null)
