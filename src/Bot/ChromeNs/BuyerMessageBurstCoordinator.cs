@@ -1488,9 +1488,20 @@ namespace Bot.ChromeNs
 
         internal static int QuietDelayMilliseconds(IEnumerable<BuyerMessageBurstItem> items, DateTime startedAt)
         {
+            return QuietDelayMilliseconds(items, startedAt, DateTime.Now);
+        }
+
+        // The recovery bridge replays historical source timestamps. Supplying the simulated
+        // arrival time keeps the 4-second burst cap deterministic instead of comparing an old
+        // message against the current wall clock.
+        internal static int QuietDelayMilliseconds(
+            IEnumerable<BuyerMessageBurstItem> items,
+            DateTime startedAt,
+            DateTime now)
+        {
             var list = (items ?? new BuyerMessageBurstItem[0]).Where(x => x != null).ToList();
             if (list.Count == 0) return 350;
-            if (startedAt != DateTime.MinValue && DateTime.Now - startedAt >= TimeSpan.FromSeconds(4)) return 80;
+            if (startedAt != DateTime.MinValue && now - startedAt >= TimeSpan.FromSeconds(4)) return 80;
             var latestItem = list.Last();
             var latest = (latestItem.DisplayText ?? string.Empty).Trim();
             var compact = Regex.Replace(latest, @"\s+", string.Empty);
