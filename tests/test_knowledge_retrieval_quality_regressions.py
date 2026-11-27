@@ -586,3 +586,43 @@ def test_v2_direct_reply_runs_transcript_sanitizer_and_store_output_policy_befor
     dedup = method.index("ReplyDeduplicationService.EnsureDistinct(")
     assert sanitize < output_policy < suffix < dedup
     assert "knowledge_v2_output_policy_empty" in method
+
+
+
+def test_legacy_knowledge_prompt_injection_is_disabled_when_v2_is_authoritative():
+    options = read("src/Bot/Options/CtlRobotOptions.xaml.cs")
+    streaming = read("src/Bot/ChromeNs/BuyerStreamingReplyPipeline.cs")
+    legacy = read("src/Bot/ChromeNs/MyOpenAI.cs")
+
+    assert "BuildPromptAddon(string question, bool includeKnowledgeBase)" in options
+    assert "if (includeKnowledgeBase && policy.EnableKnowledgeBase)" in options
+    assert "allowLegacyKnowledgePrompt = !KnowledgeEngineV2Service.IsEnabled(seller)" in streaming
+    assert "BuildPromptAddon(" in streaming
+    assert "contextForRules.ToString(), allowLegacyKnowledgePrompt" in streaming
+    assert "allowLegacyKnowledgePrompt = !KnowledgeEngineV2Service.IsEnabled(seller)" in legacy
+    assert "contextForKnowledge.ToString(), allowLegacyKnowledgePrompt" in legacy
+
+
+
+def test_legacy_knowledge_prompt_gate_requires_matching_shop_scope():
+    streaming = read("src/Bot/ChromeNs/BuyerStreamingReplyPipeline.cs")
+    legacy = read("src/Bot/ChromeNs/MyOpenAI.cs")
+
+    for source in (streaming, legacy):
+        assert "var currentShopScope = ShopSettingsScope.Current" in source
+        assert "currentShopScope.SellerNick, seller, StringComparison.Ordinal" in source
+        assert "allowLegacyKnowledgePrompt = !KnowledgeEngineV2Service.IsEnabled(seller)" in source
+
+
+
+def test_default_legacy_prompt_addon_fails_closed_without_v2_shop_authority():
+    options = read("src/Bot/Options/CtlRobotOptions.xaml.cs")
+    default_overload = options[
+        options.index("public static string BuildPromptAddon(string question)"):
+        options.index("public static string BuildPromptAddon(string question, bool includeKnowledgeBase)")
+    ]
+
+    assert "ShopSettingsScope.Current" in default_overload
+    assert "KnowledgeEngineV2Service.IsEnabled(currentScope.SellerNick)" in default_overload
+    assert "includeLegacyKnowledge = false" in default_overload
+    assert "BuildPromptAddon(question, includeLegacyKnowledge)" in default_overload

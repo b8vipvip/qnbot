@@ -1,4 +1,6 @@
 ﻿using Bot.Automation.ChatDeskNs;
+using Bot.Knowledge;
+using Bot.ShopScope;
 using BotLib;
 using Newtonsoft.Json.Linq;
 using System;
@@ -1123,7 +1125,17 @@ namespace Bot.ChromeNs
                 if (contextForRules.Length > 2200) break;
                 contextForRules.Append(' ').Append(turn.Text);
             }
-            dynamicSystemPrompt += BotFeatureStore.BuildPromptAddon(contextForRules.ToString());
+            var allowLegacyKnowledgePrompt = false;
+            try
+            {
+                var currentShopScope = ShopSettingsScope.Current;
+                if (currentShopScope == null
+                    || string.Equals(currentShopScope.SellerNick, seller, StringComparison.Ordinal))
+                    allowLegacyKnowledgePrompt = !KnowledgeEngineV2Service.IsEnabled(seller);
+            }
+            catch { allowLegacyKnowledgePrompt = false; }
+            dynamicSystemPrompt += BotFeatureStore.BuildPromptAddon(
+                contextForRules.ToString(), allowLegacyKnowledgePrompt);
             dynamicSystemPrompt += SmartReplyRouterService.BuildPromptAddon(plan);
             dynamicSystemPrompt += knowledgeV2ContextAddon ?? string.Empty;
             dynamicSystemPrompt += ReceptionFlowPolicy.BuildPromptAddon(seller, buyer, question);

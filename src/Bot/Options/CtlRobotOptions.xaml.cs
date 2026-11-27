@@ -14,6 +14,7 @@ using Newtonsoft.Json;
 using Newtonsoft.Json.Linq;
 using Bot.ChromeNs;
 using Bot.Knowledge;
+using Bot.ShopScope;
 using BotLib;
 
 namespace Bot.Options
@@ -1806,6 +1807,24 @@ namespace Bot.ChromeNs
 
         public static string BuildPromptAddon(string question)
         {
+            // One-argument callers must fail closed: without an exact active shop
+            // scope, do not inject legacy KB snippets into an AI prompt.
+            var includeLegacyKnowledge = false;
+            try
+            {
+                var currentScope = ShopSettingsScope.Current;
+                if (currentScope != null)
+                    includeLegacyKnowledge = !KnowledgeEngineV2Service.IsEnabled(currentScope.SellerNick);
+            }
+            catch
+            {
+                includeLegacyKnowledge = false;
+            }
+            return BuildPromptAddon(question, includeLegacyKnowledge);
+        }
+
+        public static string BuildPromptAddon(string question, bool includeKnowledgeBase)
+        {
             var policy = GetMessagePolicy();
             var sb = new StringBuilder();
             sb.AppendLine();
@@ -1817,7 +1836,7 @@ namespace Bot.ChromeNs
             if (!string.IsNullOrWhiteSpace(policy.BannedWords)) sb.AppendLine("- 不要使用这些词：" + policy.BannedWords);
             sb.AppendLine("- 价格、库存、物流、订单、退款、赔偿等以平台页面和人工确认为准，不要编造。");
 
-            if (policy.EnableKnowledgeBase)
+            if (includeKnowledgeBase && policy.EnableKnowledgeBase)
             {
                 var matches = MatchKnowledge(question);
                 if (matches.Count > 0)

@@ -1,4 +1,5 @@
-﻿using BotLib;
+﻿using Bot.Knowledge;
+using BotLib;
 using Bot.ShopScope;
 using Newtonsoft.Json.Linq;
 using OpenAI.Chat;
@@ -811,7 +812,17 @@ namespace Bot.ChromeNs
                     if (contextForKnowledge.Length > 3500) break;
                     contextForKnowledge.Append(' ').Append(turn.Text);
                 }
-                var dynamicSystemPrompt = systemPrompt + BotFeatureStore.BuildPromptAddon(contextForKnowledge.ToString());
+                var allowLegacyKnowledgePrompt = false;
+                try
+                {
+                    var currentShopScope = ShopSettingsScope.Current;
+                    if (currentShopScope == null
+                        || string.Equals(currentShopScope.SellerNick, seller, StringComparison.Ordinal))
+                        allowLegacyKnowledgePrompt = !KnowledgeEngineV2Service.IsEnabled(seller);
+                }
+                catch { allowLegacyKnowledgePrompt = false; }
+                var dynamicSystemPrompt = systemPrompt + BotFeatureStore.BuildPromptAddon(
+                    contextForKnowledge.ToString(), allowLegacyKnowledgePrompt);
                 dynamicSystemPrompt += RecentVisualContextService.BuildPromptAddon(seller, buyer, question);
                 if (contextualKnowledge != null)
                 {
