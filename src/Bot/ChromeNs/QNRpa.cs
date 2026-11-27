@@ -1,6 +1,7 @@
 ﻿using BotLib.Extensions;
 using BotLib.Wpf.Extensions;
 using BotLib;
+using Bot.ShopScope;
 using FlaUI.Core.AutomationElements;
 using FlaUI.UIA3;
 using System;
@@ -43,6 +44,9 @@ namespace Bot.ChromeNs
 
         private static readonly ConcurrentDictionary<string, DateTime> AnswerAttemptStartedAt =
             new ConcurrentDictionary<string, DateTime>(StringComparer.Ordinal);
+        private static readonly ConcurrentDictionary<string, Task<bool>> ActivePhysicalSendActions =
+            new ConcurrentDictionary<string, Task<bool>>(StringComparer.Ordinal);
+        private static readonly object ActivePhysicalSendActionsSync = new object();
         private static readonly TimeSpan OwnedDraftRetention = TimeSpan.FromMinutes(30);
 
         // A timed-out UI mutation must never be followed by a second concurrent mutation.
@@ -261,24 +265,112 @@ namespace Bot.ChromeNs
             }
         }
 
+        private string ResolvePhysicalSendShopKey()
+        {
+            var scope = ShopSettingsScope.Current;
+            if (scope != null && !string.IsNullOrWhiteSpace(scope.ShopKey))
+                return scope.ShopKey.Trim();
+            var client = _qn == null ? null : _qn.CDP;
+            return client == null ? string.Empty : (client.ShopKey ?? string.Empty).Trim();
+        }
+
+        private static bool IsPhysicalSendUiAction(string stage)
+        {
+            stage = stage ?? string.Empty;
+            return stage.IndexOf("发送按钮HWND安全消息", StringComparison.Ordinal) >= 0
+                || stage.IndexOf("发送按钮左侧UIA安全调用", StringComparison.Ordinal) >= 0
+                || stage.IndexOf("发送主按钮坐标点击", StringComparison.Ordinal) >= 0
+                || stage.IndexOf("图片发送主按钮坐标点击", StringComparison.Ordinal) >= 0;
+        }
+
+        private static void ReleasePhysicalSendAction(string shopKey, Task<bool> worker)
+        {
+            if (string.IsNullOrWhiteSpace(shopKey) || worker == null) return;
+            lock (ActivePhysicalSendActionsSync)
+            {
+                Task<bool> current;
+                if (ActivePhysicalSendActions.TryGetValue(shopKey, out current)
+                    && ReferenceEquals(current, worker))
+                {
+                    Task<bool> ignored;
+                    ActivePhysicalSendActions.TryRemove(shopKey, out ignored);
+                    Log.Info("本店物理发送动作租约已释放: shopRef="
+                        + MyWebSocketServer.DiagnosticRef("shop", shopKey));
+                }
+            }
+        }
+
         private async Task<bool> RunUiActionAsync(Func<bool> action, string stage, int timeoutMs)
         {
             if (action == null) return false;
+            var physicalSendAction = IsPhysicalSendUiAction(stage);
+            var shopKey = physicalSendAction ? ResolvePhysicalSendShopKey() : string.Empty;
             Task<bool> worker;
             try
             {
-                worker = Task.Run(action);
+                if (physicalSendAction)
+                {
+                    if (shopKey.Length == 0)
+                    {
+                        SetSendIndeterminate(stage, "缺少精确ShopKey，拒绝启动物理发送按钮动作");
+                        return false;
+                    }
+
+                    lock (ActivePhysicalSendActionsSync)
+                    {
+                        Task<bool> active;
+                        if (ActivePhysicalSendActions.TryGetValue(shopKey, out active))
+                        {
+                            if (!active.IsCompleted)
+                            {
+                                SetSendIndeterminate(stage,
+                                    "本店上一次物理发送按钮动作仍在后台执行，禁止并发点击或重试");
+                                Log.ErrorWithMaxCount("本店物理发送动作租约仍被占用，已阻止第二次物理点击: shopRef="
+                                    + MyWebSocketServer.DiagnosticRef("shop", shopKey)
+                                    + ", stage=" + (stage ?? string.Empty), 20);
+                                return false;
+                            }
+                            Task<bool> ignored;
+                            ActivePhysicalSendActions.TryRemove(shopKey, out ignored);
+                        }
+
+                        worker = Task.Run(action);
+                        ActivePhysicalSendActions[shopKey] = worker;
+                    }
+                }
+                else
+                {
+                    worker = Task.Run(action);
+                }
             }
             catch (Exception ex)
             {
-                SetSendFailure(stage, ex.Message);
+                if (physicalSendAction)
+                    SetSendIndeterminate(stage, "物理发送按钮动作启动异常，结果无法确定：" + ex.Message);
+                else
+                    SetSendFailure(stage, ex.Message);
                 return false;
             }
 
             var winner = await Task.WhenAny(worker, Task.Delay(Math.Max(250, timeoutMs))).ConfigureAwait(false);
             if (winner != worker)
             {
-                SetSendFailure(stage, "千牛UIA操作超时，已停止等待以保护Bot界面");
+                if (physicalSendAction)
+                {
+                    SetSendIndeterminate(stage,
+                        "物理发送按钮动作超时，底层UIA/HWND任务可能仍执行；保留本店独占租约并禁止重试");
+                    Log.ErrorWithMaxCount("物理发送按钮动作超时，后台任务继续持有ShopKey独占租约: shopRef="
+                        + MyWebSocketServer.DiagnosticRef("shop", shopKey)
+                        + ", stage=" + (stage ?? string.Empty)
+                        + ", timeoutMs=" + Math.Max(250, timeoutMs), 20);
+                    worker.ContinueWith(
+                        completed => ReleasePhysicalSendAction(shopKey, worker),
+                        TaskScheduler.Default);
+                }
+                else
+                {
+                    SetSendFailure(stage, "千牛UIA操作超时，已停止等待以保护Bot界面");
+                }
                 return false;
             }
 
@@ -288,9 +380,16 @@ namespace Bot.ChromeNs
             }
             catch (Exception ex)
             {
-                SetSendFailure(stage, ex.Message);
+                if (physicalSendAction)
+                    SetSendIndeterminate(stage, "物理发送按钮动作执行异常，结果无法确定：" + ex.Message);
+                else
+                    SetSendFailure(stage, ex.Message);
                 Log.Info(stage + "失败: " + ex.Message);
                 return false;
+            }
+            finally
+            {
+                if (physicalSendAction) ReleasePhysicalSendAction(shopKey, worker);
             }
         }
 
