@@ -146,8 +146,7 @@ namespace Bot.Knowledge
                     || turn.Item3 < pendingBuyerAt
                     || turn.Item3 - pendingBuyerAt > TimeSpan.FromMinutes(30))
                     continue;
-                var reply = BuyerMessageArchiveService.Redact(
-                    raw.Substring(0, raw.Length - 3).TrimEnd());
+                var reply = BuyerMessageArchiveService.Redact(StripBotMarker(raw));
                 if (reply.Length == 0) continue;
                 string old;
                 if (answers.TryGetValue(pendingBuyerKey, out old))
@@ -1508,6 +1507,18 @@ namespace Bot.Knowledge
             value = Regex.Replace(value, @"(?<!\d)1\d{10}(?!\d)", "[手机号]");
             value = Regex.Replace(value, @"(?<!\d)\d{12,22}(?!\d)", "[敏感编号]");
             value = Regex.Replace(value, @"(?i)sk-[a-z0-9_-]{12,}", "[API_KEY]");
+            return value;
+        }
+
+        private static string StripBotMarker(string value)
+        {
+            value = (value ?? string.Empty).Trim();
+            var markers = new[] { "[AI]", "[A]", "【AI】", "［AI］" };
+            foreach (var marker in markers)
+            {
+                if (value.EndsWith(marker, StringComparison.OrdinalIgnoreCase))
+                    return value.Substring(0, value.Length - marker.Length).TrimEnd();
+            }
             return value;
         }
 
