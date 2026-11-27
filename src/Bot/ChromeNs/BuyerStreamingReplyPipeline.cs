@@ -1,4 +1,6 @@
 ﻿using Bot.Automation.ChatDeskNs;
+using Bot.Knowledge;
+using Bot.ShopScope;
 using BotLib;
 using Newtonsoft.Json.Linq;
 using System;
@@ -1124,7 +1126,13 @@ namespace Bot.ChromeNs
                 contextForRules.Append(' ').Append(turn.Text);
             }
             var allowLegacyKnowledgePrompt = false;
-            try { allowLegacyKnowledgePrompt = !KnowledgeEngineV2Service.IsEnabled(seller); }
+            try
+            {
+                var currentShopScope = ShopSettingsScope.Current;
+                if (currentShopScope == null
+                    || string.Equals(currentShopScope.SellerNick, seller, StringComparison.Ordinal))
+                    allowLegacyKnowledgePrompt = !KnowledgeEngineV2Service.IsEnabled(seller);
+            }
             catch { allowLegacyKnowledgePrompt = false; }
             dynamicSystemPrompt += BotFeatureStore.BuildPromptAddon(
                 contextForRules.ToString(), allowLegacyKnowledgePrompt);
