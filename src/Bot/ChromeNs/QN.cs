@@ -1826,7 +1826,18 @@ namespace Bot.ChromeNs
                 {
                     try
                     {
-                        await ProcessIncomingMessageAsync(message);
+                        var processingTask = ProcessIncomingMessageAsync(message);
+                        if (processingTask != null && !processingTask.IsCompleted)
+                        {
+                            // Order replies have a durable action ledger and may take much longer
+                            // than ingress. Observe them asynchronously so the shared receive gate
+                            // is released for the next buyer message instead of serializing on send.
+                            _ = ObserveInboundProcessingAsync(processingTask);
+                        }
+                        else if (processingTask != null)
+                        {
+                            await processingTask;
+                        }
                     }
                     catch (Exception ex)
                     {
@@ -1845,6 +1856,23 @@ namespace Bot.ChromeNs
                 {
                     _incomingMessageGate.Release();
                 }
+            }
+        }
+
+        private async Task ObserveInboundProcessingAsync(Task processingTask)
+        {
+            if (processingTask == null) return;
+            try
+            {
+                await processingTask.ConfigureAwait(false);
+            }
+            catch (OperationCanceledException)
+            {
+                Log.Info("异步订单入站处理已取消；买家消息接收门禁不受影响。");
+            }
+            catch (Exception ex)
+            {
+                Log.ErrorWithMaxCount("异步订单入站处理失败（独立于消息接收门禁）: " + ex.Message, 20);
             }
         }
 
