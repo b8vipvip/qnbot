@@ -534,10 +534,23 @@ namespace Bot.ChromeNs
                     var firstFailureReason = qn.Rpa == null
                         ? "首条咨询固定回复发送失败"
                         : qn.Rpa.GetSendFailureReason();
-                    FirstInquiryFixedReplyService.ReleaseReservation(
-                        item.SellerNick,
-                        item.BuyerNick,
-                        firstFailureReason, item.ShopKey);
+                    var sendIsIndeterminate = qn.Rpa != null && qn.Rpa.LastSendWasIndeterminate;
+                    if (sendIsIndeterminate)
+                    {
+                        // Keep the in-flight reservation until the delivery watchdog confirms
+                        // this exact answer or the reservation expires. Releasing now allows a
+                        // later buyer fragment to trigger a duplicate first-inquiry greeting.
+                        Log.Error("首条咨询发送结果不确定，保留首条资格占位等待回显核验: seller="
+                            + item.SellerNick + ", buyer=" + item.BuyerNick
+                            + ", reason=" + firstFailureReason);
+                    }
+                    else
+                    {
+                        FirstInquiryFixedReplyService.ReleaseReservation(
+                            item.SellerNick,
+                            item.BuyerNick,
+                            firstFailureReason, item.ShopKey);
+                    }
 
                     // Policy suppression is intentional consumption, never delivery or an
                     // invitation to try a different answer for this same turn.
@@ -547,7 +560,6 @@ namespace Bot.ChromeNs
                     // proves that the greeting was not sent. Continue image OCR/AI only when the
                     // transport failed before any physical send action; an indeterminate send must
                     // never fall through to a second answer for the same buyer turn.
-                    var sendIsIndeterminate = qn.Rpa != null && qn.Rpa.LastSendWasIndeterminate;
                     var failedBeforeSend = !sendIsIndeterminate
                         && (firstFailureReason.IndexOf(
                                 "发送ShopKey作用域确认", StringComparison.OrdinalIgnoreCase) >= 0
@@ -657,7 +669,9 @@ namespace Bot.ChromeNs
             cancellationToken.ThrowIfCancellationRequested();
             var detectedAt = item.ReceivedAt == DateTime.MinValue ? DateTime.Now : item.ReceivedAt;
             var sendCancelled = false;
+            var sendSucceeded = false;
             var policySuppressed = false;
+            var sendFailureReason = string.Empty;
             var ctl = ResponseProgressTracker.BeginAnswer(
                 item.SellerNick, item.BuyerNick, item.DisplayText, detectedAt, item.ShopKey);
             try
@@ -735,7 +749,13 @@ namespace Bot.ChromeNs
                 };
                 var ok = await qn.SendTextWithRetryAsync(
                     item.BuyerNick, answer, 3, cancellationToken, preSendGuard).ConfigureAwait(false);
+                sendSucceeded = ok;
                 sendCancelled = !ok && qn.Rpa != null && qn.Rpa.LastSendWasCancelled;
+                sendFailureReason = ok
+                    ? string.Empty
+                    : qn.Rpa == null
+                        ? "发送器不可用，未能确认实际送达状态"
+                        : qn.Rpa.GetSendFailureReason();
                 if (!ok && policySuppressed)
                 {
                     sendCancelled = true;
@@ -750,7 +770,7 @@ namespace Bot.ChromeNs
                         ? "已发送（" + source + "，由统一买家生命周期前置处理）"
                         : sendCancelled
                             ? "未发送：人工接管或发送前会话门禁已取消"
-                            : "发送失败：" + (qn.Rpa == null ? string.Empty : qn.Rpa.GetSendFailureReason()));
+                            : "发送失败：" + sendFailureReason);
                 Log.Info(source + "前置真实发送完成: seller=" + item.SellerNick
                     + ", buyer=" + item.BuyerNick + ", success=" + ok + ", cancelled=" + sendCancelled);
                 return ok
@@ -767,6 +787,7 @@ namespace Bot.ChromeNs
             }
             catch (Exception ex)
             {
+                sendFailureReason = ex.Message;
                 if (ctl != null) ctl.SetSendResult(false, "发送失败：" + ex.Message);
                 Log.ErrorWithMaxCount(source + "前置发送异常: seller=" + item.SellerNick
                     + ", buyer=" + item.BuyerNick + ", error=" + ex.Message, 20);
@@ -777,8 +798,14 @@ namespace Bot.ChromeNs
                 if (sendCancelled)
                     ResponseProgressTracker.Cancel(
                         item.SellerNick, item.BuyerNick, "固定回复发送前会话门禁取消", item.ShopKey);
-                else
+                else if (sendSucceeded)
                     ResponseProgressTracker.Complete(item.SellerNick, item.BuyerNick, item.ShopKey);
+                else
+                    ResponseProgressTracker.Fail(
+                        item.SellerNick, item.BuyerNick,
+                        source + "答案已生成，但实际发送未确认：" + (string.IsNullOrWhiteSpace(sendFailureReason)
+                            ? "发送失败或发送结果不确定"
+                            : sendFailureReason), item.ShopKey);
             }
         }
 
