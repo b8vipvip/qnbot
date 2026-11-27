@@ -594,7 +594,16 @@ try {
                             _businessInboundHistoryProbeLedger.TryRelease(messageKey);
                             throw;
                         }
-                        await processingTask.ConfigureAwait(false);
+                        if (processingTask != null && !processingTask.IsCompleted)
+                        {
+                            // The order action ledger owns the accepted async work. Do not hold the
+                            // per-shop liveness gate while an order reply is generated or sent.
+                            _ = ObserveInboundProcessingAsync(processingTask);
+                        }
+                        else if (processingTask != null)
+                        {
+                            await processingTask.ConfigureAwait(false);
+                        }
 
                         Log.Info("recovered-inbound-replay: seller=" + seller + ", buyer=" + buyer
                             + ", key=" + messageKey + ", route=ProcessIncomingMessageAsync");
