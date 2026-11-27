@@ -29,15 +29,16 @@ def test_v2_query_does_not_periodically_rebuild_full_index():
     assert 'Recall(snapshot, query)' in public
 
 
-def test_buyer_runtime_never_waits_for_cold_v2_snapshot():
+def test_buyer_runtime_builds_a_cold_v2_snapshot_instead_of_skipping_retrieval():
     public = read("src/Bot/Knowledge/KnowledgeEngineV2.Service.Public.cs")
     runtime = read("src/Bot/ChromeNs/KnowledgeEngineV2RuntimeBridge.cs")
 
     assert "public static bool IsSnapshotReady" in public
-    assert "if (!KnowledgeEngineV2Service.IsSnapshotReady(burst.SellerNick))" in runtime
     assert "QueueWarm(burst.ShopKey, burst.SellerNick);" in runtime
-    assert "return KnowledgeV2RuntimeResult.Continue(warmContext);" in runtime
-    assert "WarmingShopKeys.TryAdd(shopKey, 1)" in runtime
+    assert "KnowledgeEngineV2Service.Resolve(burst.SellerNick, burst.BuyerNick, retrievalQuestion)" in runtime
+    assert "if (!KnowledgeEngineV2Service.IsSnapshotReady(burst.SellerNick))" not in runtime
+    assert "Resolve() builds the exact ShopKey snapshot under its per-shop build lock when cold" in runtime
+    assert "return KnowledgeV2RuntimeResult.Continue(warmContext);" not in runtime
 
 def test_v2_edits_use_atomic_incremental_snapshot_updates():
     repo = read("src/Bot/Knowledge/KnowledgeEngineV2.Repository.cs")
@@ -104,7 +105,8 @@ def test_v2_runtime_has_no_memory_v1_handler_and_preserves_safe_send_path():
     assert not (ROOT / "src/Bot/Knowledge/KnowledgeMemoryEngineUi.cs").exists()
     assert "KnowledgeMemoryRuntimeBridge" not in runtime
     assert "KnowledgeMemoryEngine" not in app
-    assert "TryHandleWithContextAsync(QN qn, BuyerMessageBurstLease lease)" in runtime
+    assert "TryHandleWithContextAsync(" in runtime
+    assert "BuyerMessageBurstLease lease" in runtime
     assert "if (!KnowledgeEngineV2Service.IsEnabled(burst.SellerNick))" in runtime
     assert "ParallelReplyRelevanceGate.ShouldSend" in runtime
     assert "SendTextWithRetryAsync" in runtime
@@ -130,6 +132,7 @@ def test_verified_human_evidence_auto_publishes_but_unverified_suggestions_remai
     bridge = read("src/Bot/ChromeNs/KnowledgeEngineV2LearningBridge.cs")
     session = read("src/Bot/ChromeNs/ConversationSessionLearningService.cs")
     repo = read("src/Bot/Knowledge/KnowledgeEngineV2.Repository.cs")
+    history = read("src/Bot/Knowledge/KnowledgeV2HistoryImportService.cs")
 
     assert "KnowledgeV2AuthorityPolicy.IsProductionApproved" in public
     assert "public static bool IsCandidate(KnowledgeV2Record record)" in bridge
@@ -139,8 +142,10 @@ def test_verified_human_evidence_auto_publishes_but_unverified_suggestions_remai
     assert "EnableVerifiedCorpusCorrectionWrites = true" in session
     assert "EnableAutomaticWrites = false" in session
     assert "TryCreateVerifiedSessionKnowledge(" in repo
-    assert "if (IsAutoPublishedHumanEvidenceSource(record.SourceType))" in bridge
-    assert "learning_candidate" in bridge
+    assert "ai_auto_learned_human_evidence" in bridge
+    assert "if (record != null && IsAutoPublishedHumanEvidenceSource(record.SourceType))" in bridge
+    assert "evidenceValid" in history
+    assert "chat_history_unverified_candidate" in history
     assert "BotFeatureStore.SaveKnowledgeBase" not in repo
 
 def test_disabled_records_remain_visible_to_knowledge_center_management():
