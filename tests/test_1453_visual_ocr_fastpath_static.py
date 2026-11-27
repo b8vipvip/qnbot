@@ -14,12 +14,13 @@ def vision_pipeline() -> str:
 def test_ocr_v2_direct_answer_does_not_reenter_hidden_ai_validator():
     source = vision_pipeline()
 
-    assert '"ocr-direct-knowledge-v2"' in source
-    assert "var trustedOcrKnowledge = workflowDecision == null && string.Equals(" in source
+    assert 'IsKnowledgeV2DirectAnswer' in source
+    assert 'IsKnowledgeV2DirectAnswer = true' in read("src/Bot/ChromeNs/OcrFirstKnowledgeDecisionService.cs")
+    assert "var trustedOcrKnowledge = workflowDecision == null && result.IsKnowledgeV2DirectAnswer;" in source
     assert "lifecycleLease.CancellationToken" in source
     assert "OCR-first权威知识直答已跳过隐藏AI校验/重答" in source
 
-    fast_start = source.index("var trustedOcrKnowledge = workflowDecision == null && string.Equals(")
+    fast_start = source.index("var trustedOcrKnowledge = workflowDecision == null && result.IsKnowledgeV2DirectAnswer;")
     fast_end = source.index("var answer = deduplication.Answer;", fast_start)
     fast_block = source[fast_start:fast_end]
     assert "ReplyDeduplicationService.EnsureWorkflowReplyDistinct(" in fast_block
