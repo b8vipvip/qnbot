@@ -100,3 +100,22 @@ def test_recovered_order_handoff_keeps_claim_after_durable_order_ledger_owns_it(
     assert order.index("ResponseProgressTracker.ObserveNewBuyerTurn") < order.index("accepted = true;")
     assert order.index("accepted = true;") < order.index("return ProcessOrderPlacedReplyAsync(orderPlan);")
     assert "if (!accepted)" in method
+
+
+def test_long_order_reply_task_does_not_hold_shared_inbound_receive_gate():
+    source = read("src/Bot/ChromeNs/QN.cs")
+    receive = source[
+        source.index("private async void Cdp_EvRecieveNewMessage"):
+        source.index("private async Task ObserveInboundProcessingAsync")
+    ]
+    observer = source[
+        source.index("private async Task ObserveInboundProcessingAsync"):
+        source.index("private void Cdp_EvMessageNotity")
+    ]
+
+    assert "var processingTask = ProcessIncomingMessageAsync(message);" in receive
+    assert "processingTask != null && !processingTask.IsCompleted" in receive
+    assert "_ = ObserveInboundProcessingAsync(processingTask);" in receive
+    assert "await processingTask;" in receive
+    assert "await processingTask.ConfigureAwait(false);" in observer
+    assert "catch (Exception ex)" in observer
