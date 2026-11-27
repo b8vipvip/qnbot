@@ -209,17 +209,22 @@ def test_ai_auto_published_source_is_not_misclassified_as_human_approved():
         bridge.index("public static bool IsExplicitHumanConfirmationSource"):
         bridge.index("public static bool IsAutoPublishedHumanEvidenceSource")
     ]
+    candidate = bridge[
+        bridge.index("public static bool IsCandidate"):
+        bridge.index("public static bool IsProductionApproved")
+    ]
 
     assert "human_evidence_auto_learned" not in explicit
     assert "ai_auto_learned_human_evidence" in bridge
     assert "public static bool IsAutoPublishedHumanEvidenceSource" in bridge
     assert "private static bool IsTrustedProductionSource" in bridge
-    assert "return IsTrustedProductionSource(entry.SourceType) || IsUnapprovedLegacyLearningEntry(entry);" in bridge
+    assert "return IsTrustedProductionSource(record.SourceType);" not in candidate
+    assert "string.Equals(record.Status, \"candidate\"" in candidate
+    assert "string.Equals(record.Type, \"learning_candidate\"" in candidate
     assert "ApplyAutoPublished(record);" in bridge
-    assert "if (IsTrustedProductionSource(record.SourceType)) return false;" in bridge
     assert "record.Authority = Math.Max(record.Authority, 0.90);" in bridge
     assert "record.Confidence = Math.Max(record.Confidence, 0.90);" in bridge
-
+    assert "IsUnapprovedLegacyLearningEntry" not in bridge
 
 def test_generated_content_and_aliases_survive_checkpoint_restart_revalidation():
     service = read("src/Bot/ChromeNs/ConversationSessionLearningService.cs")
