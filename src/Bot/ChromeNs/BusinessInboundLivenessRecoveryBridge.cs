@@ -408,7 +408,6 @@ try {
 
         internal async Task ProbeActiveConversationForMissedInboundAsync()
         {
-            if (!Params.Robot.CanUseRobotReal) return;
             var client = CDP;
             var seller = Seller == null ? string.Empty : (Seller.Nick ?? string.Empty).Trim();
             if (client == null || client.IsInvalidated || client.IsShopIdentityRetired || seller.Length == 0) return;
@@ -426,6 +425,10 @@ try {
             EnsureBusinessInboundCheckpointLoaded(shop);
             try
             {
+                // This is a timer-driven path with no ambient UI scope. Read the master switch
+                // only after binding the exact ShopKey; the process-global fallback is not
+                // authoritative for multi-shop recovery.
+                if (!Params.Robot.CanUseRobotReal) return;
                 if (!ReferenceEquals(CDP, client)
                     || !server.IsAuthoritativeShopSession(shop.ShopKey, client.SessionId)) return;
                 var probeStartedAt = DateTime.Now;
