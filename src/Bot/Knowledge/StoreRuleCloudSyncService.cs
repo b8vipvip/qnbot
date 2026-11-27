@@ -59,7 +59,7 @@ namespace Bot.Knowledge
         internal static async Task SyncNowAsync(ShopContext shop)
         {
             if (shop == null) throw new ArgumentNullException(nameof(shop));
-            if (!KnowledgeCloudSyncService.IsEnabledForShop(shop)) return;
+            if (!KnowledgeV2CloudSyncService.IsEnabledForShop(shop)) return;
             var state = GetState(shop);
             var acquired = false;
             for (var i = 0; i < 80; i++)
@@ -78,7 +78,7 @@ namespace Bot.Knowledge
 
         private static void OnProfileChanged(ShopContext shop)
         {
-            if (shop != null && KnowledgeCloudSyncService.IsEnabledForShop(shop)) QueueSync(shop);
+            if (shop != null && KnowledgeV2CloudSyncService.IsEnabledForShop(shop)) QueueSync(shop);
         }
 
         private static void QueueAll()
@@ -96,7 +96,7 @@ namespace Bot.Knowledge
                 try
                 {
                     var shop = profile.ToContext();
-                    if (KnowledgeCloudSyncService.IsEnabledForShop(shop)) QueueSync(shop);
+                    if (KnowledgeV2CloudSyncService.IsEnabledForShop(shop)) QueueSync(shop);
                 }
                 catch (Exception ex)
                 {
@@ -107,7 +107,7 @@ namespace Bot.Knowledge
 
         private static void QueueSync(ShopContext shop)
         {
-            if (shop == null || !KnowledgeCloudSyncService.IsEnabledForShop(shop)
+            if (shop == null || !KnowledgeV2CloudSyncService.IsEnabledForShop(shop)
                 || !ShopTokenBindingService.ShouldAttemptSync(shop)) return;
             var state = GetState(shop);
             if (Interlocked.Exchange(ref state.Syncing, 1) != 0) return;
