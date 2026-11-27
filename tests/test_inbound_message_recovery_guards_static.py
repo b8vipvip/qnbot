@@ -208,9 +208,10 @@ def test_delivery_watchdog_reads_send_switches_under_resolved_shop_scope():
 
 def test_configured_order_template_reads_bot_switch_inside_runtime_shop_scope():
     source = read("src/Bot/ChromeNs/OrderTemplateRequiredFieldsV2.cs")
+    notify = source.index("private static void OnMessageNotify")
     method = source[
-        source.index("AutoReplyRuleConfig cfg;"):
-        source.index("if (!ShouldOwnConfiguredTemplate")
+        notify:
+        source.index("if (!ShouldOwnConfiguredTemplate", notify)
     ]
 
     scope = method.index("using (ShopSettingsScope.Enter(runtimeShop, false))")
