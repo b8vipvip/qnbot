@@ -47,7 +47,8 @@ def test_manual_bot_answer_edit_persists_reviewed_v2_answer_and_refreshes_runtim
     assert "TrySaveReviewedDirectAnswer(" in editor
     assert 'record.SourceType = "manual_reviewed_direct";' in repository
     assert "SaveRecordsInTransaction(new List<object> { ToRow(record), revision });" in repository
-    assert "MirrorOneToLegacy(shop, record);" in repository
+    assert "MirrorOneToLegacy" not in repository
+    assert "BotFeatureStore.SaveKnowledgeBase" not in repository
     assert "KnowledgeEngineV2Service.ApplyRecordUpdate(seller, record)" in repository
     assert "internal static void ApplyRecordUpdate" in incremental
     assert '"manual_reviewed_direct"' in public
