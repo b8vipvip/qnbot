@@ -204,3 +204,16 @@ def test_delivery_watchdog_reads_send_switches_under_resolved_shop_scope():
     auto = method.index("autoReplyEnabledForShop = Params.Robot.GetIsAutoReply();")
     assert resolve < scope < bot < auto
     assert "if (!botEnabledForShop || (!force && !autoReplyEnabledForShop)) return;" in method
+
+
+def test_configured_order_template_reads_bot_switch_inside_runtime_shop_scope():
+    source = read("src/Bot/ChromeNs/OrderTemplateRequiredFieldsV2.cs")
+    method = source[
+        source.index("AutoReplyRuleConfig cfg;"):
+        source.index("if (!ShouldOwnConfiguredTemplate")
+    ]
+
+    scope = method.index("using (ShopSettingsScope.Enter(runtimeShop, false))")
+    config = method.index("cfg = BotFeatureStore.GetAutoReplyRules();")
+    bot = method.index("botEnabledForShop = Params.Robot.CanUseRobotReal;")
+    assert scope < config < bot
