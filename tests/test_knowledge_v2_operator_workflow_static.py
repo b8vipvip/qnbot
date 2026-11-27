@@ -19,7 +19,7 @@ def test_manual_new_knowledge_is_one_sentence_ai_generated():
     assert "KnowledgeEngineV2Repository.Save(seller, record)" in ui
 
 
-def test_history_chat_organizer_is_a_native_v2_left_navigation_page():
+def test_history_chat_organizer_is_native_v2_and_uses_evidence_gated_promotion():
     shell = read("src/Bot/Knowledge/KnowledgeCenterV2Ui.cs")
     operator = read("src/Bot/Knowledge/KnowledgeV2OperatorUiBridge.cs")
     page = read("src/Bot/Knowledge/ChatHistoryScanWindow.cs")
@@ -30,7 +30,9 @@ def test_history_chat_organizer_is_a_native_v2_left_navigation_page():
     assert "InjectHistoryButton" not in operator
     assert "KnowledgeV2ChatHistoryPage" in page
     assert "PromoteHistoryImport(_seller, _shopKey, scan.ImportResult)" in page
-    assert 'SourceType = "chat_history_import"' in importer
+    assert "ai_auto_learned_human_evidence" in importer
+    assert "chat_history_unverified_candidate" in importer
+    assert "SourceEvidenceByToken" in importer or "SourceEvidenceByToken" in read("src/Bot/Knowledge/KnowledgeAiService.cs")
     assert "KnowledgeEngineV2Repository.LoadAll" in importer
     assert "KnowledgeEngineV2Repository.Save" in importer
     assert "using (ShopSettingsScope.Enter(shop))" in importer
