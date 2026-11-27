@@ -32,6 +32,7 @@ namespace Bot.Knowledge
         public static void Initialize()
         {
             if (Interlocked.Exchange(ref _initialized, 1) != 0) return;
+            KnowledgeV2OperatorUiBridge.Initialize();
             EventManager.RegisterClassHandler(typeof(KnowledgeCenterWindow), FrameworkElement.LoadedEvent,
                 new RoutedEventHandler(OnLoaded), true);
         }
