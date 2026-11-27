@@ -489,7 +489,7 @@ def test_ai_failure_fallback_uses_only_a_freshly_revalidated_v2_record():
         source.index("private static bool IsRetryableStreamError")
     ]
 
-    assert "KnowledgeEngineV2Service.Resolve(seller, buyer, question)" in fallback
+    assert "KnowledgeEngineV2Service.Resolve(seller, buyer, v2Question)" in fallback
     assert "KnowledgeV2AuthorityPolicy.IsProductionApproved" in fallback
     assert "KnowledgeEngineV2Repository.LoadAll(seller)" in fallback
     assert "latestMatch.Record.Id, priorMatch.Record.Id, StringComparison.Ordinal" in fallback
