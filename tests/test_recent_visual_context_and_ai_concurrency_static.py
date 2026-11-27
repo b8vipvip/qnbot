@@ -159,7 +159,7 @@ def test_oversized_bursts_cannot_be_intercepted_by_knowledge_or_vision_runtime_w
     assert "return !InputOverflow && Items.Any(" in property_block
 
     memory_guard = memory.split("var burst = lease == null ? null : lease.Burst;", 1)[1].split(
-        "var workflowDecision", 1
+        "KnowledgeMemoryDecision decision;", 1
     )[0]
     assert "!burst.HasReplyableItem" in memory_guard
 
