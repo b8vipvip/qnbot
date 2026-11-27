@@ -145,3 +145,17 @@ def test_oversized_burst_builder_stops_before_materializing_unbounded_source_tex
     assert "projectedLength > MaxBurstQuestionCharacters" in build
     assert "text.Substring(0, Math.Min(remainingPreview, text.Length))" in build
     assert "combined.Substring(0, OverflowPreviewCharacters)" in build
+
+
+def test_oversized_burst_marks_generation_failed_before_coordinator_finalization():
+    qn = text("src/Bot/ChromeNs/QN.cs")
+    coordinator = text("src/Bot/ChromeNs/BuyerMessageBurstCoordinator.cs")
+    overflow = qn.split("if (burst.InputOverflow)", 1)[1].split("if (!burst.HasReplyableItem)", 1)[0]
+    assert 'lease.MarkFailed("buyer_burst_input_overflow")' in overflow
+    assert "ResponseProgressTracker.Fail(" in overflow
+    finalize = coordinator.split("private void FinalizeReplyOutcome", 1)[1].split(
+        "private void CompleteMergedAwayGenerations", 1
+    )[0]
+    assert "generationState == BuyerSessionAgentState.Failed" in finalize
+    assert "if (failed)" in finalize
+    assert "non_replyable_media_skipped" in finalize
