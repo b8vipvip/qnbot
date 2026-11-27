@@ -203,3 +203,26 @@ def test_legacy_text_path_commits_first_inquiry_only_after_send_success_and_hold
     assert "if (sendIsIndeterminate)" in method
     assert "保留首条资格占位等待回显核验" in method
     assert "FirstInquiryFixedReplyService.ReleaseReservation(" in method
+
+
+def test_cancellation_racing_a_physical_fixed_send_preserves_indeterminate_classification():
+    coordinator = read("src/Bot/ChromeNs/BuyerMessageBurstCoordinator.cs")
+    canonical_send = coordinator.split("private static async Task<CanonicalPreMergeOutcome> SendFixedAsync", 1)[1].split(
+        "private static bool TryResolveOffHours", 1
+    )[0]
+    cancelled = canonical_send.split("catch (OperationCanceledException)", 1)[1].split(
+        "catch (Exception ex)", 1
+    )[0]
+    assert "physicalSendAttempted && qn.Rpa != null && qn.Rpa.LastSendWasIndeterminate" in cancelled
+    assert "return CanonicalPreMergeOutcome.Indeterminate;" in cancelled
+    assert "sendCancelled = true;" in cancelled
+
+    deterministic = read("src/Bot/ChromeNs/DeterministicAutoReplyService.cs")
+    legacy_send = deterministic.split("private static async Task<bool> SendFixedAsync", 1)[1].split(
+        "public static async Task<bool> TryHandleAsync", 1
+    )[0]
+    legacy_cancelled = legacy_send.split("catch (OperationCanceledException)", 1)[1].split(
+        "catch (Exception ex)", 1
+    )[0]
+    assert "qn.Rpa.LastSendWasIndeterminate" in legacy_cancelled
+    assert "sendFailureReason = qn.Rpa.GetSendFailureReason()" in legacy_cancelled
