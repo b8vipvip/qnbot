@@ -529,10 +529,19 @@ namespace Bot.Knowledge
         }
 
         public async Task<ChatHistoryScanResult> ScanAndImportAsync(
+            string shopKey,
             ChatHistoryScanOptions options,
             Action<ChatHistoryScanProgress> progress,
             CancellationToken token)
         {
+            shopKey = (shopKey ?? string.Empty).Trim();
+            if (shopKey.Length == 0)
+                throw new InvalidOperationException("历史聊天扫描缺少 ShopKey，已阻止跨店读取或写入。");
+            var shop = ShopContextLocator.ResolveRuntimeByShopKey(shopKey);
+            if (shop == null || !shop.HasStableSellerId
+                || !string.Equals(shop.ShopKey, shopKey, StringComparison.Ordinal))
+                throw new InvalidOperationException("历史聊天扫描无法解析精确 ShopKey，已阻止写入。");
+
             options = options ?? new ChatHistoryScanOptions();
             ValidateOptions(options);
 
@@ -541,6 +550,11 @@ namespace Bot.Knowledge
             {
                 throw new Exception("未识别到可用的千牛客服会话，请先打开任意买家聊天窗口。");
             }
+
+            if (!string.Equals(shop.SellerNick, qn.Seller.Nick, StringComparison.Ordinal)
+                || (qn.CDP != null && !string.IsNullOrWhiteSpace(qn.CDP.ShopKey)
+                    && !string.Equals(qn.CDP.ShopKey, shopKey, StringComparison.Ordinal)))
+                throw new InvalidOperationException("当前千牛会话与指定 ShopKey 不匹配，已阻止历史聊天跨店导入。");
 
             var diagnostics = new StringBuilder();
             var originalBuyer = qn.Buyer == null ? string.Empty : (qn.Buyer.Nick ?? string.Empty);
@@ -658,12 +672,16 @@ namespace Bot.Knowledge
 
             var importData = new ClipboardKnowledgeData { Text = transcript };
             var ai = new KnowledgeAiService();
-            var importResult = await ai.ImportAsync(
-                importData,
-                BotFeatureStore.GetSmartImportTimeoutSeconds(),
-                token,
-                () => token.IsCancellationRequested ? SmartImportCancelSource.UserCancel : SmartImportCancelSource.None,
-                text => Report(progress, text, orderedContacts.Count, orderedContacts.Count, string.Empty, totalMessages, pairCount, transcript.Length));
+            KnowledgeImportResult importResult;
+            using (ShopSettingsScope.Enter(shop))
+            {
+                importResult = await ai.ImportAsync(
+                    importData,
+                    BotFeatureStore.GetSmartImportTimeoutSeconds(),
+                    token,
+                    () => token.IsCancellationRequested ? SmartImportCancelSource.UserCancel : SmartImportCancelSource.None,
+                    text => Report(progress, text, orderedContacts.Count, orderedContacts.Count, string.Empty, totalMessages, pairCount, transcript.Length));
+            }
 
             Report(progress, "历史聊天扫描完成。", orderedContacts.Count, orderedContacts.Count, string.Empty, totalMessages, pairCount, transcript.Length);
 
