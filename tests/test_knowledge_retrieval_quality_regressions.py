@@ -519,3 +519,34 @@ def test_approved_v2_context_reaches_pre_send_validation_and_one_time_regenerati
     assert "BuildAuthoritativeEvidence(knowledge, state, approvedV2ContextEvidence)" in validator
     assert "HasKnowledgeContradiction(answer, knowledge, approvedV2ContextEvidence)" in validator
     assert "KnowledgeEngineV2Service.IsEnabled(seller)" in validator
+
+
+
+def test_image_v2_approved_evidence_reaches_pre_send_validation_and_direct_answers_keep_fastpath():
+    ocr = read("src/Bot/ChromeNs/OcrFirstKnowledgeDecisionService.cs")
+    vision = read("src/Bot/ChromeNs/VisionRequestService.cs")
+    pipeline = read("src/Bot/ChromeNs/VisionWithdrawalAwarePipeline.cs")
+    qn = read("src/Bot/ChromeNs/QN.cs")
+
+    assert "var approvedV2KnowledgeEvidence = KnowledgeEngineV2RuntimeBridge.BuildContextPromptAddon(decision)" in ocr
+    assert "ApprovedV2KnowledgeEvidence = approvedV2KnowledgeEvidence" in ocr
+    assert "IsKnowledgeV2DirectAnswer = true" in ocr
+    assert "public string ApprovedV2KnowledgeEvidence { get; set; }" in vision
+    assert "public bool IsKnowledgeV2DirectAnswer { get; set; }" in vision
+    assert "result.ApprovedV2KnowledgeEvidence = localDecision.ApprovedV2KnowledgeEvidence" in vision
+    assert "result.ApprovedV2KnowledgeEvidence" in pipeline
+    assert "result.IsKnowledgeV2DirectAnswer" in pipeline
+    assert "result.ApprovedV2KnowledgeEvidence" in qn
+
+
+def test_image_route_honors_silence_and_manual_rules_before_ocr_or_vision_knowledge():
+    pipeline = read("src/Bot/ChromeNs/VisionWithdrawalAwarePipeline.cs")
+    method = pipeline[
+        pipeline.index("private static async Task ProcessVisionAsync"):
+        pipeline.index("private static void ApplyOcrTextToQuestionCard")
+    ]
+
+    vision = method.index("Vision.ExecuteAsync(task, CancellationToken.None)")
+    assert method.index("ReceptionFlowPolicy.TryChooseSilence") < vision
+    assert method.index("BotFeatureStore.EvaluateAutoReplyRule(policyQuestion)") < vision
+    assert "StreamingBuyerAnswerService.GetAnswerAsync(" in method
