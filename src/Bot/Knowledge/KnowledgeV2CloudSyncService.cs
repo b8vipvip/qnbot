@@ -29,6 +29,33 @@ namespace Bot.Knowledge
 {
     internal static class KnowledgeV2CloudSyncService
     {
+        private const string SyncPreferenceScope = "shop-cloud";
+        private const string SyncPreferenceEnabledKey = "KnowledgeCloudSyncEnabled";
+
+        internal static bool IsEnabledForShop(ShopContext shop)
+        {
+            if (shop == null) return false;
+            using (ShopSettingsScope.Enter(shop))
+            {
+                return string.Equals(
+                    BotLib.Db.Sqlite.PersistentParams.GetParam2Key(
+                        SyncPreferenceEnabledKey, SyncPreferenceScope, "false"),
+                    "true",
+                    StringComparison.OrdinalIgnoreCase);
+            }
+        }
+
+        internal static void SetEnabledForShop(ShopContext shop, bool enabled, bool queueSync)
+        {
+            if (shop == null) return;
+            using (ShopSettingsScope.Enter(shop))
+            {
+                BotLib.Db.Sqlite.PersistentParams.TrySaveParam2Key(
+                    SyncPreferenceEnabledKey, SyncPreferenceScope, enabled ? "true" : "false");
+            }
+            if (enabled && queueSync) QueueSync(shop);
+        }
+
         private const string SettingsScope = "knowledge-v2-cloud";
         private const string RevisionKey = "KnowledgeV2CloudRevision";
         private const string FingerprintKey = "KnowledgeV2CloudFingerprint";
@@ -92,7 +119,7 @@ namespace Bot.Knowledge
         }
         private static void Queue(ShopContext shop)
         {
-            if(shop==null || !KnowledgeCloudSyncService.IsEnabledForShop(shop)
+            if(shop==null || !IsEnabledForShop(shop)
                 || !ShopTokenBindingService.ShouldAttemptSync(shop)) return;
             var state=States.GetOrAdd(shop.ShopKey,_=>LoadState(shop));
             if(Interlocked.Exchange(ref state.Syncing,1)!=0) return;
@@ -129,7 +156,7 @@ namespace Bot.Knowledge
         internal static async Task SyncNowAsync(ShopContext shop)
         {
             if (shop == null) throw new ArgumentNullException(nameof(shop));
-            KnowledgeCloudSyncService.SetEnabledForShop(shop, true, false);
+            SetEnabledForShop(shop, true, false);
             var state = States.GetOrAdd(shop.ShopKey, _ => LoadState(shop));
             var acquired = false;
             for (var i = 0; i < 80; i++)
