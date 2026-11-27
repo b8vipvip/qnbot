@@ -801,7 +801,8 @@ namespace Bot.ChromeNs
                     ["knowledgeCorpusError"] = string.Empty,
                     ["writeMode"] = EnableVerifiedCorpusNewKnowledgeWrites || EnableVerifiedCorpusCorrectionWrites
                         ? "ai_auto_publish_new_knowledge_and_verified_updates" : "dry_run",
-                    ["newKnowledgeWriteMode"] = EnableVerifiedCorpusNewKnowledgeWrites ? "ai_auto_publish" : "dry_run",
+                    ["newKnowledgeWriteMode"] = EnableVerifiedCorpusNewKnowledgeWrites
+                        ? "ai_auto_publish_verified_human_evidence" : "dry_run",
                     ["genericSuggestionWriteMode"] = EnableAutomaticWrites ? "automatic" : "dry_run",
                     ["windowStart"] = from.ToString("o"),
                     ["windowEnd"] = endAt.ToString("o")
