@@ -564,3 +564,19 @@ def test_legacy_vision_send_failure_is_not_reported_as_completed_progress():
     assert terminal.index("else if (sendOk)") < terminal.index("ResponseProgressTracker.Complete(")
     assert terminal.index("ResponseProgressTracker.Complete(") < terminal.index("ResponseProgressTracker.Fail(")
     assert "var sendFailureReason = rpa == null" in method
+
+
+def test_active_streaming_smart_reply_does_not_mark_failed_send_as_completed():
+    pipeline = read("src/Bot/ChromeNs/BuyerStreamingReplyPipeline.cs")
+    start = pipeline.index("var sendCancelled = !sendOk && qn.Rpa != null && qn.Rpa.LastSendWasCancelled;")
+    end = pipeline.index("private static bool IsLocalKnowledgeDirectAnswerSource", start)
+    terminal = pipeline[start:end]
+    assert "if (sendCancelled)" in terminal
+    assert "ResponseProgressTracker.Cancel(" in terminal
+    assert "if (sendOk)" in terminal
+    assert "ResponseProgressTracker.Complete(" in terminal
+    assert "ResponseProgressTracker.Fail(" in terminal
+    assert "Smart Reply答案已生成，但实际发送未确认：" in terminal
+    assert "var sendFailureReason = qn.Rpa == null" in terminal
+    assert terminal.index("if (sendOk)") < terminal.index("ResponseProgressTracker.Complete(")
+    assert terminal.index("ResponseProgressTracker.Complete(") < terminal.index("ResponseProgressTracker.Fail(")
