@@ -121,6 +121,57 @@ namespace Bot.Knowledge
                 }
             });
         }
+        internal static void QueueSync(ShopContext shop)
+        {
+            Queue(shop);
+        }
+
+        internal static async Task SyncNowAsync(ShopContext shop)
+        {
+            if (shop == null) throw new ArgumentNullException(nameof(shop));
+            KnowledgeCloudSyncService.SetEnabledForShop(shop, true, false);
+            var state = States.GetOrAdd(shop.ShopKey, _ => LoadState(shop));
+            var acquired = false;
+            for (var i = 0; i < 80; i++)
+            {
+                if (Interlocked.CompareExchange(ref state.Syncing, 1, 0) == 0)
+                {
+                    acquired = true;
+                    break;
+                }
+                await Task.Delay(125).ConfigureAwait(false);
+            }
+            if (!acquired)
+                throw new InvalidOperationException("本店 Knowledge V2 正在同步，请稍后重试。");
+
+            lock (state.SyncRoot)
+            {
+                state.LastAttemptUtc = DateTime.UtcNow;
+                state.LastStatus = "running";
+                state.LastConverged = false;
+            }
+            WriteDiagnosticsSnapshot();
+            try
+            {
+                await SyncOnce(shop, state).ConfigureAwait(false);
+                lock (state.SyncRoot)
+                {
+                    if (state.LastStatus == "synced") state.LastConverged = true;
+                }
+            }
+            catch (Exception ex)
+            {
+                lock (state.SyncRoot) state.LastStatus = "failed";
+                Log.ErrorWithMaxCount("Knowledge V2 手动云同步失败: " + Safe(ex.Message, 260), 10);
+                throw;
+            }
+            finally
+            {
+                Interlocked.Exchange(ref state.Syncing, 0);
+                WriteDiagnosticsSnapshot();
+            }
+        }
+
         private static async Task SyncOnce(ShopContext shop,State state)
         {
             using(ShopSettingsScope.Enter(shop))
