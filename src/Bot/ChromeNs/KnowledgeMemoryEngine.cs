@@ -1065,146 +1065,265 @@ namespace Bot.ChromeNs
                 await inner(lease);
                 return;
             }
-            if (!ReplyModeService.IsLocalFirst(burst.SellerNick) || !KnowledgeMemoryEngine.IsEnabled(burst.SellerNick))
+
+            ShopContext shop;
+            try { shop = ShopContextLocator.ResolveRuntimeBySeller(qn); }
+            catch { shop = null; }
+            var shopKey = (burst.ShopKey ?? string.Empty).Trim();
+            if (shop == null || string.IsNullOrWhiteSpace(shop.ShopKey)
+                || shopKey.Length == 0
+                || !string.Equals(shop.ShopKey, shopKey, StringComparison.Ordinal)
+                || !string.Equals((shop.SellerNick ?? string.Empty).Trim(), (burst.SellerNick ?? string.Empty).Trim(), StringComparison.Ordinal))
             {
+                // The outer memory shortcut is optional. If its exact shop cannot be proven,
+                // leave the request to the canonical pipeline, which owns its own fail-closed
+                // shop/session checks.
                 await inner(lease);
                 return;
             }
 
-            KnowledgeMemoryDecision decision;
-            try
+            var sourceClient = qn.CDP;
+            var sourceSessionId = sourceClient == null ? string.Empty : (sourceClient.SessionId ?? string.Empty).Trim();
+            var sourceServer = MyWebSocketServer.WSocketSvrInst;
+            Func<bool> sourceSessionCurrent = () =>
             {
-                decision = KnowledgeMemoryEngine.Resolve(burst.SellerNick, burst.BuyerNick, burst.CombinedQuestion);
-            }
-            catch (Exception ex)
-            {
-                Log.ErrorWithMaxCount("Knowledge Memory检索失败，回退原Smart Reply: buyer=" + burst.BuyerNick + ", error=" + ex.Message, 20);
-                await inner(lease);
-                return;
-            }
-
-            if (decision == null || !decision.CanDirectReply || string.IsNullOrWhiteSpace(decision.Answer))
-            {
-                Log.Info("Knowledge Memory未直答，继续Smart Reply: buyer=" + burst.BuyerNick
-                    + ", ms=" + (decision == null ? 0 : decision.ElapsedMilliseconds)
-                    + ", reason=" + (decision == null ? "无决策" : decision.Reason));
-                await inner(lease);
-                return;
-            }
-
-            var detectedAt = burst.Items.Min(x => x.ReceivedAt);
-            var ctl = ResponseProgressTracker.BeginAnswer(
-                burst.SellerNick, burst.BuyerNick, burst.CombinedQuestion, detectedAt);
-            var answer = BotMessageSuffixService.Apply(burst.SellerNick, decision.Answer);
-            var dedup = ReplyDeduplicationService.EnsureDistinct(
-                burst.SellerNick, burst.BuyerNick, burst.CombinedQuestion, answer);
-            answer = dedup.Answer;
-
-            var readyAt = DateTime.Now;
-            ctl = ResponseProgressTracker.SetAnswerReady(
-                burst.SellerNick,
-                burst.BuyerNick,
-                burst.CombinedQuestion,
-                answer,
-                "本地记忆",
-                detectedAt,
-                readyAt);
-            var autoSend = Params.Robot.GetIsAutoReply();
-            BotRuntimeStats.RecordDisplayedAnswer(autoSend);
-            Log.Info("Knowledge Memory本地答案已就绪: buyer=" + burst.BuyerNick
-                + ", score=" + decision.Best.Score.ToString("0.00")
-                + ", confidence=" + decision.Best.MemoryConfidence.ToString("0.00")
-                + ", lookupMs=" + decision.ElapsedMilliseconds
-                + ", totalToAnswerMs=" + Math.Max(0, (long)(readyAt - detectedAt).TotalMilliseconds));
-
-            if (!autoSend)
-            {
-                if (ctl != null) ctl.SetStatus("仅生成答案（Knowledge Memory本地命中）", true);
-                ResponseProgressTracker.Complete(burst.SellerNick, burst.BuyerNick);
-                return;
-            }
-
-            if (!lease.IsCurrent || !await lease.ConfirmStableAsync(80))
-            {
-                if (ctl != null) ctl.SetSendResult(false, "未发送：任务已被人工接管或显式取消");
-                return;
-            }
-
-            string relevanceReason;
-            if (!ParallelReplyRelevanceGate.ShouldSend(
-                burst.SellerNick, burst.BuyerNick, burst.CombinedQuestion, detectedAt,
-                out relevanceReason, false, burst.ShopKey))
-            {
-                if (ctl != null) ctl.SetSendResult(false, "未发送：" + relevanceReason);
-                Log.Info("Knowledge Memory发送前被并发相关性门控抑制: buyer=" + burst.BuyerNick
-                    + ", reason=" + relevanceReason);
-                return;
-            }
-
-            if (!lease.MarkSending("knowledge_memory_send_started"))
-            {
-                if (ctl != null) ctl.SetSendResult(false, "未发送：generation在Knowledge Memory发送前已失效");
-                return;
-            }
-            Func<bool> preSendGuard = () =>
-            {
-                if (!lease.IsCurrent || lease.CancellationToken.IsCancellationRequested)
-                    return false;
-                if (!Params.Robot.CanUseRobotReal || !Params.Robot.GetIsAutoReply())
-                    return false;
-                string latestRelevanceReason;
-                var shouldSend = ParallelReplyRelevanceGate.ShouldSend(
-                    burst.SellerNick, burst.BuyerNick, burst.CombinedQuestion, detectedAt,
-                    out latestRelevanceReason, false, burst.ShopKey);
-                if (!shouldSend)
-                    Log.Info("Knowledge Memory等待发送资源期间会话已变化，阻止迟到直答: buyer="
-                        + burst.BuyerNick + ", reason=" + latestRelevanceReason);
-                return shouldSend;
+                var currentClient = qn.CDP;
+                var currentServer = MyWebSocketServer.WSocketSvrInst;
+                return sourceClient != null
+                    && sourceSessionId.Length > 0
+                    && ReferenceEquals(currentClient, sourceClient)
+                    && !sourceClient.IsInvalidated
+                    && !sourceClient.IsShopIdentityRetired
+                    && string.Equals((sourceClient.ShopKey ?? string.Empty).Trim(), shopKey, StringComparison.Ordinal)
+                    && string.Equals((sourceClient.SessionId ?? string.Empty).Trim(), sourceSessionId, StringComparison.Ordinal)
+                    && currentServer != null
+                    && currentServer.IsAuthoritativeShopSession(shopKey, sourceSessionId);
             };
-            var sendOk = await qn.SendTextWithRetryAsync(
-                burst.BuyerNick, answer, 1, lease.CancellationToken, preSendGuard);
-            var sendCancelled = !sendOk && qn.Rpa != null && qn.Rpa.LastSendWasCancelled;
-            var sendFailureReason = qn.Rpa == null
-                ? "发送器不可用，未能确认实际送达状态"
-                : qn.Rpa.GetSendFailureReason();
-            if (sendOk)
+            if (!sourceSessionCurrent())
             {
-                ReplyDeduplicationService.RememberDelivered(
-                    burst.SellerNick, burst.BuyerNick, answer, burst.ShopKey);
-                if (decision.Best != null && decision.Best.Card != null && decision.Best.Card.Entry != null)
-                    KnowledgePolicyProfileService.RecordRouteSelection(decision.Best.Card.Entry, true);
-                lease.MarkCompleted("knowledge_memory_send_completed");
+                await inner(lease);
+                return;
             }
-            else if (sendCancelled)
+
+            using (ShopSettingsScope.Enter(shop))
             {
-                lease.MarkCompleted("knowledge_memory_send_cancelled");
+                if (Volatile.Read(ref _disabledForV2) != 0)
+                {
+                    await inner(lease);
+                    return;
+                }
+                if (!ReplyModeService.IsLocalFirst(burst.SellerNick) || !KnowledgeMemoryEngine.IsEnabled(burst.SellerNick))
+                {
+                    await inner(lease);
+                    return;
+                }
+
+                KnowledgeMemoryDecision decision;
+                try
+                {
+                    decision = KnowledgeMemoryEngine.Resolve(burst.SellerNick, burst.BuyerNick, burst.CombinedQuestion);
+                }
+                catch (Exception ex)
+                {
+                    Log.ErrorWithMaxCount("Knowledge Memory检索失败，回退原Smart Reply: buyer=" + burst.BuyerNick + ", error=" + ex.Message, 20);
+                    await inner(lease);
+                    return;
+                }
+
+                if (decision == null || !decision.CanDirectReply || string.IsNullOrWhiteSpace(decision.Answer))
+                {
+                    Log.Info("Knowledge Memory未直答，继续Smart Reply: buyer=" + burst.BuyerNick
+                        + ", ms=" + (decision == null ? 0 : decision.ElapsedMilliseconds)
+                        + ", reason=" + (decision == null ? "无决策" : decision.Reason));
+                    await inner(lease);
+                    return;
+                }
+
+                var detectedAt = burst.Items
+                    .Where(x => x != null)
+                    .Select(x => x.ReceivedAt)
+                    .DefaultIfEmpty(DateTime.Now)
+                    .Min();
+                var ctl = ResponseProgressTracker.BeginAnswer(
+                    burst.SellerNick, burst.BuyerNick, burst.CombinedQuestion, detectedAt, shopKey);
+                var answer = BotMessageSuffixService.Apply(burst.SellerNick, decision.Answer);
+                var dedup = ReplyDeduplicationService.EnsureDistinct(
+                    burst.SellerNick, burst.BuyerNick, burst.CombinedQuestion, answer);
+                answer = dedup.Answer;
+
+                var readyAt = DateTime.Now;
+                ctl = ResponseProgressTracker.SetAnswerReady(
+                    burst.SellerNick,
+                    burst.BuyerNick,
+                    burst.CombinedQuestion,
+                    answer,
+                    "本地记忆",
+                    detectedAt,
+                    readyAt,
+                    shopKey);
+                var autoSend = Params.Robot.GetIsAutoReply();
+                BotRuntimeStats.RecordDisplayedAnswer(autoSend);
+                Log.Info("Knowledge Memory本地答案已就绪: buyer=" + burst.BuyerNick
+                    + ", score=" + decision.Best.Score.ToString("0.00")
+                    + ", confidence=" + decision.Best.MemoryConfidence.ToString("0.00")
+                    + ", lookupMs=" + decision.ElapsedMilliseconds
+                    + ", totalToAnswerMs=" + Math.Max(0, (long)(readyAt - detectedAt).TotalMilliseconds));
+
+                if (!autoSend)
+                {
+                    if (ctl != null) ctl.SetStatus("仅生成答案（Knowledge Memory本地命中）", true);
+                    ResponseProgressTracker.Complete(burst.SellerNick, burst.BuyerNick, shopKey);
+                    return;
+                }
+
+                if (!lease.IsCurrent || !await lease.ConfirmStableAsync(80))
+                {
+                    if (ctl != null) ctl.SetSendResult(false, "未发送：任务已被人工接管或显式取消");
+                    ResponseProgressTracker.Cancel(
+                        burst.SellerNick, burst.BuyerNick, "Knowledge Memory发送前generation已失效", shopKey);
+                    return;
+                }
+
+                var replyRules = BotFeatureStore.GetAutoReplyRules();
+                var directDelaySeconds = Math.Max(0, Math.Min(300,
+                    replyRules == null ? 3 : replyRules.KnowledgeDirectReplyDelaySeconds));
+                if (directDelaySeconds > 0)
+                {
+                    if (ctl != null) ctl.SetStatus("知识库直答已生成，等待" + directDelaySeconds + "秒发送", true);
+                    Log.Info("Knowledge Memory本地直答等待配置延迟: seller=" + burst.SellerNick
+                        + ", buyer=" + burst.BuyerNick + ", delaySeconds=" + directDelaySeconds);
+                    try
+                    {
+                        await Task.Delay(TimeSpan.FromSeconds(directDelaySeconds), lease.CancellationToken).ConfigureAwait(false);
+                    }
+                    catch (OperationCanceledException)
+                    {
+                        if (ctl != null) ctl.SetSendResult(false, "未发送：延迟期间已人工接管或新消息使本轮失效");
+                        ResponseProgressTracker.Cancel(
+                            burst.SellerNick, burst.BuyerNick, "Knowledge Memory直答延迟期间generation已失效", shopKey);
+                        return;
+                    }
+
+                    if (!Params.Robot.CanUseRobotReal || !Params.Robot.GetIsAutoReply())
+                    {
+                        if (ctl != null) ctl.SetSendResult(false, "未发送：延迟期间Bot或自动回复开关已关闭");
+                        lease.MarkCompleted("knowledge_memory_direct_reply_disabled_during_delay");
+                        ResponseProgressTracker.Complete(burst.SellerNick, burst.BuyerNick, shopKey);
+                        return;
+                    }
+                    if (!sourceSessionCurrent())
+                    {
+                        if (ctl != null) ctl.SetSendResult(false, "未发送：延迟期间原店铺CDP会话已失效或被替换");
+                        ResponseProgressTracker.Cancel(
+                            burst.SellerNick, burst.BuyerNick, "Knowledge Memory直答延迟后原CDP权威会话已变化", shopKey);
+                        return;
+                    }
+                    if (!lease.IsCurrent || !await lease.ConfirmStableAsync(80))
+                    {
+                        if (ctl != null) ctl.SetSendResult(false, "未发送：延迟期间买家已发送新消息或本轮已被接管");
+                        ResponseProgressTracker.Cancel(
+                            burst.SellerNick, burst.BuyerNick, "Knowledge Memory直答延迟后generation已失效", shopKey);
+                        return;
+                    }
+                }
+
+                string relevanceReason;
+                if (!sourceSessionCurrent()
+                    || !ParallelReplyRelevanceGate.ShouldSend(
+                        burst.SellerNick, burst.BuyerNick, burst.CombinedQuestion, detectedAt,
+                        out relevanceReason, false, shopKey))
+                {
+                    if (ctl != null) ctl.SetSendResult(false, "未发送：" + (sourceSessionCurrent()
+                        ? relevanceReason
+                        : "原店铺CDP权威会话已变化"));
+                    ResponseProgressTracker.Cancel(
+                        burst.SellerNick, burst.BuyerNick, "Knowledge Memory发送前店铺/会话相关性复核失败", shopKey);
+                    Log.Info("Knowledge Memory发送前被店铺/会话相关性门控抑制: buyer=" + burst.BuyerNick
+                        + ", reason=" + relevanceReason);
+                    return;
+                }
+
+                if (!lease.MarkSending("knowledge_memory_send_started"))
+                {
+                    if (ctl != null) ctl.SetSendResult(false, "未发送：generation在Knowledge Memory发送前已失效");
+                    ResponseProgressTracker.Cancel(
+                        burst.SellerNick, burst.BuyerNick, "Knowledge Memory发送前generation已失效", shopKey);
+                    return;
+                }
+                Func<bool> preSendGuard = () =>
+                {
+                    if (!lease.IsCurrent || lease.CancellationToken.IsCancellationRequested)
+                        return false;
+                    if (!Params.Robot.CanUseRobotReal || !Params.Robot.GetIsAutoReply())
+                        return false;
+                    if (!sourceSessionCurrent()) return false;
+                    string latestRelevanceReason;
+                    var shouldSend = ParallelReplyRelevanceGate.ShouldSend(
+                        burst.SellerNick, burst.BuyerNick, burst.CombinedQuestion, detectedAt,
+                        out latestRelevanceReason, false, shopKey);
+                    if (!shouldSend)
+                        Log.Info("Knowledge Memory等待发送资源期间会话已变化，阻止迟到直答: buyer="
+                            + burst.BuyerNick + ", reason=" + latestRelevanceReason);
+                    return shouldSend;
+                };
+
+                bool sendOk = false;
+                Exception sendException = null;
+                try
+                {
+                    sendOk = await qn.SendTextWithRetryAsync(
+                        burst.BuyerNick, answer, 1, lease.CancellationToken, preSendGuard).ConfigureAwait(false);
+                }
+                catch (Exception ex)
+                {
+                    sendException = ex;
+                }
+                var sendCancelled = !sendOk && (sendException is OperationCanceledException
+                    || (qn.Rpa != null && qn.Rpa.LastSendWasCancelled));
+                var sendFailureReason = sendException != null
+                    ? sendException.Message
+                    : qn.Rpa == null
+                        ? "发送器不可用，未能确认实际送达状态"
+                        : qn.Rpa.GetSendFailureReason();
+                if (sendOk)
+                {
+                    ReplyDeduplicationService.RememberDelivered(
+                        burst.SellerNick, burst.BuyerNick, answer, shopKey);
+                    if (decision.Best != null && decision.Best.Card != null && decision.Best.Card.Entry != null)
+                        KnowledgePolicyProfileService.RecordRouteSelection(decision.Best.Card.Entry, true);
+                    lease.MarkCompleted("knowledge_memory_send_completed");
+                }
+                else if (sendCancelled)
+                {
+                    lease.MarkCompleted("knowledge_memory_send_cancelled");
+                }
+                else
+                {
+                    lease.MarkFailed("knowledge_memory_send_failed");
+                }
+                if (ctl != null)
+                {
+                    ctl.SetSendResult(
+                        sendOk,
+                        sendOk
+                            ? "已发送（Knowledge Memory本地直答，无AI调用）"
+                            : sendCancelled
+                                ? "未发送：人工接管或会话状态变化，已安全取消"
+                                : "发送失败：" + sendFailureReason);
+                }
+                Log.Info("Knowledge Memory本地直答完成: buyer=" + burst.BuyerNick
+                    + ", success=" + sendOk + ", cancelled=" + sendCancelled
+                    + ", totalMs=" + Math.Max(0, (long)(DateTime.Now - detectedAt).TotalMilliseconds));
+                if (sendCancelled)
+                    ResponseProgressTracker.Cancel(
+                        burst.SellerNick, burst.BuyerNick, "Knowledge Memory发送前会话门禁取消", shopKey);
+                else if (sendOk)
+                    ResponseProgressTracker.Complete(burst.SellerNick, burst.BuyerNick, shopKey);
+                else
+                    ResponseProgressTracker.Fail(
+                        burst.SellerNick, burst.BuyerNick,
+                        "Knowledge Memory答案已生成，但实际发送未确认：" + sendFailureReason, shopKey);
             }
-            else
-            {
-                lease.MarkFailed("knowledge_memory_send_failed");
-            }
-            if (ctl != null)
-            {
-                ctl.SetSendResult(
-                    sendOk,
-                    sendOk
-                        ? "已发送（Knowledge Memory本地直答，无AI调用）"
-                        : sendCancelled
-                            ? "未发送：人工接管或会话状态变化，已安全取消"
-                            : "发送失败：" + sendFailureReason);
-            }
-            Log.Info("Knowledge Memory本地直答完成: buyer=" + burst.BuyerNick
-                + ", success=" + sendOk + ", cancelled=" + sendCancelled
-                + ", totalMs=" + Math.Max(0, (long)(DateTime.Now - detectedAt).TotalMilliseconds));
-            if (sendCancelled)
-                ResponseProgressTracker.Cancel(
-                    burst.SellerNick, burst.BuyerNick, "Knowledge Memory发送前会话门禁取消", burst.ShopKey);
-            else if (sendOk)
-                ResponseProgressTracker.Complete(burst.SellerNick, burst.BuyerNick, burst.ShopKey);
-            else
-                ResponseProgressTracker.Fail(
-                    burst.SellerNick, burst.BuyerNick,
-                    "Knowledge Memory答案已生成，但实际发送未确认：" + sendFailureReason, burst.ShopKey);
         }
     }
 }
