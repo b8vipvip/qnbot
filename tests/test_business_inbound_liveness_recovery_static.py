@@ -98,12 +98,15 @@ def test_restart_recovery_skips_buyer_messages_with_a_later_seller_reply_in_remo
     )[0]
     assert "IsSellerMessage(message)" in helper
     assert "AreBuyerAliasesEquivalentInShop(seller, recipient, buyer)" in helper
+    assert "IncomingMessageSafety.TryGetMessageTime" in helper
     assert "sellerSort <= buyerSort" in helper
+    assert "sellerSort >= nextBurstStartTicks" in helper
+    assert "nextBurstStartTicks" in helper
     assert "recipient.Length == 0" in helper
     assert "IsWithdrawalNotice(message, sellerText)" in helper
     assert "IsPlatformSystemTip(message, sellerText)" in helper
-    assert "nextBuyerSort" not in helper
-    assert "closes all earlier" in helper
+    assert "BuyerMessageBurstCoordinator.QuietDelayMilliseconds(" in helper
+    assert "A later seller message only acknowledges this buyer turn if it appears before the" in helper
     method = text.split("internal async Task ProbeActiveConversationForMissedInboundAsync()", 1)[1]
     assert "business-inbound-recovery-skipped-already-answered" in method
     assert "var unanswered = candidates" in method
@@ -125,8 +128,29 @@ def test_one_seller_reply_closes_all_unanswered_fragments_in_the_same_buyer_burs
     helper = text.split("private bool HasSellerReplyAfterRecoveredBuyer", 1)[1].split(
         "internal async Task RepairBusinessInboundHookAsync", 1
     )[0]
-    assert "Remote history is for one verified ccode" in helper
-    assert "sellerSort <= buyerSort" in helper
-    assert "sellerSort >= nextBuyerSort" not in helper
-    assert "closes all earlier" in helper
+    assert "actual quiet-window burst" in helper
+    assert "nextBurstStartTicks" in helper
+    assert "QuietDelayMilliseconds(" in helper
+    assert "sellerSort >= nextBurstStartTicks" in helper
     assert "unanswered buyer messages in the same burst" in helper
+
+
+def test_later_seller_reply_after_a_distinct_buyer_burst_does_not_acknowledge_older_turn():
+    text = source()
+    helper = text.split("private bool HasSellerReplyAfterRecoveredBuyer", 1)[1].split(
+        "internal async Task RepairBusinessInboundHookAsync", 1
+    )[0]
+    assert "nextBurstStartTicks = pair.Value.Ticks" in helper
+    assert "sellerSort >= nextBurstStartTicks" in helper
+    assert "sellerSort <= buyerSort" in helper
+    assert "targetFound" in helper
+
+
+def test_recovery_uses_the_same_adaptive_quiet_delay_and_simulated_historical_time_as_live_burst():
+    coordinator = (ROOT / "src" / "Bot" / "ChromeNs" / "BuyerMessageBurstCoordinator.cs").read_text(encoding="utf-8-sig")
+    safety = (ROOT / "src" / "Bot" / "ChromeNs" / "IncomingMessageSafety.cs").read_text(encoding="utf-8-sig")
+    assert "QuietDelayMilliseconds(items, startedAt, DateTime.Now)" in coordinator
+    assert "DateTime now)" in coordinator
+    assert "now - startedAt >= TimeSpan.FromSeconds(4)" in coordinator
+    assert "AdaptiveReplyTimingService.AdjustDelay(" in coordinator
+    assert "internal static bool TryGetMessageTime(" in safety
