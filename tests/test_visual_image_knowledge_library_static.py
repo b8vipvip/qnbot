@@ -55,8 +55,9 @@ def test_ocr_image_knowledge_match_precedes_knowledge_v2_and_is_context_only_wit
 def test_image_knowledge_context_reaches_multimodal_and_ocr_text_ai():
     vision = read("src/Bot/ChromeNs/VisionRequestService.cs")
     for text in ("MatchedImageKnowledgeId", "ApplyImageKnowledgeContext(result, localDecision)",
-                 "ApplyImageKnowledgeContext(repaired, localDecision)", "已匹配的人工图片知识说明",
-                 "请买家重新发送正确界面"):
+                 "ApplyImageKnowledgeContext(repaired, localDecision)", "ApprovedV2KnowledgeEvidence",
+                 "result.ApprovedV2KnowledgeEvidence = localDecision.ApprovedV2KnowledgeEvidence",
+                 "已匹配的人工图片知识说明", "请买家重新发送正确界面"):
         assert text in vision
 
 
