@@ -109,14 +109,14 @@ def test_v2_runtime_initialization_and_working_memory_are_shop_scoped():
     runtime = read("src/Bot/ChromeNs/KnowledgeEngineV2RuntimeBridge.cs")
     public = read("src/Bot/Knowledge/KnowledgeEngineV2.Service.Public.cs")
     index = read("src/Bot/Knowledge/KnowledgeEngineV2.Service.Index.cs")
+
     assert "shopScope.ShopKey, burst.ShopKey" in runtime
-    assert "PreparedShopKeys.TryAdd(shopKey, 1)" in runtime
     assert "WarmingShopKeys.TryAdd(shopKey, 1)" in runtime
+    assert "ShopContextLocator.ResolveRuntimeByShopKey(shopKey)" in runtime
     assert "ShopSettingsScope.Enter(shop, false)" in runtime
     assert "GetWorkingMemory(shop.ShopKey, seller, buyer)" in public
     assert "UpdateWorkingMemory(shop.ShopKey, seller, buyer, query)" in public
     assert "WorkingKey(string shopKey, string seller, string buyer)" in index
-
 
 def test_duplicate_manual_exact_aliases_fail_closed():
     public = read("src/Bot/Knowledge/KnowledgeEngineV2.Service.Public.cs")
