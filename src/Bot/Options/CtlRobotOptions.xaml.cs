@@ -518,18 +518,15 @@ namespace Bot.Options
 
         private UIElement BuildKnowledgeTab()
         {
-            var currentKnowledge = BotFeatureStore.GetKnowledgeBase();
             var panel = new StackPanel { Margin = new Thickness(18) };
             panel.Children.Add(new TextBlock
             {
-                Text = "知识库已升级为独立中心。智能导入、问答搜索、编辑、JSON导入导出都在新中心中完成，仍然使用同一个 BotFeatureStore 数据源。",
+                Text = "本客户端仅使用 Knowledge V2。知识检索、图片知识、历史聊天学习、导入导出、冲突处理和运行时索引均统一在 Knowledge V2 中管理。",
                 TextWrapping = TextWrapping.Wrap,
                 Foreground = new SolidColorBrush(Color.FromRgb(75, 85, 99)),
                 Margin = new Thickness(0, 0, 0, 12)
             });
-            panel.Children.Add(new TextBlock { Text = "知识数量：" + currentKnowledge.Count, FontWeight = FontWeights.Bold, Margin = new Thickness(0, 0, 0, 6) });
-            panel.Children.Add(new TextBlock { Text = "分类数量：" + currentKnowledge.Select(x => x.Category ?? string.Empty).Where(x => x.Length > 0).Distinct().Count(), FontWeight = FontWeights.Bold, Margin = new Thickness(0, 0, 0, 16) });
-            var open = MakeButton("打开知识库中心", 140);
+            var open = MakeButton("打开 Knowledge V2 知识库", 190);
             open.Click += (s, e) => KnowledgeCenterWindow.MyShow(this);
             panel.Children.Add(open);
             return Card(panel);
