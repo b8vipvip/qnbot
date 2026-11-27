@@ -154,3 +154,14 @@ def test_recovery_uses_the_same_adaptive_quiet_delay_and_simulated_historical_ti
     assert "now - startedAt >= TimeSpan.FromSeconds(4)" in coordinator
     assert "AdaptiveReplyTimingService.AdjustDelay(" in coordinator
     assert "internal static bool TryGetMessageTime(" in safety
+
+
+def test_recovery_simulates_quiet_delay_at_previous_message_time_before_testing_next_fragment_gap():
+    text = source()
+    helper = text.split("private bool HasSellerReplyAfterRecoveredBuyer", 1)[1].split(
+        "internal async Task RepairBusinessInboundHookAsync", 1
+    )[0]
+    assert "groupItems, groupStartedAt, previousBuyerTime" in helper
+    assert "var gapMs = (pair.Value - previousBuyerTime).TotalMilliseconds;" in helper
+    assert "not the next item's arrival time" in helper
+    assert "otherwise a fragment arriving just after the" in helper
