@@ -144,3 +144,31 @@ def test_duplicate_buyer_transport_event_does_not_advance_session_watermark():
 
     assert duplicate < watermark < sort_watermark < remember
     assert "A replayed copy is not a new buyer turn" in method
+
+
+def test_background_recovery_bot_switches_are_read_under_the_exact_shop_scope():
+    liveness = read("src/Bot/ChromeNs/BusinessInboundLivenessRecoveryBridge.cs")
+    probe = liveness.split("internal async Task ProbeActiveConversationForMissedInboundAsync()", 1)[1]
+    liveness_scope = probe.index("using (ShopSettingsScope.Enter(shop, false))")
+    liveness_switch = probe.index("if (!Params.Robot.CanUseRobotReal) return;")
+    assert liveness_scope < liveness_switch
+
+    first = read("src/Bot/ChromeNs/FirstInquiryStreamingGuard.cs")
+    schedule_first = first[
+        first.index("internal void ScheduleFirstInquiryFastRecovery"):
+        first.index("private bool IsFirstInquirySourceSessionCurrent")
+    ]
+    first_scope = schedule_first.index("using (ShopSettingsScope.Enter(shop, false))")
+    first_switch = schedule_first.index("botEnabledForShop = Params.Robot.CanUseRobotReal;")
+    assert first_scope < first_switch
+    assert "if (!botEnabledForShop) return;" in schedule_first
+
+    recovery = read("src/Bot/ChromeNs/QN.MessageRecovery.cs")
+    schedule_recovery = recovery[
+        recovery.index("private void ScheduleBackgroundMessageRecovery"):
+        recovery.index("private async Task<bool> RecoverMissedBuyerMessagesAsync")
+    ]
+    recovery_scope = schedule_recovery.index("using (ShopSettingsScope.Enter(shop, false))")
+    recovery_switch = schedule_recovery.index("botEnabledForShop = Params.Robot.CanUseRobotReal;")
+    assert recovery_scope < recovery_switch
+    assert "if (!botEnabledForShop) return;" in schedule_recovery
