@@ -1,4 +1,5 @@
 using Bot.Knowledge;
+using Bot.ShopScope;
 using BotLib;
 using System;
 using System.Collections.Generic;
@@ -96,9 +97,13 @@ namespace Bot.ChromeNs
                 .OrderBy(x => x.Timestamp)
                 .ToList();
             var dependency = CalculateContextDependency(question, turns);
-            var state = ConversationStateService.Build(seller, buyer, question, turns);
+            var allowLegacyKnowledge = CanUseLegacyKnowledgeAuthority(seller);
+            var state = ConversationStateService.Build(
+                seller, buyer, question, turns, allowLegacyKnowledge);
             var queryResolution = ContextualQueryRewriteService.Resolve(question, dependency, state, turns);
-            var candidates = RetrieveCandidates(seller, question, queryResolution, state, turns);
+            var candidates = allowLegacyKnowledge
+                ? RetrieveCandidates(seller, question, queryResolution, state, turns)
+                : new List<SmartKnowledgeCandidate>();
             var plan = new SmartReplyPlan
             {
                 ContextDependencyScore = dependency,
@@ -108,7 +113,9 @@ namespace Bot.ChromeNs
                 ConversationState = state,
                 QueryResolution = queryResolution,
                 Route = SmartReplyRouteKind.AiGeneral,
-                Reason = "未找到足够可靠且适用于当前场景的本地知识，交给AI结合上下文处理",
+                Reason = allowLegacyKnowledge
+                    ? "未找到足够可靠且适用于当前场景的本地知识，交给AI结合上下文处理"
+                    : "Knowledge V2已启用或权威状态无法确认，已跳过legacy知识检索；仅使用V2已批准上下文和AI继续处理",
                 SemanticModel = string.Empty
             };
 
@@ -119,7 +126,7 @@ namespace Bot.ChromeNs
                 && dependency <= 0.20
                 && !rewritten
                 && PolicyAllowsDirect(provisionalBest);
-            if (!exactIndependent && SemanticEmbeddingService.IsConfigured())
+            if (allowLegacyKnowledge && !exactIndependent && SemanticEmbeddingService.IsConfigured())
             {
                 var resolvedText = queryResolution == null || string.IsNullOrWhiteSpace(queryResolution.ResolvedQuery)
                     ? question
@@ -331,6 +338,32 @@ namespace Bot.ChromeNs
                 KnowledgeAiService.NormalizeQuestion(left.Title),
                 KnowledgeAiService.NormalizeQuestion(right.Title),
                 StringComparison.Ordinal);
+        }
+
+        private static bool CanUseLegacyKnowledgeAuthority(string seller)
+        {
+            try
+            {
+                var currentScope = ShopSettingsScope.Current;
+                if (currentScope != null
+                    && !string.Equals(currentScope.SellerNick, (seller ?? string.Empty).Trim(), StringComparison.Ordinal))
+                {
+                    Log.ErrorWithMaxCount("Smart Reply店铺作用域与当前Seller不一致，已禁用legacy知识检索。", 10);
+                    return false;
+                }
+
+                if (KnowledgeEngineV2Service.IsEnabled(seller))
+                {
+                    Log.Info("Knowledge V2已启用，Smart Reply跳过legacy知识召回、语义索引、直答和离线兜底: seller=" + seller);
+                    return false;
+                }
+                return true;
+            }
+            catch (Exception ex)
+            {
+                Log.ErrorWithMaxCount("无法确认Knowledge V2权威状态，已禁用legacy Smart Reply知识检索: " + ex.Message, 10);
+                return false;
+            }
         }
 
         private static List<SmartKnowledgeCandidate> RetrieveCandidates(
