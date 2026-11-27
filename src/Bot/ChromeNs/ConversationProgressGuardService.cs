@@ -214,45 +214,6 @@ namespace Bot.ChromeNs
                 || p.RechargeSubmitted;
         }
 
-        public static bool AllowKnowledge(KnowledgeBaseEntry entry, ConversationStateSnapshot state, string currentQuestion)
-        {
-            if (entry == null) return false;
-            var p = state == null ? null : state.Progress;
-            if (p == null) return true;
-            var title = entry.Title ?? string.Empty;
-            var answer = entry.Answer ?? string.Empty;
-            var combined = title + " " + (entry.Keywords ?? string.Empty) + " " + answer;
-
-            if (p.AsksScreenshotTarget)
-            {
-                if (R("orderInstruction").IsMatch(combined)) return false;
-                if (!R("screenshotTargetKnowledge").IsMatch(combined)) return false;
-            }
-
-            if (p.AsksPurchaseTarget)
-            {
-                if (!R("purchaseTargetKnowledge").IsMatch(combined)) return false;
-                if (R("badPurchaseTargetKnowledge").IsMatch(combined)
-                    && !R("purchaseTargetKnowledgeStrong").IsMatch(combined)) return false;
-            }
-
-            if (p.CurrentInputKind == "phone_number" || p.CurrentInputKind == "verification_code")
-            {
-                if (RequestsScreenshot(answer) || R("preRechargeKnowledge").IsMatch(combined)) return false;
-                if (R("orderInstruction").IsMatch(combined)) return false;
-            }
-            if (p.DeviceAccountConfirmed && RequestsScreenshot(answer)) return false;
-            if (p.HasOrderEvidence
-                && R("orderInstruction").IsMatch(combined)
-                && !R("explicitOrderQuestion").IsMatch(currentQuestion ?? string.Empty)) return false;
-            if (!p.HasOrderEvidence
-                && !p.ExplicitCompatibilityQuestion
-                && !p.AsksScreenshotTarget
-                && !p.AsksPurchaseTarget
-                && RequestsScreenshot(answer)) return false;
-            return true;
-        }
-
         public static void AddValidationIssues(
             string question,
             string answer,
