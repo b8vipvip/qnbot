@@ -889,11 +889,32 @@ namespace Bot.ChromeNs
             text = NormalizeMessageText(text);
             if (string.IsNullOrWhiteSpace(buyerNick) || string.IsNullOrWhiteSpace(text)) return false;
 
-            var client = CDP;
-            var shopKey = client == null ? string.Empty : (client.ShopKey ?? string.Empty).Trim();
             var scopedShop = ShopSettingsScope.Current;
-            if (shopKey.Length == 0 || (scopedShop != null
-                && !string.Equals(scopedShop.ShopKey, shopKey, StringComparison.Ordinal))) return false;
+            var client = CDP;
+            var shopKey = scopedShop == null
+                ? (client == null ? string.Empty : (client.ShopKey ?? string.Empty).Trim())
+                : (scopedShop.ShopKey ?? string.Empty).Trim();
+            if (shopKey.Length == 0) return false;
+
+            // The send may have started on an old QN wrapper just before CDP authority moved
+            // to a replacement wrapper for the same ShopKey. The seller echo is then recorded
+            // on the replacement's queue, not this instance's queue. Check that exact current
+            // owner first; never inspect another ShopKey or the global active QN.
+            var owner = FindAuthoritativeShopSendOwner(shopKey);
+            if (owner != null && !ReferenceEquals(owner, this)
+                && owner.HasRecentSellerEchoLocal(buyerNick, text, since, shopKey))
+                return true;
+
+            // Retain this wrapper's exact-ShopKey observations as a second source. They may
+            // contain the echo that arrived immediately before the authoritative handoff.
+            return HasRecentSellerEchoLocal(buyerNick, text, since, shopKey);
+        }
+
+        private bool HasRecentSellerEchoLocal(
+            string buyerNick, string text, DateTime since, string expectedShopKey)
+        {
+            expectedShopKey = (expectedShopKey ?? string.Empty).Trim();
+            if (expectedShopKey.Length == 0) return false;
             var cutoff = since.AddMilliseconds(-500);
             var now = DateTime.Now;
             if (cutoff < now - SellerEchoRetention) cutoff = now - SellerEchoRetention;
@@ -901,7 +922,7 @@ namespace Bot.ChromeNs
             lock (_sellerEchoLock)
             {
                 return _recentSellerEchoes.Any(echo => echo.ReceivedAt >= cutoff
-                    && string.Equals(echo.ShopKey, shopKey, StringComparison.Ordinal)
+                    && string.Equals(echo.ShopKey, expectedShopKey, StringComparison.Ordinal)
                     && echo.Text == text
                     && BuyerIdentityAliasService.AreEquivalent(sellerNick, echo.Buyer, buyerNick));
             }
