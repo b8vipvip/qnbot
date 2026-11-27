@@ -120,3 +120,16 @@ def test_management_page_registration_is_explicit_and_idempotent():
     assert "Interlocked.Exchange(ref _initialized, 1)" in service
     assert "EventManager.RegisterClassHandler(" in service
     assert "ConditionalWeakTable<KnowledgeCenterWindow, object>" in service
+
+def test_legacy_deterministic_fallback_uses_same_manual_short_first_inquiry_priority():
+    service = read("src/Bot/ChromeNs/DeterministicAutoReplyService.cs")
+    method = service[
+        service.index("private static async Task<bool> HandleScopedBeforeMergeAsync"):
+        service.index("private static async Task<bool> SendFixedAsync")
+    ]
+    manual = method.index("BotFeatureStore.EvaluateAutoReplyRule(question)")
+    local = method.index("LocalShortReplyService.TryResolve(")
+    first = method.index("FirstInquiryFixedReplyService.TryResolve(")
+    assert manual < local < first
+    assert "FirstInquiryFixedReplyService.ReleaseReservation(" in method[manual:local]
+    assert "return false;" in method[local:first]
