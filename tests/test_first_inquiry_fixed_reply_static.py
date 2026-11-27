@@ -351,6 +351,10 @@ def test_returning_buyer_fixed_reply_retains_reservation_after_indeterminate_sen
     catch = send.split("catch (Exception ex)", 1)[1].split("private static void RetainIndeterminateReservation", 1)[0]
     assert "qn.Rpa.LastSendWasIndeterminate" in catch
     assert "RetainIndeterminateReservation(key)" in catch
+    assert "if (sendConfirmed)" in catch
+    assert "Reservations[key] = DateTime.Now" in catch
+    assert "var sendConfirmed = false;" in send
+    assert "sendConfirmed = ok;" in send
     retain = send.split("private static void RetainIndeterminateReservation", 1)[1].split(
         "private static void Release", 1
     )[0]
