@@ -70,7 +70,8 @@ namespace Bot.ChromeNs
             string seller,
             string buyer,
             string currentQuestion,
-            IList<ConversationContextTurn> turns)
+            IList<ConversationContextTurn> turns,
+            bool includeLegacyKnowledgeEntities = true)
         {
             var state = new ConversationStateSnapshot
             {
@@ -86,7 +87,7 @@ namespace Bot.ChromeNs
             state.ConversationStage = DetectStage(contextText);
             state.PendingQuestion = FindPendingQuestion(ordered);
             state.CurrentTopic = FindCurrentTopic(ordered, currentQuestion);
-            state.Entities = ExtractKnownEntities(contextText);
+            state.Entities = includeLegacyKnowledgeEntities ? ExtractKnownEntities(contextText) : new List<string>();
             state.CurrentEntity = ResolvePrimaryEntity(state.Entities, ordered, currentQuestion);
             state.BuyerGoal = DetectIntent((currentQuestion ?? string.Empty) + " " + state.CurrentTopic);
 
