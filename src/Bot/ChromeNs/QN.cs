@@ -1599,7 +1599,10 @@ namespace Bot.ChromeNs
                 burst.SellerNick,
                 burst.BuyerNick,
                 burst.CombinedQuestion,
-                result.Answer);
+                result.Answer,
+                CancellationToken.None,
+                result.IsKnowledgeV2DirectAnswer,
+                result.ApprovedV2KnowledgeEvidence);
             var answer = deduplication.Answer;
             if (!await lease.ConfirmStableAsync(220))
             {
