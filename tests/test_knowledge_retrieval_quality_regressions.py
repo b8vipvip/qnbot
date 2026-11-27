@@ -612,3 +612,17 @@ def test_legacy_knowledge_prompt_gate_requires_matching_shop_scope():
         assert "var currentShopScope = ShopSettingsScope.Current" in source
         assert "currentShopScope.SellerNick, seller, StringComparison.Ordinal" in source
         assert "allowLegacyKnowledgePrompt = !KnowledgeEngineV2Service.IsEnabled(seller)" in source
+
+
+
+def test_default_legacy_prompt_addon_fails_closed_without_v2_shop_authority():
+    options = read("src/Bot/Options/CtlRobotOptions.xaml.cs")
+    default_overload = options[
+        options.index("public static string BuildPromptAddon(string question)"):
+        options.index("public static string BuildPromptAddon(string question, bool includeKnowledgeBase)")
+    ]
+
+    assert "ShopSettingsScope.Current" in default_overload
+    assert "KnowledgeEngineV2Service.IsEnabled(currentScope.SellerNick)" in default_overload
+    assert "includeLegacyKnowledge = false" in default_overload
+    assert "BuildPromptAddon(question, includeLegacyKnowledge)" in default_overload
