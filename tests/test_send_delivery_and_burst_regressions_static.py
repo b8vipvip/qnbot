@@ -650,3 +650,23 @@ def test_bot_flow_test_generation_and_send_failures_are_not_marked_completed():
     assert "ResponseProgressTracker.Fail(" in send
     assert "Bot真实流程测试答案已生成，但实际发送未确认：" in send
     assert "var sendFailureReason = qn.Rpa == null" in send
+
+
+def test_bot_flow_test_runs_generation_and_send_inside_the_verified_shop_scope_and_contains_exceptions():
+    source = read("src/Bot/ChromeNs/BotFlowTestService.cs")
+    generation = source.split("string generated;", 1)[1].split(
+        "if (string.IsNullOrWhiteSpace(generated)", 1
+    )[0]
+    assert "using (ShopSettingsScope.Enter(shop))" in generation
+    assert "await Task.Run(() => MyOpenAI.GetAnswer(" in generation
+    assert "catch (Exception ex)" in generation
+    assert "ResponseProgressTracker.Fail(" in generation
+
+    send = source.split("var sent = false;", 1)[1].split(
+        "var detail = sent", 1
+    )[0]
+    assert "using (ShopSettingsScope.Enter(shop))" in send
+    assert "await qn.SendTextWithRetryAsync(candidate.Buyer, outgoing, 1)" in send
+    assert "catch (Exception ex)" in send
+    assert "sendException is OperationCanceledException" in send
+    assert "sendFailureReason = sendException != null" in send
