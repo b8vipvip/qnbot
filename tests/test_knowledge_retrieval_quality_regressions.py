@@ -550,3 +550,39 @@ def test_image_route_honors_silence_and_manual_rules_before_ocr_or_vision_knowle
     assert method.index("ReceptionFlowPolicy.TryChooseSilence") < vision
     assert method.index("BotFeatureStore.EvaluateAutoReplyRule(policyQuestion)") < vision
     assert "StreamingBuyerAnswerService.GetAnswerAsync(" in method
+
+
+
+def test_v2_direct_reply_uses_shop_outgoing_guard_before_ready_and_at_transport():
+    runtime = read("src/Bot/ChromeNs/KnowledgeEngineV2RuntimeBridge.cs")
+    method = runtime[
+        runtime.index("internal static async Task<KnowledgeV2RuntimeResult> TryHandleWithContextAsync"):
+        runtime.index("internal static string BuildContextPromptAddon")
+    ]
+
+    first_guard = method.index("ShopReceptionPolicy.BlockOutgoing(")
+    assert first_guard < method.index("lease.MarkReady(")
+    assert "out outgoingPolicyReason, burst.ShopKey, false" in method
+    pre_send = method[
+        method.index("Func<bool> preSendGuard = () =>"):
+        method.index("bool sendOk;")
+    ]
+    assert "ShopReceptionPolicy.BlockOutgoing(" in pre_send
+    assert "outgoingPolicySuppressed = true" in pre_send
+    assert "knowledge_v2_business_guard_suppressed" in method
+
+
+
+def test_v2_direct_reply_runs_transcript_sanitizer_and_store_output_policy_before_send():
+    runtime = read("src/Bot/ChromeNs/KnowledgeEngineV2RuntimeBridge.cs")
+    method = runtime[
+        runtime.index("internal static async Task<KnowledgeV2RuntimeResult> TryHandleWithContextAsync"):
+        runtime.index("internal static string BuildContextPromptAddon")
+    ]
+
+    sanitize = method.index("ReplyTranscriptSanitizer.Sanitize(decision.Answer)")
+    output_policy = method.index("BotFeatureStore.ApplyOutputPolicy(answer)")
+    suffix = method.index("BotMessageSuffixService.Apply(burst.SellerNick, answer)")
+    dedup = method.index("ReplyDeduplicationService.EnsureDistinct(")
+    assert sanitize < output_policy < suffix < dedup
+    assert "knowledge_v2_output_policy_empty" in method
