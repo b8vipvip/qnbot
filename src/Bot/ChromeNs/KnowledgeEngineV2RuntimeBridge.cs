@@ -189,6 +189,32 @@ namespace Bot.ChromeNs
             // the same seller nickname into one warm/initialization state.
             PrepareSeller(burst.ShopKey, burst.SellerNick);
 
+            // Resolve short follow-ups against the same ShopKey-scoped conversation
+            // state before V2 retrieval. Otherwise "这个呢/那价格呢" reaches V2 as
+            // an isolated fragment and only the downstream AI prompt knows the topic.
+            var retrievalQuestion = currentQuestion;
+            ContextualQueryResolution contextualResolution = null;
+            try
+            {
+                var contextualPlan = await SmartReplyRouterService.BuildPlanAsync(
+                    burst.SellerNick, burst.BuyerNick, currentQuestion, lease.CancellationToken)
+                    .ConfigureAwait(false);
+                contextualResolution = contextualPlan == null ? null : contextualPlan.QueryResolution;
+                if (contextualResolution != null && contextualResolution.Rewritten
+                    && !string.IsNullOrWhiteSpace(contextualResolution.ResolvedQuery))
+                    retrievalQuestion = contextualResolution.ResolvedQuery;
+            }
+            catch (OperationCanceledException)
+            {
+                if (lease.CancellationToken.IsCancellationRequested)
+                    return KnowledgeV2RuntimeResult.HandledResult();
+                Log.Info("Knowledge V2上下文还原被取消，保留原始买家问题继续检索。");
+            }
+            catch (Exception ex)
+            {
+                Log.ErrorWithMaxCount("Knowledge V2上下文还原失败，保留原始问题检索: " + ex.Message, 5);
+            }
+
             // V2 is only a fast terminal path when the shared commerce authority allows local
             // termination. The same authority is consumed by Smart Reply, so verified orders and
             // strongly post-order conversations cannot be decided differently by parallel layers.
@@ -229,7 +255,7 @@ namespace Bot.ChromeNs
                     decision = KnowledgeEngineV2Service.ResolveWithCuratedImageKnowledgeEvidence(
                         burst.SellerNick,
                         burst.BuyerNick,
-                        burst.CombinedQuestion,
+                        retrievalQuestion,
                         imageEvidenceText,
                         conditionalAdviceEvidence.ImageDescription);
                     string conditionalReason;
@@ -245,7 +271,7 @@ namespace Bot.ChromeNs
                 }
                 else
                 {
-                    decision = KnowledgeEngineV2Service.Resolve(burst.SellerNick, burst.BuyerNick, burst.CombinedQuestion);
+                    decision = KnowledgeEngineV2Service.Resolve(burst.SellerNick, burst.BuyerNick, retrievalQuestion);
                 }
             }
             catch (Exception ex)
@@ -254,6 +280,9 @@ namespace Bot.ChromeNs
                     + burst.BuyerNick + ", error=" + ex.Message, 20);
                 return KnowledgeV2RuntimeResult.Continue();
             }
+
+            if (decision != null && decision.Query != null)
+                decision.Query.UserOriginal = currentQuestion;
 
             if (!conditionalOnly && ConditionalBusinessAdviceService.RequiresEvidenceGate(decision))
             {
@@ -691,6 +720,7 @@ namespace Bot.ChromeNs
         internal static string BuildContextPromptAddon(KnowledgeV2Decision decision)
         {
             if (decision == null || decision.HasConflict || decision.Query == null
+                || KnowledgeEngineV2Semantics.IsHighRisk(decision.Query.UserOriginal ?? decision.Query.Original)
                 || KnowledgeEngineV2Semantics.IsHighRisk(decision.Query.Original))
                 return string.Empty;
 
@@ -713,7 +743,7 @@ namespace Bot.ChromeNs
 
             var sb = new StringBuilder();
             sb.Append("\n\n【Knowledge Center V2已批准知识：仅作为上下文证据】\n")
-                .Append("买家当前问题：").Append(SafeContext(decision.Query.Original, 300)).Append("\n")
+                .Append("买家当前问题：").Append(SafeContext(decision.Query.UserOriginal ?? decision.Query.Original, 300)).Append("\n")
                 .Append("结构化解析：subject=").Append(SafeContext(decision.Query.Subject, 100))
                 .Append("；intent=").Append(SafeContext(decision.Query.Intent, 60))
                 .Append("；predicate=").Append(SafeContext(decision.Query.Predicate, 60))
