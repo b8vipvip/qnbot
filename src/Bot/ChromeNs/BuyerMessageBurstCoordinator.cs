@@ -232,7 +232,8 @@ namespace Bot.ChromeNs
         Continue = 0,
         Consumed = 1,
         Failed = 2,
-        Cancelled = 3
+        Cancelled = 3,
+        Suppressed = 4 // Policy consumed the turn without physical delivery.
     }
 
     /// <summary>
@@ -322,7 +323,29 @@ namespace Bot.ChromeNs
             CancellationToken cancellationToken)
         {
             if (!Params.Robot.GetIsAutoReply()) return CanonicalPreMergeOutcome.Continue;
-            var qn = QN.FindExistingByShopKey(item.ShopKey);
+            var previousQn = QN.FindExistingByShopKey(item.ShopKey);
+            // A queued turn can reach pre-merge while its original CDP is being replaced.
+            // Resolve only an authoritative owner of this ShopKey, with a bounded wait.
+            var connected = ShopContextLocator.FindConnectedQnByShopKey(item.ShopKey);
+            if (connected == null)
+            {
+                var deadline = System.Diagnostics.Stopwatch.StartNew();
+                Log.Info("预合并等待本店权威CDP恢复: shopRef="
+                    + MyWebSocketServer.DiagnosticRef("shop", item.ShopKey)
+                    + ", previousQnPresent=" + (previousQn != null));
+                while (connected == null && deadline.ElapsedMilliseconds < 5000)
+                {
+                    cancellationToken.ThrowIfCancellationRequested();
+                    if (!Params.Robot.CanUseRobotReal || !Params.Robot.GetIsAutoReply())
+                        return CanonicalPreMergeOutcome.Cancelled;
+                    await Task.Delay(150, cancellationToken).ConfigureAwait(false);
+                    connected = ShopContextLocator.FindConnectedQnByShopKey(item.ShopKey);
+                }
+            }
+            cancellationToken.ThrowIfCancellationRequested();
+            if (!Params.Robot.CanUseRobotReal || !Params.Robot.GetIsAutoReply())
+                return CanonicalPreMergeOutcome.Cancelled;
+            var qn = connected;
             if (qn == null || qn.CDP == null || qn.CDP.IsShopIdentityRetired)
             {
                 Log.ErrorWithMaxCount(
@@ -360,9 +383,12 @@ namespace Bot.ChromeNs
                 {
                     var outcome = await SendFixedAsync(
                         qn, item, offHoursReply, "下班自动回复", cancellationToken).ConfigureAwait(false);
-                    OffHoursDeliveredUntil[buyerKey] = outcome == CanonicalPreMergeOutcome.Consumed
-                        ? DateTime.Now.AddMinutes(OffHoursRepeatMinutes)
-                        : DateTime.Now.AddSeconds(15);
+                    // Only a delivered reply earns the normal cooldown. A policy veto or
+                    // cancellation must not consume the next eligible off-hours reply.
+                    if (outcome == CanonicalPreMergeOutcome.Consumed)
+                        OffHoursDeliveredUntil[buyerKey] = DateTime.Now.AddMinutes(OffHoursRepeatMinutes);
+                    else if (outcome == CanonicalPreMergeOutcome.Failed)
+                        OffHoursDeliveredUntil[buyerKey] = DateTime.Now.AddSeconds(15);
                     return outcome;
                 }
                 return CanonicalPreMergeOutcome.Consumed;
@@ -418,6 +444,10 @@ namespace Bot.ChromeNs
                         item.SellerNick,
                         item.BuyerNick,
                         firstFailureReason, item.ShopKey);
+
+                    // Policy suppression is intentional consumption, never delivery or an
+                    // invitation to try a different answer for this same turn.
+                    if (firstOutcome == CanonicalPreMergeOutcome.Suppressed) return firstOutcome;
 
                     // A pre-send ShopKey/session rejection or an explicit human-takeover cancellation
                     // proves that the greeting was not sent. Do not let that prelude failure swallow
@@ -551,11 +581,12 @@ namespace Bot.ChromeNs
                 item.SellerNick, item.BuyerNick, item.DisplayText, answer, out policyReason))
             {
                 Log.Info("接待规则阻止固定回复：" + policyReason);
-                return CanonicalPreMergeOutcome.Consumed; // consumed intentionally; do not retry an unsafe fixed answer
+                return CanonicalPreMergeOutcome.Suppressed; // do not retry an unsafe fixed answer or record delivery
             }
             cancellationToken.ThrowIfCancellationRequested();
             var detectedAt = item.ReceivedAt == DateTime.MinValue ? DateTime.Now : item.ReceivedAt;
             var sendCancelled = false;
+            var policySuppressed = false;
             var ctl = ResponseProgressTracker.BeginAnswer(
                 item.SellerNick, item.BuyerNick, item.DisplayText, detectedAt, item.ShopKey);
             try
@@ -575,10 +606,11 @@ namespace Bot.ChromeNs
                         + ", buyer=" + item.BuyerNick + ", delaySeconds=" + boundedDelay);
                     await Task.Delay(TimeSpan.FromSeconds(boundedDelay), cancellationToken).ConfigureAwait(false);
                     cancellationToken.ThrowIfCancellationRequested();
-                    if (!Params.Robot.CanUseRobotReal || !Params.Robot.GetIsAutoReply()
-                        || qn.CDP == null || qn.CDP.IsShopIdentityRetired)
+                    // CDP may temporarily disappear or move to another QN for the same shop.
+                    // The reliable send layer already performs bounded exact-ShopKey recovery.
+                    if (!Params.Robot.CanUseRobotReal || !Params.Robot.GetIsAutoReply())
                     {
-                        if (ctl != null) ctl.SetSendResult(false, "未发送：延迟期间Bot开关关闭或原店铺会话失效");
+                        if (ctl != null) ctl.SetSendResult(false, "未发送：延迟期间Bot开关关闭");
                         sendCancelled = true;
                         return CanonicalPreMergeOutcome.Cancelled;
                     }
@@ -605,6 +637,16 @@ namespace Bot.ChromeNs
                         Log.Info(source + "固定回复发送前检测到Bot开关已关闭，取消发送");
                         return false;
                     }
+                    // A policy may change during a configured delay or while waiting for
+                    // the send gate. Re-check before every physical attempt.
+                    string currentPolicyReason;
+                    if (ShopReceptionPolicy.BlockOutgoing(
+                        item.SellerNick, item.BuyerNick, item.DisplayText, answer, out currentPolicyReason))
+                    {
+                        policySuppressed = true;
+                        Log.Info(source + "发送前接待规则已阻止回复: " + currentPolicyReason);
+                        return false;
+                    }
                     string relevanceReason;
                     var shouldSend = ParallelReplyRelevanceGate.ShouldSend(
                         item.SellerNick,
@@ -623,6 +665,12 @@ namespace Bot.ChromeNs
                 var ok = await qn.SendTextWithRetryAsync(
                     item.BuyerNick, answer, 3, cancellationToken, preSendGuard).ConfigureAwait(false);
                 sendCancelled = !ok && qn.Rpa != null && qn.Rpa.LastSendWasCancelled;
+                if (!ok && policySuppressed)
+                {
+                    sendCancelled = true;
+                    if (ctl != null) ctl.SetSendResult(false, "未发送：接待规则已阻止回复");
+                    return CanonicalPreMergeOutcome.Suppressed;
+                }
                 if (ok)
                     ReplyDeduplicationService.RememberDelivered(
                         item.SellerNick, item.BuyerNick, answer, item.ShopKey);
@@ -1116,6 +1164,13 @@ namespace Bot.ChromeNs
                 _sessionAgent.TryTransition(
                     item.SellerNick, item.BuyerNick, item.SessionGeneration,
                     BuyerSessionAgentState.Completed, "canonical_pre_merge_consumed", item.ShopKey);
+                return;
+            }
+            if (outcome == CanonicalPreMergeOutcome.Suppressed)
+            {
+                _sessionAgent.TryTransition(
+                    item.SellerNick, item.BuyerNick, item.SessionGeneration,
+                    BuyerSessionAgentState.Cancelled, "canonical_pre_merge_policy_suppressed", item.ShopKey);
                 return;
             }
             if (outcome == CanonicalPreMergeOutcome.Cancelled)
