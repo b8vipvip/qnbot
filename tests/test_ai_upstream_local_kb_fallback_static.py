@@ -8,16 +8,18 @@ def read(path: str) -> str:
     return (ROOT / path).read_text(encoding="utf-8-sig")
 
 
-def test_ai_failure_fallback_uses_50_percent_only_for_authenticated_control_plane_exhaustion():
-    client = read("src/Bot/ChromeNs/ReplyDeduplicationService.cs")
+def test_ai_failure_fallback_uses_only_a_preapproved_v2_decision_and_authenticated_shop_scope():
+    client = read("src/Bot/ChromeNs/BuyerStreamingReplyPipeline.cs")
+    runtime = read("src/Bot/ChromeNs/KnowledgeEngineV2RuntimeBridge.cs")
     server = read("services/api-control-plane/app.py")
 
-    assert "MinimumFallbackScore = 0.50" in client
-    assert "HTTP 502" in client
-    assert "upstream_exhausted" in client
-    assert 'string.Equals(x.Type, "服务端控制面"' in client
-    assert "所有供应商、模型和请求协议均调用失败" in client
-
+    assert "KnowledgeV2Decision OfflineFallbackDecision" in runtime
+    assert "return KnowledgeV2RuntimeResult.Continue(aiFirstContext, decision);" in runtime
+    assert "TryResolveV2OfflineFallback(" in client
+    assert "approvedDecision.CanDirectReply" in client
+    assert "KnowledgeV2AuthorityPolicy.IsProductionApproved" in client
+    assert "MinimumFallbackScore" not in client
+    assert "BotFeatureStore.GetKnowledgeBase()" not in client
     route_pos = server.index('@app.post("/v1/chat/completions")')
     auth_pos = server.index("Depends(require_client)", route_pos)
     dispatch_pos = server.index("dispatch_chat", auth_pos)
@@ -25,41 +27,49 @@ def test_ai_failure_fallback_uses_50_percent_only_for_authenticated_control_plan
     assert route_pos < auth_pos < dispatch_pos < exhausted_pos
     assert "status_code=502" in server[dispatch_pos:exhausted_pos + 400]
 
+def test_ai_failure_does_not_lower_the_normal_v2_direct_answer_threshold():
+    runtime = read("src/Bot/ChromeNs/KnowledgeEngineV2RuntimeBridge.cs")
+    service = read("src/Bot/Knowledge/KnowledgeEngineV2.Service.Public.cs")
+    client = read("src/Bot/ChromeNs/BuyerStreamingReplyPipeline.cs")
 
-def test_normal_knowledge_threshold_is_not_lowered_when_ai_is_healthy():
-    normal = read("src/Bot/ChromeNs/KnowledgeLearningService.cs")
-    fallback = read("src/Bot/ChromeNs/ReplyDeduplicationService.cs")
+    assert "DirectThreshold" in service
+    assert "MinConfidence" in service
+    assert "var latest = KnowledgeEngineV2Service.Resolve(seller, buyer, question);" in client
+    assert "latest.CanDirectReply" in client
+    assert "latest.Answer, approvedDecision.Answer, StringComparison.Ordinal" in client
+    assert "MinimumFallbackScore" not in client
+    assert "return KnowledgeV2RuntimeResult.Continue(aiFirstContext, decision);" in runtime
 
-    assert "return matched != null && score >= 0.84;" in normal
-    assert "score < MinimumFallbackScore" in fallback
-    assert "MinimumFallbackScore = 0.50" in fallback
+def test_ai_failure_answer_is_replaced_by_v2_before_the_pipeline_error_gate():
+    reply = read("src/Bot/ChromeNs/BuyerStreamingReplyPipeline.cs")
+    runtime = read("src/Bot/ChromeNs/KnowledgeEngineV2RuntimeBridge.cs")
+    pipeline = read("src/Bot/ChromeNs/BuyerStreamingReplyPipeline.cs")
 
+    assert "TryResolveV2OfflineFallback(" in reply
+    assert '"Knowledge V2 AI故障兜底"' in reply
+    assert "&& !string.IsNullOrWhiteSpace(offline)" in reply
+    assert "PreSendAnswerValidator.Validate(" in read("src/Bot/ChromeNs/ReplyDeduplicationService.cs")
+    assert "knowledgeV2Result == null ? null : knowledgeV2Result.OfflineFallbackDecision" in pipeline
+    assert "KnowledgeV2Decision OfflineFallbackDecision" in runtime
 
-def test_ai_failure_answer_is_replaced_before_production_error_gate_and_is_source_tracked():
-    reply = read("src/Bot/ChromeNs/ReplyDeduplicationService.cs")
-    qn = read("src/Bot/ChromeNs/QN.cs")
+def test_ai_failure_fallback_is_exact_shop_scoped_and_rejects_stale_or_withdrawn_v2_answers():
+    source = read("src/Bot/ChromeNs/BuyerStreamingReplyPipeline.cs")
+    method = source[
+        source.index("private static string TryResolveV2OfflineFallback"):
+        source.index("private static bool IsRetryableStreamError")
+    ]
 
-    assert "AiFailureKnowledgeFallbackService.TryResolve" in reply
-    assert '"AI异常本地兜底"' in reply
-    assert "&& !aiFailureFallbackApplied" in reply
-    assert "PreSendAnswerValidator.Validate" in reply
-
-    distinct_pos = qn.index("ReplyDeduplicationService.EnsureDistinct")
-    error_gate_pos = qn.index('answer.StartsWith("错误："', distinct_pos)
-    send_pos = qn.index("SendTextWithRetryAsync", error_gate_pos)
-    assert distinct_pos < error_gate_pos < send_pos
-
-
-def test_ai_failure_fallback_is_current_shop_scoped_and_blocks_withdrawn_answers():
-    source = read("src/Bot/ChromeNs/ReplyDeduplicationService.cs")
-
-    assert "ShopContextLocator.ResolveRuntimeBySellerNick(seller)" in source
-    assert "using (ShopSettingsScope.Enter(shop))" in source
-    assert "BotFeatureStore.GetKnowledgeBase()" in source
-    assert "ConversationContextStore.IsWithdrawnAnswer(seller, buyer, answer)" in source
-    assert "最高匹配不足50%" in source
-
-
+    assert "ShopContextLocator.ResolveRuntimeByShopKey(shopKey)" in method
+    assert "shop.ShopKey, shopKey.Trim(), StringComparison.Ordinal" in method
+    assert "shop.SellerNick, (seller ?? string.Empty).Trim(), StringComparison.Ordinal" in method
+    assert "KnowledgeEngineV2Service.IsEnabled(seller)" in method
+    assert "KnowledgeEngineV2Service.IsSnapshotReady(seller)" in method
+    assert "KnowledgeEngineV2Service.Resolve(seller, buyer, question)" in method
+    assert "latestMatch.Record.Id, priorMatch.Record.Id, StringComparison.Ordinal" in method
+    assert "KnowledgeV2AuthorityPolicy.IsProductionApproved(persisted)" in method
+    assert "ConversationContextStore.IsWithdrawnAnswer(seller, buyer, answer)" in method
+    assert "KnowledgeEngineV2Repository.LoadAll(seller)" in method
+    assert "BotFeatureStore.GetKnowledgeBase()" not in method
 
 def test_streaming_reply_retries_only_transient_provider_failures_within_generation_budget():
     source = read("src/Bot/ChromeNs/BuyerStreamingReplyPipeline.cs")
@@ -95,20 +105,26 @@ def test_smart_reply_circuit_breaker_is_shop_scoped_and_has_a_single_half_open_p
     assert "burst.ShopKey" in source
 
 
-def test_streaming_reply_circuit_open_and_ai_failure_only_use_non_withdrawn_safe_local_knowledge():
+def test_streaming_reply_circuit_open_and_ai_failure_only_use_revalidated_v2_approved_knowledge():
     source = read("src/Bot/ChromeNs/BuyerStreamingReplyPipeline.cs")
     service = source[
         source.index("internal static class StreamingBuyerAnswerService"):
     ]
-    assert "CanUseOfflineKnowledgeFallback(plan)" in service
-    assert "ConversationContextStore.IsWithdrawnAnswer(seller, buyer, safeFallback)" in service
-    assert "AI熔断离线安全兜底" in service
-    assert "已阻止自动发送并建议转人工" in service
-    assert "ConversationContextStore.IsWithdrawnAnswer(seller, buyer, directAnswer)" in service
+    fallback = service[
+        service.index("private static string TryResolveV2OfflineFallback"):
+        service.index("private static bool IsRetryableStreamError")
+    ]
 
+    assert '"shop_ai_circuit_open"' in service
+    assert '"ai_upstream_exhausted"' in service
+    assert '"no_enabled_ai_endpoint"' in service
+    assert "KnowledgeV2AuthorityPolicy.IsProductionApproved" in fallback
+    assert "latest.CanDirectReply" in fallback
+    assert "ConversationContextStore.IsWithdrawnAnswer(seller, buyer, answer)" in fallback
+    assert "string.IsNullOrWhiteSpace(approvedDecision.ConditionalAdviceKey)" in fallback
+    assert "BotFeatureStore.GetKnowledgeBase()" not in fallback
 
-
-def test_pre_send_dedup_requires_verified_shop_scope_before_knowledge_or_ai_fallback():
+def test_pre_send_dedup_requires_verified_shop_scope_and_uses_v2_evidence_only():
     source = read("src/Bot/ChromeNs/ReplyDeduplicationService.cs")
     start = source.index(
         "public static ReplyDeduplicationResult EnsureDistinct(\n"
@@ -119,11 +135,13 @@ def test_pre_send_dedup_requires_verified_shop_scope_before_knowledge_or_ai_fall
         "            CancellationToken"
     )
     preserve = source.index("if (preserveTrustedAnswer)", start)
-    fallback = source.index("AiFailureKnowledgeFallbackService.TryResolve(", start)
     scope_guard = source[start:preserve]
 
     assert "ShopContextLocator.ResolveCurrentOrBySellerNick(seller)" in scope_guard
     assert "using (ShopSettingsScope.Enter(resolvedShop))" in scope_guard
     assert "return EnsureDistinct(seller, buyer, question, candidateAnswer," in scope_guard
     assert "return BuildBlockedResult(" in scope_guard
-    assert start < preserve < fallback
+    assert "approvedV2ContextEvidence" in source
+    assert "AiFailureKnowledgeFallbackService.TryResolve" not in source
+    assert "BotFeatureStore.GetKnowledgeBase()" not in source
+
