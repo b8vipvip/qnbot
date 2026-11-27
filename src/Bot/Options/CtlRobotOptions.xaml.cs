@@ -14,6 +14,7 @@ using Newtonsoft.Json;
 using Newtonsoft.Json.Linq;
 using Bot.ChromeNs;
 using Bot.Knowledge;
+using Bot.ShopScope;
 using BotLib;
 
 namespace Bot.Options
@@ -1806,7 +1807,20 @@ namespace Bot.ChromeNs
 
         public static string BuildPromptAddon(string question)
         {
-            return BuildPromptAddon(question, true);
+            // One-argument callers must fail closed: without an exact active shop
+            // scope, do not inject legacy KB snippets into an AI prompt.
+            var includeLegacyKnowledge = false;
+            try
+            {
+                var currentScope = ShopSettingsScope.Current;
+                if (currentScope != null)
+                    includeLegacyKnowledge = !KnowledgeEngineV2Service.IsEnabled(currentScope.SellerNick);
+            }
+            catch
+            {
+                includeLegacyKnowledge = false;
+            }
+            return BuildPromptAddon(question, includeLegacyKnowledge);
         }
 
         public static string BuildPromptAddon(string question, bool includeKnowledgeBase)
