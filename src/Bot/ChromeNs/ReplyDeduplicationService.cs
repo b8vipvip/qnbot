@@ -86,41 +86,14 @@ namespace Bot.ChromeNs
                 };
             }
 
-            string aiFailureFallbackAnswer;
-            KnowledgeBaseEntry aiFailureFallbackKnowledge;
-            double aiFailureFallbackScore;
             cancellationToken.ThrowIfCancellationRequested();
-            var aiFailureFallbackApplied = AiFailureKnowledgeFallbackService.TryResolve(
-                seller,
-                buyer,
-                question,
-                candidateAnswer,
-                out aiFailureFallbackAnswer,
-                out aiFailureFallbackKnowledge,
-                out aiFailureFallbackScore);
-            if (aiFailureFallbackApplied)
-            {
-                candidateAnswer = aiFailureFallbackAnswer;
-                KnowledgeLearningService.RegisterAnswerSource(
-                    seller, buyer, question, candidateAnswer, "AI异常本地兜底");
-            }
-
-            var knowledge = aiFailureFallbackKnowledge
-                ?? ResolveKnowledge(seller, buyer, question, candidateAnswer);
-            var validationRegenerated = aiFailureFallbackApplied;
-            var validationSource = aiFailureFallbackApplied ? "AI异常本地兜底" : string.Empty;
-            // 50%是故障时的应急阈值，低于正常知识直答置信度；即使命中本地知识，
-            // 仍强制走一次发送前事实/风险校验，不能因为答案来自知识库就跳过安全检查。
-            var exactTrustedKnowledge = knowledge != null
-                && SameAnswer(knowledge.Answer, candidateAnswer)
-                && !aiFailureFallbackApplied;
-
-            if (!exactTrustedKnowledge
-                && !string.IsNullOrWhiteSpace(candidateAnswer)
+            var validationRegenerated = false;
+            var validationSource = string.Empty;
+            if (!string.IsNullOrWhiteSpace(candidateAnswer)
                 && !candidateAnswer.StartsWith("错误：", StringComparison.Ordinal))
             {
                 var validation = PreSendAnswerValidator.Validate(
-                    seller, buyer, question, candidateAnswer, knowledge, false, approvedV2ContextEvidence);
+                    seller, buyer, question, candidateAnswer, false, approvedV2ContextEvidence);
                 ReplyQualityMetricsService.RecordValidation(
                     validation.Action, validation.Issues, false);
                 if (validation.Action == AnswerValidationAction.Manual)
@@ -129,7 +102,7 @@ namespace Bot.ChromeNs
                 {
                     cancellationToken.ThrowIfCancellationRequested();
                     var repaired = RegenerateInvalidAnswer(
-                        seller, buyer, question, candidateAnswer, knowledge, validation,
+                        seller, buyer, question, candidateAnswer, validation,
                         approvedV2ContextEvidence, cancellationToken);
                     repaired = BotFeatureStore.ApplyOutputPolicy(repaired);
                     if (string.IsNullOrWhiteSpace(repaired)
@@ -140,7 +113,7 @@ namespace Bot.ChromeNs
                     }
 
                     var secondValidation = PreSendAnswerValidator.Validate(
-                        seller, buyer, question, repaired, knowledge, true, approvedV2ContextEvidence);
+                        seller, buyer, question, repaired, true, approvedV2ContextEvidence);
                     ReplyQualityMetricsService.RecordValidation(
                         secondValidation.Action, secondValidation.Issues, true);
                     if (secondValidation.Action != AnswerValidationAction.Pass)
@@ -176,11 +149,10 @@ namespace Bot.ChromeNs
                 || !SameAnswer(previousAnswer, result.Answer)) return result;
 
             ReplyQualityMetricsService.RecordDuplicateRewrite();
-            knowledge = knowledge ?? ResolveKnowledge(seller, buyer, question, result.Answer);
             cancellationToken.ThrowIfCancellationRequested();
             var regenerated = result.Regenerated
                 ? BuildSafeFallback(question)
-                : Regenerate(seller, buyer, question, previousAnswer, knowledge, cancellationToken);
+                : Regenerate(seller, buyer, question, previousAnswer, approvedV2ContextEvidence, cancellationToken);
             if (string.IsNullOrWhiteSpace(regenerated)
                 || regenerated.StartsWith("错误：", StringComparison.Ordinal)
                 || SameAnswer(previousAnswer, regenerated))
@@ -201,7 +173,7 @@ namespace Bot.ChromeNs
             result.PreviousAnswer = previousAnswer;
             result.Source = result.Regenerated
                 ? "AI校验重答+重复兜底"
-                : (knowledge == null ? "AI重答" : "本地知识库重答");
+                : "AI重答（Knowledge V2上下文约束）";
             result.Regenerated = true;
             KnowledgeLearningService.RegisterAnswerSource(
                 seller, buyer, question,
@@ -312,46 +284,11 @@ namespace Bot.ChromeNs
             return true;
         }
 
-        private static KnowledgeBaseEntry ResolveKnowledge(
-            string seller,
-            string buyer,
-            string question,
-            string candidateAnswer)
-        {
-            // In V2 mode, a legacy mirror hit is not proof that V2 approved this record
-            // for the current query. Contextual AI answers are validated against the
-            // explicit V2 evidence passed by the runtime bridge instead.
-            try
-            {
-                if (KnowledgeEngineV2Service.IsEnabled(seller)) return null;
-            }
-            catch
-            {
-                return null;
-            }
-
-            var answerKey = Canonical(candidateAnswer);
-            var knowledge = BotFeatureStore.GetKnowledgeBase()
-                .FirstOrDefault(x => x != null
-                    && x.Enabled
-                    && !string.IsNullOrWhiteSpace(x.Answer)
-                    && !KnowledgeV2AuthorityPolicy.IsUnapprovedLegacyLearningEntry(x)
-                    && !ShopReceptionPolicy.IsQuarantined(seller, x.Id, x.Title, x.Answer)
-                    && (Canonical(x.Answer) == answerKey
-                        || Canonical(BotFeatureStore.ApplyOutputPolicy(x.Answer)) == answerKey));
-            if (knowledge != null) return knowledge;
-            KnowledgeBaseEntry matched;
-            double score;
-            return KnowledgeLearningService.TryFindLocalAnswer(
-                seller, buyer, question, out matched, out score) ? matched : null;
-        }
-
         private static string RegenerateInvalidAnswer(
             string seller,
             string buyer,
             string question,
             string invalidAnswer,
-            KnowledgeBaseEntry knowledge,
             AnswerValidationResult validation,
             string approvedV2ContextEvidence,
             CancellationToken cancellationToken)
@@ -360,7 +297,7 @@ namespace Bot.ChromeNs
             {
                 cancellationToken.ThrowIfCancellationRequested();
                 var timeline = ConversationContextStore.BuildTimelineText(seller, buyer, question, 12);
-                var evidence = PreSendAnswerValidator.BuildEvidenceText(knowledge);
+                var evidence = PreSendAnswerValidator.BuildEvidenceText(approvedV2ContextEvidence);
                 if (!string.IsNullOrWhiteSpace(approvedV2ContextEvidence))
                     evidence = (evidence + "\n" + approvedV2ContextEvidence).Trim();
                 var messages = new JArray
@@ -406,16 +343,16 @@ namespace Bot.ChromeNs
             string buyer,
             string question,
             string previousAnswer,
-            KnowledgeBaseEntry knowledge,
+            string approvedV2ContextEvidence,
             CancellationToken cancellationToken)
         {
             try
             {
                 cancellationToken.ThrowIfCancellationRequested();
                 var timeline = ConversationContextStore.BuildTimelineText(seller, buyer, question, 12);
-                var factBoundary = knowledge == null
-                    ? "上一轮答案是当前唯一事实边界，不得增加新的商品承诺或结论。"
-                    : "知识库问题：" + knowledge.Title + "\n知识库答案：" + knowledge.Answer;
+                var factBoundary = string.IsNullOrWhiteSpace(approvedV2ContextEvidence)
+                    ? "未提供可确认的 Knowledge V2 事实；上一轮答案仅用于理解上下文，不得增加新的商品承诺或结论。"
+                    : "【Knowledge V2已批准上下文证据】\n" + approvedV2ContextEvidence;
                 var messages = new JArray
                 {
                     new JObject
@@ -529,218 +466,6 @@ namespace Bot.ChromeNs
                 DeliveredAnswerStamp ignored;
                 LastDelivered.TryRemove(key, out ignored);
             }
-        }
-    }
-
-    internal static class AiFailureKnowledgeFallbackService
-    {
-        internal const double MinimumFallbackScore = 0.50;
-
-        public static bool TryResolve(
-            string seller,
-            string buyer,
-            string question,
-            string aiError,
-            out string answer,
-            out KnowledgeBaseEntry knowledge,
-            out double score)
-        {
-            answer = string.Empty;
-            knowledge = null;
-            score = 0;
-
-            var current = ShopSettingsScope.Current;
-            if (current == null && string.IsNullOrWhiteSpace(seller))
-                return TryResolveCore(seller, buyer, question, aiError, out answer, out knowledge, out score);
-
-            ShopContext shop;
-            try { shop = ShopContextLocator.ResolveCurrentOrBySellerNick(seller); }
-            catch
-            {
-                // A nickname that is missing, ambiguous, or mismatched cannot authorize
-                // access to a legacy/global knowledge base.
-                return false;
-            }
-            if (shop == null || string.IsNullOrWhiteSpace(shop.ShopKey)) return false;
-            if (current != null
-                && !string.Equals(current.ShopKey, shop.ShopKey, StringComparison.Ordinal))
-                return false;
-
-            using (ShopSettingsScope.Enter(shop))
-            {
-                return TryResolveCore(seller, buyer, question, aiError, out answer, out knowledge, out score);
-            }
-        }
-
-        private static bool TryResolveCore(
-            string seller,
-            string buyer,
-            string question,
-            string aiError,
-            out string answer,
-            out KnowledgeBaseEntry knowledge,
-            out double score)
-        {
-            answer = string.Empty;
-            knowledge = null;
-            score = 0;
-            question = (question ?? string.Empty).Trim();
-            if (string.IsNullOrWhiteSpace(question)) return false;
-
-            // The V2 runtime already decided whether a local record is applicable and
-            // safe for this query. A legacy 50% outage fallback must never undo that decision.
-            try
-            {
-                if (KnowledgeEngineV2Service.IsEnabled(seller))
-                {
-                    Log.Info("Knowledge V2已启用，拒绝legacy AI异常知识兜底: seller=" + seller);
-                    return false;
-                }
-            }
-            catch (Exception ex)
-            {
-                Log.ErrorWithMaxCount("无法确认Knowledge V2权威状态，拒绝legacy AI异常知识兜底: " + ex.Message, 10);
-                return false;
-            }
-
-            if (!IsAuthenticatedControlPlaneUpstreamFailure(aiError)) return false;
-
-            var policy = BotFeatureStore.GetMessagePolicy();
-            if (policy == null || !policy.EnableKnowledgeBase)
-            {
-                Log.Info("AI上游异常，但本店知识库未启用，不能执行50%本地兜底。seller=" + seller + ", buyer=" + buyer);
-                return false;
-            }
-
-            ConversationContextTurn latestAgentPrompt = null;
-            if (IsShortContextReply(question))
-            {
-                var turns = ConversationContextStore.GetRecentTurns(seller, buyer, question, 8);
-                latestAgentPrompt = turns.LastOrDefault(x => x != null
-                    && x.Role == "assistant"
-                    && !string.IsNullOrWhiteSpace(x.Text));
-            }
-
-            foreach (var item in BotFeatureStore.GetKnowledgeBase()
-                .Where(x => x != null && x.Enabled && !string.IsNullOrWhiteSpace(x.Answer))
-                .Where(x => !KnowledgeV2AuthorityPolicy.IsUnapprovedLegacyLearningEntry(x))
-                .Where(x => !ShopReceptionPolicy.IsQuarantined(seller, x.Id, x.Title, x.Answer)))
-            {
-                var currentScore = Score(item, question, false);
-                if (latestAgentPrompt != null)
-                {
-                    currentScore = Math.Max(currentScore, Score(item, latestAgentPrompt.Text, true));
-                }
-                if (currentScore > score)
-                {
-                    score = currentScore;
-                    knowledge = item;
-                }
-            }
-
-            if (knowledge == null || score < MinimumFallbackScore)
-            {
-                Log.Info("AI上游异常且Bot令牌已通过服务端鉴权，但本店知识库最高匹配不足50%，不自动发送。seller="
-                    + seller + ", buyer=" + buyer + ", bestScore=" + score.ToString("0.00"));
-                return false;
-            }
-
-            answer = BotFeatureStore.ApplyOutputPolicy(knowledge.Answer);
-            if (string.IsNullOrWhiteSpace(answer)
-                || ConversationContextStore.IsWithdrawnAnswer(seller, buyer, answer))
-            {
-                Log.Info("AI上游异常命中本店知识库，但答案为空或已被客服撤回，已阻止50%兜底发送。seller="
-                    + seller + ", buyer=" + buyer + ", knowledgeId=" + knowledge.Id);
-                answer = string.Empty;
-                return false;
-            }
-
-            Log.Info("AI上游异常且Bot令牌已通过服务端鉴权，启用本店知识库50%兜底。seller="
-                + seller + ", buyer=" + buyer + ", knowledgeId=" + knowledge.Id
-                + ", score=" + score.ToString("0.00"));
-            return true;
-        }
-
-        private static bool IsAuthenticatedControlPlaneUpstreamFailure(string aiError)
-        {
-            aiError = (aiError ?? string.Empty).Trim();
-            if (!aiError.StartsWith("错误：AI接口调用失败", StringComparison.Ordinal)) return false;
-            if (aiError.IndexOf("HTTP 502", StringComparison.OrdinalIgnoreCase) < 0) return false;
-            if (aiError.IndexOf("upstream_exhausted", StringComparison.OrdinalIgnoreCase) < 0) return false;
-            if (aiError.IndexOf("所有供应商、模型和请求协议均调用失败", StringComparison.Ordinal) < 0) return false;
-
-            // Control Plane 的 /v1/chat/completions 先执行 Bearer 客户端令牌鉴权，
-            // 只有鉴权通过后才会进入上游供应商路由，并以 502 + upstream_exhausted
-            // 表示“服务端可达、Bot令牌有效，但所有AI上游均失败”。
-            var controlPlaneEndpoints = AiEndpointStore.GetEnabledEndpoints()
-                .Where(x => x != null
-                    && string.Equals(x.Type, "服务端控制面", StringComparison.OrdinalIgnoreCase))
-                .ToList();
-            if (controlPlaneEndpoints.Count < 1) return false;
-
-            return controlPlaneEndpoints.Any(endpoint =>
-                string.IsNullOrWhiteSpace(endpoint.Name)
-                || aiError.IndexOf(endpoint.Name + "：", StringComparison.OrdinalIgnoreCase) >= 0);
-        }
-
-        private static bool IsShortContextReply(string value)
-        {
-            var compact = Normalize(value);
-            if (compact.Length == 0 || compact.Length > 32) return false;
-            if (compact.IndexOf('?') >= 0 || compact.IndexOf('？') >= 0) return false;
-            if (Regex.IsMatch(compact, @"^[a-z0-9@._+\-:/]+$", RegexOptions.IgnoreCase)) return true;
-            if (Regex.IsMatch(compact, @"^\d+$")) return true;
-            return compact.Length <= 8;
-        }
-
-        private static double Score(KnowledgeBaseEntry item, string query, bool contextOnly)
-        {
-            var q = KnowledgeAiService.NormalizeQuestion(query);
-            var title = KnowledgeAiService.NormalizeQuestion(item.Title);
-            if (string.IsNullOrWhiteSpace(q) || string.IsNullOrWhiteSpace(title)) return 0;
-            if (q == title) return contextOnly ? 0.91 : 1.0;
-            if (Math.Min(q.Length, title.Length) >= 4 && (q.Contains(title) || title.Contains(q)))
-                return contextOnly ? 0.87 : 0.95;
-            foreach (var keyword in SplitKeywords(item.Keywords))
-            {
-                var normalizedKeyword = KnowledgeAiService.NormalizeQuestion(keyword);
-                if (normalizedKeyword.Length >= 2 && q.Contains(normalizedKeyword))
-                    return contextOnly ? 0.85 : 0.90;
-            }
-            var similarity = BigramSimilarity(q, title);
-            if (similarity >= 0.68) return contextOnly ? 0.84 : 0.86;
-            return similarity * 0.75;
-        }
-
-        private static IEnumerable<string> SplitKeywords(string value)
-        {
-            return (value ?? string.Empty)
-                .Split(new[] { ',', '，', ';', '；', '|', ' ', '\r', '\n' }, StringSplitOptions.RemoveEmptyEntries)
-                .Select(x => x.Trim());
-        }
-
-        private static double BigramSimilarity(string a, string b)
-        {
-            var aa = Bigrams(a);
-            var bb = Bigrams(b);
-            if (aa.Count == 0 || bb.Count == 0) return 0;
-            var common = aa.Intersect(bb).Count();
-            return (2.0 * common) / (aa.Count + bb.Count);
-        }
-
-        private static HashSet<string> Bigrams(string value)
-        {
-            var set = new HashSet<string>(StringComparer.Ordinal);
-            for (var i = 0; i + 1 < (value ?? string.Empty).Length; i++)
-            {
-                set.Add(value.Substring(i, 2));
-            }
-            return set;
-        }
-
-        private static string Normalize(string value)
-        {
-            return KnowledgeAiService.NormalizeQuestion(value ?? string.Empty);
         }
     }
 
