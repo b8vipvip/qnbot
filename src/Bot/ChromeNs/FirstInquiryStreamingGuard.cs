@@ -155,8 +155,12 @@ namespace Bot.ChromeNs
             catch { return; }
             if (shop == null || !string.Equals(shop.SellerNick, seller, StringComparison.Ordinal)
                 || !IsFirstInquirySourceSessionCurrent(sourceShopKey, sourceSessionId)) return;
+            bool botEnabledForShop;
             using (ShopSettingsScope.Enter(shop, false))
+            {
                 buyer = BuyerIdentityAliasService.ResolveInternalNick(seller, buyer);
+                botEnabledForShop = Params.Robot.CanUseRobotReal;
+            }
             if (seller.Length == 0 || buyer.Length == 0 || ccode.Length == 0) return;
             string nonBuyerReason;
             if (NonBuyerConversationGuard.ShouldBlockIdentity(seller, buyer, out nonBuyerReason))
@@ -164,7 +168,7 @@ namespace Bot.ChromeNs
                 Log.Info("首条咨询快路径已拒绝非买家身份: reason=" + nonBuyerReason);
                 return;
             }
-            if (!Params.Robot.CanUseRobotReal) return;
+            if (!botEnabledForShop) return;
 
             var key = RecoveryKey(seller, buyer);
             DateTime windowStart;
