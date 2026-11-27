@@ -447,7 +447,7 @@ try {
                     .ToList();
                 if (candidates.Count == 0)
                 {
-                    _lastBusinessInboundHistoryProbeCompletedAt = DateTime.Now;
+                    PersistBusinessInboundCheckpoint(shop, DateTime.Now);
                     return;
                 }
 
@@ -455,30 +455,42 @@ try {
                 DateTime observedAt;
                 var hasObserved = _latestBuyerMessageObserved.TryGetValue(recoveryKey, out observedAt);
 
-                // Recovery must be decided by source chronology, not by a wall-clock freshness
-                // timeout. A 12-second history probe naturally runs more than two seconds after a
-                // healthy live event; treating that age as "stale" replayed already-observed messages
-                // and let the recovery bridge compete with the live path. The last live observation
-                // is the transport checkpoint. Only source messages newer than that checkpoint are
-                // eligible for replay; the normal ProcessIncomingMessageAsync path remains the sole
-                // business side-effect owner.
+                // Recovery is source-chronology based. A live-observed buyer turn remains
+                // unresolved until a seller message for that same buyer appears after it in
+                // remote history. This prevents advancing the durable checkpoint past a message
+                // whose generation/send may still be in flight when the client process exits.
                 var missedCandidates = candidates
                     .Where(message => !hasObserved
                         || IncomingMessageSafety.GetSortValue(message) > observedAt.Ticks)
                     .ToList();
-                if (missedCandidates.Count == 0)
+                var alreadyAnswered = candidates
+                    .Where(message => HasSellerReplyAfterRecoveredBuyer(
+                        message, messages, candidates, seller, buyer))
+                    .ToList();
+                var unanswered = candidates
+                    .Where(message => !alreadyAnswered.Contains(message))
+                    .ToList();
+                var missedToReplay = missedCandidates
+                    .Where(message => !alreadyAnswered.Contains(message))
+                    .ToList();
+
+                if (alreadyAnswered.Count > 0)
                 {
-                    _lastBusinessInboundHistoryProbeCompletedAt = DateTime.Now;
-                    return;
+                    Log.Info("business-inbound-recovery-skipped-already-answered: seller=" + seller
+                        + ", buyer=" + buyer + ", count=" + alreadyAnswered.Count
+                        + ", source=remote-seller-history");
                 }
 
-                Log.Info("business-event-gap-confirmed: seller=" + seller + ", buyer=" + buyer
-                    + ", transport=connected, liveCheckpoint="
-                    + (hasObserved ? observedAt.ToString("HH:mm:ss.fff") : "none")
-                    + ", recoveredCount=" + missedCandidates.Count
-                    + ", recovery=remote-history");
+                if (missedToReplay.Count > 0)
+                {
+                    Log.Info("business-event-gap-confirmed: seller=" + seller + ", buyer=" + buyer
+                        + ", transport=connected, liveCheckpoint="
+                        + (hasObserved ? observedAt.ToString("HH:mm:ss.fff") : "none")
+                        + ", recoveredCount=" + missedToReplay.Count
+                        + ", recovery=remote-history");
+                }
 
-                foreach (var message in missedCandidates)
+                foreach (var message in missedToReplay)
                 {
                     if (!ReferenceEquals(CDP, client)
                         || !server.IsAuthoritativeShopSession(shop.ShopKey, client.SessionId)) return;
@@ -497,7 +509,26 @@ try {
                         + ", key=" + messageKey + ", route=ProcessIncomingMessageAsync");
                 }
 
-                _lastBusinessInboundHistoryProbeCompletedAt = DateTime.Now;
+                if (unanswered.Count == 0)
+                {
+                    PersistBusinessInboundCheckpoint(shop, DateTime.Now);
+                }
+                else
+                {
+                    // Do not advance past an unanswered buyer turn. It may still be generating or
+                    // sending; retaining the earlier checkpoint lets a new process recover it after
+                    // restart. The 45-minute catch-up cap bounds stale replay.
+                    if (!_businessInboundCheckpointRestored)
+                    {
+                        var safeBaseline = new DateTime(threshold, DateTimeKind.Local);
+                        PersistBusinessInboundCheckpoint(shop, safeBaseline);
+                    }
+                    Log.Info("business-inbound-checkpoint-held-for-unanswered-turns: shopRef="
+                        + MyWebSocketServer.DiagnosticRef("shop", shop.ShopKey)
+                        + ", seller=" + seller + ", buyer=" + buyer
+                        + ", unansweredCount=" + unanswered.Count
+                        + ", replayedCount=" + missedToReplay.Count);
+                }
             }
             catch (Exception ex)
             {
