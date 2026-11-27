@@ -461,13 +461,22 @@ namespace Bot.ChromeNs
                 }
                 else
                 {
-                    FirstInquiryFixedReplyService.ReleaseReservation(
-                        item.SellerNick,
-                        item.BuyerNick,
-                        qn.Rpa == null
-                            ? "首条咨询固定回复发送失败"
-                            : qn.Rpa.GetSendFailureReason(),
-                        item.ShopKey);
+                    var firstSendIndeterminate = qn.Rpa != null && qn.Rpa.LastSendWasIndeterminate;
+                    if (firstSendIndeterminate)
+                    {
+                        Log.Error("旧确定性路径首条咨询发送结果不确定，保留首条资格占位等待回显核验: seller="
+                            + item.SellerNick + ", buyer=" + item.BuyerNick);
+                    }
+                    else
+                    {
+                        FirstInquiryFixedReplyService.ReleaseReservation(
+                            item.SellerNick,
+                            item.BuyerNick,
+                            qn.Rpa == null
+                                ? "首条咨询固定回复发送失败"
+                                : qn.Rpa.GetSendFailureReason(),
+                            item.ShopKey);
+                    }
                     return false;
                 }
             }
@@ -513,6 +522,9 @@ namespace Bot.ChromeNs
             }
 
             var detectedAt = item.ReceivedAt == DateTime.MinValue ? DateTime.Now : item.ReceivedAt;
+            var sendSucceeded = false;
+            var sendCancelled = false;
+            var sendFailureReason = string.Empty;
             var ctl = ResponseProgressTracker.BeginAnswer(
                 item.SellerNick,
                 item.BuyerNick,
@@ -550,6 +562,7 @@ namespace Bot.ChromeNs
                     if (!Params.Robot.CanUseRobotReal || !Params.Robot.GetIsAutoReply())
                     {
                         if (ctl != null) ctl.SetSendResult(false, "未发送：延迟期间Bot开关关闭");
+                        sendCancelled = true;
                         return false;
                     }
                     ShopContext verifiedShop;
@@ -569,6 +582,7 @@ namespace Bot.ChromeNs
                         || !currentServer.IsAuthoritativeShopSession(item.ShopKey, sourceSessionId))
                     {
                         if (ctl != null) ctl.SetSendResult(false, "未发送：延迟期间原店铺ShopKey/CDP身份已变化");
+                        sendCancelled = true;
                         Log.ErrorWithMaxCount(source + "延迟后店铺身份复核失败，已阻止跨店发送: shopRef="
                             + MyWebSocketServer.DiagnosticRef("shop", item.ShopKey)
                             + ", seller=" + item.SellerNick + ", buyer=" + item.BuyerNick, 20);
@@ -579,6 +593,7 @@ namespace Bot.ChromeNs
                     && !sessionAgent.IsCurrent(item.SellerNick, item.BuyerNick, item.SessionGeneration, item.ShopKey))
                 {
                     if (ctl != null) ctl.SetSendResult(false, "generation已失效，禁止发送迟到固定回复");
+                    sendCancelled = true;
                     Log.Info(source + "进入真实发送前generation已失效，已阻止迟到回复: seller="
                         + item.SellerNick + ", buyer=" + item.BuyerNick
                         + ", generation=" + item.SessionGeneration);
@@ -611,6 +626,13 @@ namespace Bot.ChromeNs
                 };
                 var ok = await qn.SendTextWithRetryAsync(
                     item.BuyerNick, answer, 3, generationToken, preSendGuard).ConfigureAwait(false);
+                sendSucceeded = ok;
+                sendCancelled = !ok && qn.Rpa != null && qn.Rpa.LastSendWasCancelled;
+                sendFailureReason = ok
+                    ? string.Empty
+                    : qn.Rpa == null
+                        ? "发送器不可用，未能确认实际送达状态"
+                        : qn.Rpa.GetSendFailureReason();
                 if (ok)
                 {
                     ReplyDeduplicationService.RememberDelivered(
@@ -635,7 +657,7 @@ namespace Bot.ChromeNs
                         ok,
                         ok
                             ? "已发送（" + source + "，先于消息合并，未调用AI）"
-                            : "发送失败：" + (qn.Rpa == null ? string.Empty : qn.Rpa.GetSendFailureReason()));
+                            : "发送失败：" + sendFailureReason);
                 }
                 Log.Info(
                     source + "前置真实发送完成: seller=" + item.SellerNick
@@ -644,7 +666,12 @@ namespace Bot.ChromeNs
             }
             catch (OperationCanceledException)
             {
-                if (ctl != null) ctl.SetSendResult(false, "generation已失效，固定回复发送已取消");
+                sendCancelled = qn.Rpa == null || !qn.Rpa.LastSendWasIndeterminate;
+                if (qn.Rpa != null && qn.Rpa.LastSendWasIndeterminate)
+                    sendFailureReason = qn.Rpa.GetSendFailureReason();
+                if (ctl != null) ctl.SetSendResult(false, sendCancelled
+                    ? "generation已失效，固定回复发送已取消"
+                    : "发送结果不确定，等待回显核验：" + sendFailureReason);
                 Log.Info(source + "等待发送资源/会话确认期间generation失效，已在后续UI副作用前取消: seller="
                     + item.SellerNick + ", buyer=" + item.BuyerNick
                     + ", generation=" + item.SessionGeneration);
@@ -652,6 +679,7 @@ namespace Bot.ChromeNs
             }
             catch (Exception ex)
             {
+                sendFailureReason = ex.Message;
                 if (item.SessionGeneration > 0)
                 {
                     sessionAgent.TryTransition(
@@ -671,7 +699,17 @@ namespace Bot.ChromeNs
             }
             finally
             {
-                ResponseProgressTracker.Complete(item.SellerNick, item.BuyerNick, item.ShopKey);
+                if (sendCancelled)
+                    ResponseProgressTracker.Cancel(
+                        item.SellerNick, item.BuyerNick, "确定性固定回复发送前会话门禁取消", item.ShopKey);
+                else if (sendSucceeded)
+                    ResponseProgressTracker.Complete(item.SellerNick, item.BuyerNick, item.ShopKey);
+                else
+                    ResponseProgressTracker.Fail(
+                        item.SellerNick, item.BuyerNick,
+                        source + "答案已生成，但实际发送未确认：" + (string.IsNullOrWhiteSpace(sendFailureReason)
+                            ? "发送失败或发送结果不确定"
+                            : sendFailureReason), item.ShopKey);
             }
         }
 

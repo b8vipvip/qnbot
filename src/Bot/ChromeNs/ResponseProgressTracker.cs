@@ -298,10 +298,16 @@ namespace Bot.ChromeNs
         {
             DeliveryUiEntry ui;
             if (DeliveryUi.TryRemove(DeliveryKey(seller, buyer, answer, shopKey), out ui)
-                && ui != null && ui.Control != null)
+                && ui != null)
             {
-                ui.Control.SetSendResult(true,
-                    string.IsNullOrWhiteSpace(detail) ? "已通过卖家消息回显确认真实发送" : detail);
+                // A fixed first-inquiry reservation is committed only after the send layer
+                // or watchdog has independent delivery evidence. This also covers a late echo
+                // after SendTextWithRetryAsync returned an indeterminate result.
+                if (string.Equals(ui.Source, "首条咨询固定回复", StringComparison.Ordinal))
+                    FirstInquiryFixedReplyService.MarkDelivered(seller, buyer, shopKey);
+                if (ui.Control != null)
+                    ui.Control.SetSendResult(true,
+                        string.IsNullOrWhiteSpace(detail) ? "已通过卖家消息回显确认真实发送" : detail);
             }
             BotConnectionDiagnostics.RecordSendAttempt(true,
                 string.IsNullOrWhiteSpace(detail) ? "卖家消息回显确认真实发送" : detail);

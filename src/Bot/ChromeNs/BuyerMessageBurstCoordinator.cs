@@ -300,7 +300,8 @@ namespace Bot.ChromeNs
         Consumed = 1,
         Failed = 2,
         Cancelled = 3,
-        Suppressed = 4 // Policy consumed the turn without physical delivery.
+        Suppressed = 4, // Policy consumed the turn without physical delivery.
+        Indeterminate = 5 // A physical send may have happened; never send a second answer.
     }
 
     /// <summary>
@@ -456,6 +457,8 @@ namespace Bot.ChromeNs
                         OffHoursDeliveredUntil[buyerKey] = DateTime.Now.AddMinutes(OffHoursRepeatMinutes);
                     else if (outcome == CanonicalPreMergeOutcome.Failed)
                         OffHoursDeliveredUntil[buyerKey] = DateTime.Now.AddSeconds(15);
+                    else if (outcome == CanonicalPreMergeOutcome.Indeterminate)
+                        OffHoursDeliveredUntil[buyerKey] = DateTime.Now.AddMinutes(OffHoursRepeatMinutes);
                     return outcome;
                 }
                 return CanonicalPreMergeOutcome.Consumed;
@@ -534,33 +537,51 @@ namespace Bot.ChromeNs
                     var firstFailureReason = qn.Rpa == null
                         ? "首条咨询固定回复发送失败"
                         : qn.Rpa.GetSendFailureReason();
-                    FirstInquiryFixedReplyService.ReleaseReservation(
-                        item.SellerNick,
-                        item.BuyerNick,
-                        firstFailureReason, item.ShopKey);
+                    var sendIsIndeterminate = firstOutcome == CanonicalPreMergeOutcome.Indeterminate;
+                    if (sendIsIndeterminate)
+                    {
+                        // Keep the in-flight reservation until the delivery watchdog confirms
+                        // this exact answer or the reservation expires. Releasing now allows a
+                        // later buyer fragment to trigger a duplicate first-inquiry greeting.
+                        Log.Error("首条咨询发送结果不确定，保留首条资格占位等待回显核验: seller="
+                            + item.SellerNick + ", buyer=" + item.BuyerNick
+                            + ", reason=" + firstFailureReason);
+                    }
+                    else
+                    {
+                        FirstInquiryFixedReplyService.ReleaseReservation(
+                            item.SellerNick,
+                            item.BuyerNick,
+                            firstFailureReason, item.ShopKey);
+                    }
 
                     // Policy suppression is intentional consumption, never delivery or an
                     // invitation to try a different answer for this same turn.
                     if (firstOutcome == CanonicalPreMergeOutcome.Suppressed) return firstOutcome;
 
-                    // A pre-send ShopKey/session rejection or an explicit human-takeover cancellation
-                    // proves that the greeting was not sent. Continue image OCR/AI only when the
-                    // transport failed before any physical send action; an indeterminate send must
-                    // never fall through to a second answer for the same buyer turn.
-                    var sendIsIndeterminate = qn.Rpa != null && qn.Rpa.LastSendWasIndeterminate;
+                    // An indeterminate physical send or human takeover must stop this turn.
+                    // Only a verified pre-send ShopKey/session rejection can fall through to
+                    // the normal image/text route; never let an image exception bypass this gate.
+                    var humanTakeoverCancelled = firstOutcome == CanonicalPreMergeOutcome.Cancelled
+                        && qn.Rpa != null
+                        && qn.Rpa.LastSendWasCancelled
+                        && firstFailureReason.IndexOf("人工接管", StringComparison.OrdinalIgnoreCase) >= 0;
+                    if (humanTakeoverCancelled)
+                    {
+                        Log.Info("首条咨询固定回复被人工接管取消，停止本轮自动回复，不继续调用视觉/文本AI: seller="
+                            + item.SellerNick + ", buyer=" + item.BuyerNick);
+                        return firstOutcome;
+                    }
+
                     var failedBeforeSend = !sendIsIndeterminate
                         && (firstFailureReason.IndexOf(
                                 "发送ShopKey作用域确认", StringComparison.OrdinalIgnoreCase) >= 0
                             || firstFailureReason.IndexOf(
-                                "会话确认", StringComparison.OrdinalIgnoreCase) >= 0
-                            || (firstOutcome == CanonicalPreMergeOutcome.Cancelled
-                                && qn.Rpa != null
-                                && qn.Rpa.LastSendWasCancelled
-                                && firstFailureReason.IndexOf("人工接管", StringComparison.OrdinalIgnoreCase) >= 0));
-                    var isImageQuestion = string.Equals(question, "[图片]", StringComparison.Ordinal);
-                    if (!failedBeforeSend && !isImageQuestion) return firstOutcome;
+                                "会话确认", StringComparison.OrdinalIgnoreCase) >= 0);
+                    if (!failedBeforeSend) return firstOutcome;
 
-                    Log.Info("首条咨询固定回复未确认送达，已释放首条资格并继续当前消息的后续视觉理解/AI: seller="
+                    var isImageQuestion = string.Equals(question, "[图片]", StringComparison.Ordinal);
+                    Log.Info("首条咨询固定回复在物理发送前被店铺/会话门禁拒绝，已释放首条资格并继续当前消息的后续视觉理解/AI: seller="
                         + item.SellerNick + ", buyer=" + item.BuyerNick
                         + ", image=" + isImageQuestion + ", reason=" + firstFailureReason);
                 }
@@ -657,7 +678,10 @@ namespace Bot.ChromeNs
             cancellationToken.ThrowIfCancellationRequested();
             var detectedAt = item.ReceivedAt == DateTime.MinValue ? DateTime.Now : item.ReceivedAt;
             var sendCancelled = false;
+            var sendSucceeded = false;
+            var physicalSendAttempted = false;
             var policySuppressed = false;
+            var sendFailureReason = string.Empty;
             var ctl = ResponseProgressTracker.BeginAnswer(
                 item.SellerNick, item.BuyerNick, item.DisplayText, detectedAt, item.ShopKey);
             try
@@ -733,9 +757,16 @@ namespace Bot.ChromeNs
                             + ", reason=" + relevanceReason);
                     return shouldSend;
                 };
+                physicalSendAttempted = true;
                 var ok = await qn.SendTextWithRetryAsync(
                     item.BuyerNick, answer, 3, cancellationToken, preSendGuard).ConfigureAwait(false);
+                sendSucceeded = ok;
                 sendCancelled = !ok && qn.Rpa != null && qn.Rpa.LastSendWasCancelled;
+                sendFailureReason = ok
+                    ? string.Empty
+                    : qn.Rpa == null
+                        ? "发送器不可用，未能确认实际送达状态"
+                        : qn.Rpa.GetSendFailureReason();
                 if (!ok && policySuppressed)
                 {
                     sendCancelled = true;
@@ -750,35 +781,52 @@ namespace Bot.ChromeNs
                         ? "已发送（" + source + "，由统一买家生命周期前置处理）"
                         : sendCancelled
                             ? "未发送：人工接管或发送前会话门禁已取消"
-                            : "发送失败：" + (qn.Rpa == null ? string.Empty : qn.Rpa.GetSendFailureReason()));
+                            : "发送失败：" + sendFailureReason);
                 Log.Info(source + "前置真实发送完成: seller=" + item.SellerNick
                     + ", buyer=" + item.BuyerNick + ", success=" + ok + ", cancelled=" + sendCancelled);
                 return ok
                     ? CanonicalPreMergeOutcome.Consumed
                     : sendCancelled
                         ? CanonicalPreMergeOutcome.Cancelled
-                        : CanonicalPreMergeOutcome.Failed;
+                        : qn.Rpa != null && qn.Rpa.LastSendWasIndeterminate
+                            ? CanonicalPreMergeOutcome.Indeterminate
+                            : CanonicalPreMergeOutcome.Failed;
             }
             catch (OperationCanceledException)
             {
+                if (physicalSendAttempted && qn.Rpa != null && qn.Rpa.LastSendWasIndeterminate)
+                {
+                    sendFailureReason = qn.Rpa.GetSendFailureReason();
+                    if (ctl != null) ctl.SetSendResult(false, "发送结果不确定，等待回显核验：" + sendFailureReason);
+                    return CanonicalPreMergeOutcome.Indeterminate;
+                }
                 sendCancelled = true;
                 if (ctl != null) ctl.SetSendResult(false, "generation已失效，固定回复发送已取消");
                 return CanonicalPreMergeOutcome.Cancelled;
             }
             catch (Exception ex)
             {
+                sendFailureReason = ex.Message;
                 if (ctl != null) ctl.SetSendResult(false, "发送失败：" + ex.Message);
                 Log.ErrorWithMaxCount(source + "前置发送异常: seller=" + item.SellerNick
                     + ", buyer=" + item.BuyerNick + ", error=" + ex.Message, 20);
-                return CanonicalPreMergeOutcome.Failed;
+                return physicalSendAttempted && qn.Rpa != null && qn.Rpa.LastSendWasIndeterminate
+                    ? CanonicalPreMergeOutcome.Indeterminate
+                    : CanonicalPreMergeOutcome.Failed;
             }
             finally
             {
                 if (sendCancelled)
                     ResponseProgressTracker.Cancel(
                         item.SellerNick, item.BuyerNick, "固定回复发送前会话门禁取消", item.ShopKey);
-                else
+                else if (sendSucceeded)
                     ResponseProgressTracker.Complete(item.SellerNick, item.BuyerNick, item.ShopKey);
+                else
+                    ResponseProgressTracker.Fail(
+                        item.SellerNick, item.BuyerNick,
+                        source + "答案已生成，但实际发送未确认：" + (string.IsNullOrWhiteSpace(sendFailureReason)
+                            ? "发送失败或发送结果不确定"
+                            : sendFailureReason), item.ShopKey);
             }
         }
 
@@ -1249,6 +1297,13 @@ namespace Bot.ChromeNs
                 _sessionAgent.TryTransition(
                     item.SellerNick, item.BuyerNick, item.SessionGeneration,
                     BuyerSessionAgentState.Cancelled, "canonical_pre_merge_cancelled", item.ShopKey);
+                return;
+            }
+            if (outcome == CanonicalPreMergeOutcome.Indeterminate)
+            {
+                _sessionAgent.TryTransition(
+                    item.SellerNick, item.BuyerNick, item.SessionGeneration,
+                    BuyerSessionAgentState.Failed, "canonical_pre_merge_send_indeterminate", item.ShopKey);
             }
         }
 
