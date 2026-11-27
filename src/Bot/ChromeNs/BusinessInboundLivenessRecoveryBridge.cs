@@ -305,12 +305,6 @@ try {
             var targetFound = false;
             foreach (var pair in orderedCandidates)
             {
-                if (pair.Value < buyerTime && groupItems.Count == 0)
-                {
-                    // Keep earlier fragments because the 4-second hard cap is measured from
-                    // the first message in the actual coordinator burst, not from this fragment.
-                }
-
                 if (groupItems.Count == 0)
                 {
                     groupStartedAt = pair.Value;
