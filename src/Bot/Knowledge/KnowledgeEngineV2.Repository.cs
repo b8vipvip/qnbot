@@ -1516,8 +1516,8 @@ namespace Bot.Knowledge
                 }
 
                 // Knowledge Engine V2 is the only knowledge store. A new or older V2
-                // database is initialized/upgraded in place; no KnowledgeBaseJson,
-                // legacy DTO, V1 migration, mirror or fallback is read here.
+                // database is initialized/upgraded in place; no external FAQ store,
+                // legacy DTO, migration, mirror or fallback is read here.
                 state.Db.SaveOneRecord(new KnowledgeV2MetaRow
                 {
                     Key = "schema_version",
