@@ -631,3 +631,55 @@ def test_withdrawn_image_vision_invalid_answer_fails_and_stale_sends_cancel_prog
         "var sendCancelled = !sent", 1
     )[0]
     assert "ResponseProgressTracker.Cancel(" in fallback_cancel
+
+
+def test_bot_flow_test_generation_and_send_failures_are_not_marked_completed():
+    source = read("src/Bot/ChromeNs/BotFlowTestService.cs")
+    generation = source.split('if (string.IsNullOrWhiteSpace(generated)', 1)[1].split(
+        'var outgoing = BotOutboundMessageFormatter.EnsureAiMarker', 1
+    )[0]
+    assert "ResponseProgressTracker.Fail(" in generation
+    assert "ResponseProgressTracker.Complete(" not in generation
+    assert "Bot真实流程测试答案生成失败：" in generation
+
+    terminal = source.split("var sendCancelled = !sent && (sendException is OperationCanceledException", 1)[1].split(
+        "Log.Info(\"Bot真实流程测试完成", 1
+    )[0]
+    assert "if (sendCancelled)" in terminal
+    assert "ResponseProgressTracker.Cancel(" in terminal
+    assert "else if (sent)" in terminal
+    assert "ResponseProgressTracker.Complete(" in terminal
+    assert "ResponseProgressTracker.Fail(" in terminal
+    assert "Bot真实流程测试答案已生成，但实际发送未确认：" in terminal
+    assert "var sendFailureReason = sendException != null" in terminal
+
+
+def test_bot_flow_test_runs_generation_and_send_inside_the_verified_shop_scope_and_contains_exceptions():
+    source = read("src/Bot/ChromeNs/BotFlowTestService.cs")
+    generation = source.split("string generated;", 1)[1].split(
+        "if (string.IsNullOrWhiteSpace(generated)", 1
+    )[0]
+    assert "using (ShopSettingsScope.Enter(shop))" in generation
+    assert "await Task.Run(() => MyOpenAI.GetAnswer(" in generation
+    assert "catch (Exception ex)" in generation
+    assert "ResponseProgressTracker.Fail(" in generation
+
+    send = source.split("var sent = false;", 1)[1].split(
+        "var detail = sent", 1
+    )[0]
+    assert "using (ShopSettingsScope.Enter(shop))" in send
+    assert "await qn.SendTextWithRetryAsync(candidate.Buyer, outgoing, 1)" in send
+    assert "catch (Exception ex)" in send
+    assert "sendException is OperationCanceledException" in send
+    assert "sendFailureReason = sendException != null" in send
+
+
+def test_bot_flow_test_reads_bot_master_switch_only_after_entering_verified_shop_scope():
+    source = read("src/Bot/ChromeNs/BotFlowTestService.cs")
+    shop = source.index("var qn = QN.FindExistingByShopKey(shopKey);")
+    scope = source.index("using (ShopSettingsScope.Enter(shop, false))", shop)
+    master = source.index("Params.Robot.CanUseRobotReal", scope)
+    generation = source.index("using (ShopSettingsScope.Enter(shop))", master)
+    assert shop < scope < master < generation
+    assert "if (!Params.Robot.CanUseRobotReal)" in source
+    assert "目标店铺的Bot总开关已停用" in source

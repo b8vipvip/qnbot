@@ -1266,7 +1266,7 @@ namespace Bot.ChromeNs
             ResponseProgressTracker.ObserveQuestion(sellerNick, buyerNick, displayQuestion, detectedAt, shopKey);
             if (visionDecision.Kind == VisionDecisionKind.Text)
             {
-                BotFlowTestService.RecordCandidate(sellerNick, buyerNick, displayQuestion, detectedAt);
+                BotFlowTestService.RecordCandidate(sellerNick, buyerNick, displayQuestion, detectedAt, shopKey);
             }
             Log.Info("买家消息已识别并展示: seller=" + sellerNick + ", buyer=" + buyerNick
                 + ", detectedAt=" + detectedAt.ToString("HH:mm:ss.fff") + ", question=" + displayQuestion);

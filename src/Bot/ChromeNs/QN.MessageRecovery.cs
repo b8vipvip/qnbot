@@ -562,7 +562,7 @@ namespace Bot.ChromeNs
             ResponseProgressTracker.ObserveQuestion(sellerNick, buyerNick, displayQuestion, detectedAt, shopKey);
             if (visionDecision.Kind == VisionDecisionKind.Text)
             {
-                BotFlowTestService.RecordCandidate(sellerNick, buyerNick, displayQuestion, detectedAt);
+                BotFlowTestService.RecordCandidate(sellerNick, buyerNick, displayQuestion, detectedAt, shopKey);
             }
             Log.Info("后台补偿买家消息已进入权威回复队列: seller=" + sellerNick + ", buyer=" + buyerNick
                 + ", detectedAt=" + detectedAt.ToString("HH:mm:ss.fff") + ", question=" + displayQuestion
