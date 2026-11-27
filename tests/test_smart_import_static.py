@@ -58,8 +58,8 @@ def test_error_classification_and_cancellation_sources_are_owned_by_v2_import_se
     assert "V2 JSON解析失败" in service
 
 def test_json_fence_and_truncated_json_handling_are_shared_by_v2_ai_import():
-    ai = read("src/Bot/Knowledge/KnowledgeAiService.cs")
-    smart = read("src/Bot/Knowledge/KnowledgeV2SmartImportService.cs")
+    ai = (ROOT / "src/Bot/Knowledge/KnowledgeAiService.cs").read_text(encoding="utf-8")
+    smart = (ROOT / "src/Bot/Knowledge/KnowledgeV2SmartImportService.cs").read_text(encoding="utf-8")
 
     assert "StripFence" in ai
     assert "StripFence" in smart or "KnowledgeAiService.ParseAiKnowledgeResult" in smart
