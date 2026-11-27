@@ -240,11 +240,7 @@ namespace Bot.ChromeNs
             try
             {
                 var turns = ConversationContextStore.GetRecentTurns(seller, buyer, question, 12);
-                var includeLegacyKnowledgeEntities = false;
-                try { includeLegacyKnowledgeEntities = !KnowledgeEngineV2Service.IsEnabled(seller); }
-                catch { includeLegacyKnowledgeEntities = false; }
-                return ConversationStateService.Build(
-                    seller, buyer, question, turns, includeLegacyKnowledgeEntities);
+                return ConversationStateService.Build(seller, buyer, question, turns);
             }
             catch
             {
