@@ -55,7 +55,6 @@ namespace Bot.Knowledge
             EnsureMigrated(shop, state);
             NormalizeForSave(record);
             lock (state.Sync) state.Db.SaveOneRecord(ToRow(record));
-            MirrorOneToLegacy(shop, record);
             KnowledgeEngineV2Service.ApplyRecordUpdate(seller, record);
         }
 
@@ -244,7 +243,6 @@ namespace Bot.Knowledge
                         || !string.Equals(readback.Status, "active", StringComparison.OrdinalIgnoreCase))
                         throw new InvalidDataException("Knowledge V2人工直答写入后回读校验失败。");
                 }
-                MirrorOneToLegacy(shop, record);
                 KnowledgeEngineV2Service.ApplyRecordUpdate(seller, record);
                 string error;
                 KnowledgeEngineV2GovernanceAuditService.TryAppendAction(
@@ -401,7 +399,7 @@ namespace Bot.Knowledge
                     }
 
                     // A previous attempt may have committed SQLite and then failed
-                    // while refreshing the legacy mirror or immutable retrieval index.
+                    // while refreshing the immutable V2 retrieval index.
                     // Idempotent retries must repair those downstream projections.
                     record = priorEvidence;
                     recoveredExisting = true;
@@ -565,8 +563,6 @@ namespace Bot.Knowledge
                 savedKnowledgeId = record.Id;
                 }
             }
-
-            MirrorOneToLegacy(shop, record);
             KnowledgeEngineV2Service.ApplyRecordUpdate(seller, record);
             string auditError;
             if (!KnowledgeEngineV2GovernanceAuditService.TryAppendAction(
@@ -589,7 +585,7 @@ namespace Bot.Knowledge
                     "Knowledge V2自动新增已持久化，但治理审计尚未确认；等待幂等恢复重试：" + auditFailure);
             }
             result = recoveredExisting
-                ? "该知识此前已持久化，已幂等恢复旧库镜像和Knowledge V2检索索引（知识ID：" + record.Id + "）。"
+                ? "该知识此前已持久化，已幂等恢复Knowledge V2检索索引（知识ID：" + record.Id + "）。"
                 : "AI已根据真人问答证据自动新增并发布Knowledge V2，已刷新检索索引（知识ID：" + record.Id + "）。";
             return true;
         }
@@ -784,7 +780,6 @@ namespace Bot.Knowledge
                 };
                 state.Db.SaveRecordsInTransaction(new List<object> { ToRow(applied), revision });
             }
-            MirrorOneToLegacy(shop, applied);
             KnowledgeEngineV2Service.ApplyRecordUpdate(seller, applied);
             knowledgeId = applied.Id;
             string audit;
@@ -855,12 +850,10 @@ namespace Bot.Knowledge
             }
             if (delete)
             {
-                MirrorDeleteToLegacy(shop, knowledgeId);
                 KnowledgeEngineV2Service.ApplyRecordDelete(seller, knowledgeId);
             }
             else
             {
-                MirrorOneToLegacy(shop, restore);
                 KnowledgeEngineV2Service.ApplyRecordUpdate(seller, restore);
             }
             string audit;
@@ -971,7 +964,6 @@ namespace Bot.Knowledge
                 };
                 state.Db.SaveRecordsInTransaction(new List<object> { ToRow(corrected), revision });
             }
-            MirrorOneToLegacy(shop, corrected);
             KnowledgeEngineV2Service.ApplyRecordUpdate(seller, corrected);
             string auditError;
             KnowledgeEngineV2GovernanceAuditService.TryAppendAction(
@@ -1111,8 +1103,6 @@ namespace Bot.Knowledge
                 };
                 state.Db.SaveRecordsInTransaction(new List<object> { ToRow(corrected), revision });
             }
-
-            MirrorOneToLegacy(shop, corrected);
             KnowledgeEngineV2Service.ApplyRecordUpdate(seller, corrected);
             string auditError;
             KnowledgeEngineV2GovernanceAuditService.TryAppendAction(
@@ -1175,7 +1165,6 @@ namespace Bot.Knowledge
                 };
                 state.Db.SaveRecordsInTransaction(new List<object> { ToRow(restored), rollback });
             }
-            MirrorOneToLegacy(shop, restored);
             KnowledgeEngineV2Service.ApplyRecordUpdate(seller, restored);
             string auditError;
             KnowledgeEngineV2GovernanceAuditService.TryAppendAction(
@@ -1219,7 +1208,6 @@ namespace Bot.Knowledge
                 };
                 state.Db.SaveRecordsInTransaction(new List<object> { ToRow(tombstone), revision });
             }
-            MirrorDeleteToLegacy(shop, id);
             KnowledgeEngineV2Service.ApplyRecordDelete(seller, id);
             return true;
         }
@@ -1247,7 +1235,6 @@ namespace Bot.Knowledge
                     new List<Type> { typeof(KnowledgeV2RecordRow) },
                     replacementRows);
             }
-            MirrorAllToLegacy(shop, normalized);
             KnowledgeEngineV2Service.ReplaceSnapshot(seller, normalized);
         }
 
@@ -1325,8 +1312,6 @@ namespace Bot.Knowledge
                     new List<Type> { typeof(KnowledgeV2RecordRow) },
                     replacementRows);
             }
-
-            MirrorAllToLegacy(shop,normalized);
             KnowledgeEngineV2Service.ReplaceSnapshot(seller,normalized);
             return true;
         }
@@ -1335,17 +1320,6 @@ namespace Bot.Knowledge
         {
             var shop = ResolveShopRequired(seller);
             return GetState(shop).Path;
-        }
-
-        public static void ResetFromLegacy(string seller)
-        {
-            var shop = ResolveShopRequired(seller);
-            var state = GetState(shop);
-            lock (state.Sync)
-                state.Db.ClearTable(new List<Type> { typeof(KnowledgeV2RecordRow), typeof(KnowledgeV2MetaRow) });
-            EnsureMigrated(shop, state);
-            var records = LoadAll(seller);
-            KnowledgeEngineV2Service.ReplaceSnapshot(seller, records);
         }
 
         private static RepositoryState GetState(ShopContext shop)
@@ -1376,7 +1350,7 @@ namespace Bot.Knowledge
                 var count = state.Db.ReadRecords<KnowledgeV2RecordRow>(null).Count;
                 if (schema != null && schema.Value == KnowledgeEngineV2Constants.SchemaVersion.ToString())
                 {
-                    EnsureLegacyNonProductionMirrorsDisabled(shop, state);
+                    EnsureV2CandidateStatesNormalized(state);
                     return;
                 }
 
@@ -1407,13 +1381,13 @@ namespace Bot.Knowledge
                     Key = "schema_version",
                     Value = KnowledgeEngineV2Constants.SchemaVersion.ToString()
                 });
-                EnsureLegacyNonProductionMirrorsDisabled(shop, state);
+                EnsureV2CandidateStatesNormalized(state);
             }
         }
 
-        private static void EnsureLegacyNonProductionMirrorsDisabled(ShopContext shop, RepositoryState state)
+        private static void EnsureV2CandidateStatesNormalized(RepositoryState state)
         {
-            const string markerKey = "legacy_nonproduction_mirror_version";
+            const string markerKey = "v2_candidate_state_normalized_version";
             var marker = state.Db.ReadOneRecord<KnowledgeV2MetaRow>(x => x.Key == markerKey);
             if (marker != null && string.Equals(marker.Value, "1", StringComparison.Ordinal)) return;
 
@@ -1421,61 +1395,27 @@ namespace Bot.Knowledge
                 .Select(FromRow)
                 .Where(x => x != null && !KnowledgeV2AuthorityPolicy.IsProductionApproved(x))
                 .ToList();
-            // Older migrations could write Type=learning_candidate with Status=active,
-            // or retain an AI-generated source as business_fact. Normalize every record
-            // that the current authority policy identifies as a candidate.
-            var legacyCandidatesToNormalize = nonProductionRecords
+            // Normalize historical V2 rows in-place. No legacy store is read or written.
+            var candidatesToNormalize = nonProductionRecords
                 .Where(record => KnowledgeV2AuthorityPolicy.IsCandidate(record)
                     && (!string.Equals(record.Type, "learning_candidate", StringComparison.OrdinalIgnoreCase)
                         || !string.Equals(record.Status, "candidate", StringComparison.OrdinalIgnoreCase))
                     && !string.Equals(record.Status, "disabled", StringComparison.OrdinalIgnoreCase)
                     && !string.Equals(record.Status, "deleted", StringComparison.OrdinalIgnoreCase))
                 .ToList();
-            if (legacyCandidatesToNormalize.Count > 0)
+            if (candidatesToNormalize.Count > 0)
             {
-                foreach (var record in legacyCandidatesToNormalize)
+                foreach (var record in candidatesToNormalize)
                 {
                     record.Type = "learning_candidate";
                     record.Status = "candidate";
                     record.UpdatedAt = DateTime.Now;
                 }
                 state.Db.SaveRecordsInTransaction(
-                    legacyCandidatesToNormalize.Select(record => (object)ToRow(record)).ToList());
-            }
-
-            var changed = 0;
-            if (nonProductionRecords.Count > 0)
-            {
-                using (ShopSettingsScope.Enter(shop))
-                {
-                    var legacy = BotFeatureStore.GetKnowledgeBase() ?? new List<KnowledgeBaseEntry>();
-                    foreach (var record in nonProductionRecords)
-                    {
-                        var matchingEntries = legacy.Where(entry => entry != null
-                            && ((!string.IsNullOrWhiteSpace(record.SourceId)
-                                    && string.Equals(entry.Id, record.SourceId, StringComparison.Ordinal))
-                                || (!string.IsNullOrWhiteSpace(record.Id)
-                                    && string.Equals(entry.Id, record.Id, StringComparison.Ordinal))
-                                || (string.Equals(KnowledgeEngineV2Semantics.Compact(entry.Title),
-                                        KnowledgeEngineV2Semantics.Compact(record.Title), StringComparison.Ordinal)
-                                    && string.Equals((entry.Answer ?? string.Empty).Trim(),
-                                        (record.Answer ?? string.Empty).Trim(), StringComparison.Ordinal))))
-                            .ToList();
-                        foreach (var entry in matchingEntries)
-                        {
-                            if (!entry.Enabled) continue;
-                            entry.Enabled = false;
-                            changed++;
-                        }
-                    }
-                    if (changed > 0) BotFeatureStore.SaveKnowledgeBase(legacy);
-                }
+                    candidatesToNormalize.Select(record => (object)ToRow(record)).ToList());
             }
 
             state.Db.SaveOneRecord(new KnowledgeV2MetaRow { Key = markerKey, Value = "1" });
-            if (changed > 0)
-                Log.Info("Knowledge V2已修复旧知识镜像中的非生产知识启用状态: shop="
-                    + shop.ShopKey + ", disabledLegacyEntries=" + changed);
         }
 
         private static KnowledgeV2Record CloneAndNormalize(KnowledgeV2Record source)
@@ -1658,93 +1598,6 @@ namespace Bot.Knowledge
             return values;
         }
 
-
-        private static void MirrorOneToLegacy(ShopContext shop, KnowledgeV2Record record)
-        {
-            if (shop == null || record == null) return;
-            try
-            {
-                using (ShopSettingsScope.Enter(shop))
-                {
-                    var list = BotFeatureStore.GetKnowledgeBase() ?? new List<KnowledgeBaseEntry>();
-                    var item = list.FirstOrDefault(x => x != null && string.Equals(x.Id, record.Id, StringComparison.Ordinal));
-                    if (item == null)
-                    {
-                        item = new KnowledgeBaseEntry();
-                        list.Add(item);
-                    }
-                    ApplyToLegacy(record, item);
-                    BotFeatureStore.SaveKnowledgeBase(list);
-                }
-            }
-            catch (Exception ex) { Log.ErrorWithMaxCount("V2知识镜像旧知识库失败: " + ex.Message, 10); }
-        }
-
-        private static void MirrorDeleteToLegacy(ShopContext shop, string id)
-        {
-            if (shop == null || string.IsNullOrWhiteSpace(id)) return;
-            try
-            {
-                using (ShopSettingsScope.Enter(shop))
-                {
-                    var list = BotFeatureStore.GetKnowledgeBase() ?? new List<KnowledgeBaseEntry>();
-                    list.RemoveAll(x => x != null && string.Equals(x.Id, id, StringComparison.Ordinal));
-                    BotFeatureStore.SaveKnowledgeBase(list);
-                }
-            }
-            catch (Exception ex) { Log.ErrorWithMaxCount("V2知识删除镜像旧知识库失败: " + ex.Message, 10); }
-        }
-
-        private static void MirrorAllToLegacy(ShopContext shop, List<KnowledgeV2Record> records)
-        {
-            if (shop == null) return;
-            try
-            {
-                var list = new List<KnowledgeBaseEntry>();
-                foreach (var record in records ?? new List<KnowledgeV2Record>())
-                {
-                    if (record == null) continue;
-                    var item = new KnowledgeBaseEntry();
-                    ApplyToLegacy(record, item);
-                    list.Add(item);
-                }
-                using (ShopSettingsScope.Enter(shop)) BotFeatureStore.SaveKnowledgeBase(list);
-            }
-            catch (Exception ex) { Log.ErrorWithMaxCount("V2完整知识镜像旧知识库失败: " + ex.Message, 10); }
-        }
-
-        private static void ApplyToLegacy(KnowledgeV2Record record, KnowledgeBaseEntry item)
-        {
-            item.Id = record.Id;
-            item.Enabled = KnowledgeV2AuthorityPolicy.IsProductionApproved(record);
-            item.Category = DisplayType(record.Type);
-            item.Title = record.Title ?? string.Empty;
-            item.Answer = record.Answer ?? string.Empty;
-            item.Keywords = string.Join(",", (record.Entities ?? new List<string>())
-                .Concat(record.Aliases ?? new List<string>())
-                .Where(x => !string.IsNullOrWhiteSpace(x))
-                .Distinct(StringComparer.OrdinalIgnoreCase)
-                .Take(24));
-            item.SourceType = string.IsNullOrWhiteSpace(record.SourceType) ? "KnowledgeCenterV2" : record.SourceType;
-            item.UpdatedAt = (record.UpdatedAt == DateTime.MinValue ? DateTime.Now : record.UpdatedAt).ToString("yyyy-MM-dd HH:mm:ss");
-        }
-
-        private static string DisplayType(string type)
-        {
-            switch ((type ?? string.Empty).Trim().ToLowerInvariant())
-            {
-                case "procedure": return "操作流程";
-                case "presale": return "售前规则";
-                case "order_rule": return "订单规则";
-                case "after_sale": return "售后规则";
-                case "safety_rule": return "安全边界";
-                case "fixed_reply": return "固定话术";
-                case "product_knowledge": return "商品知识";
-                case "learning_candidate": return "学习候选";
-                case "temporary": return "临时知识";
-                default: return "业务事实";
-            }
-        }
 
         private static ShopContext ResolveShopRequired(string seller)
         {
