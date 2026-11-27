@@ -15,13 +15,19 @@ namespace Bot.ChromeNs
     {
         public bool Handled { get; private set; }
         public string ContextPromptAddon { get; private set; }
+        // Only a V2 decision that already passed the direct-answer and typed
+        // evidence gates may be used if the configured AI upstream later fails.
+        public KnowledgeV2Decision OfflineFallbackDecision { get; private set; }
 
-        public static KnowledgeV2RuntimeResult Continue(string contextPromptAddon = null)
+        public static KnowledgeV2RuntimeResult Continue(
+            string contextPromptAddon = null,
+            KnowledgeV2Decision offlineFallbackDecision = null)
         {
             return new KnowledgeV2RuntimeResult
             {
                 Handled = false,
-                ContextPromptAddon = contextPromptAddon ?? string.Empty
+                ContextPromptAddon = contextPromptAddon ?? string.Empty,
+                OfflineFallbackDecision = offlineFallbackDecision
             };
         }
 
@@ -324,7 +330,7 @@ namespace Bot.ChromeNs
                 Log.Info("Knowledge Engine V2 AI优先模式：保留已批准知识作为上下文，不截断AI生成: buyer="
                     + burst.BuyerNick + ", candidates=" + decision.CandidateCount
                     + ", totalMs=" + decision.TotalMs);
-                return KnowledgeV2RuntimeResult.Continue(aiFirstContext);
+                return KnowledgeV2RuntimeResult.Continue(aiFirstContext, decision);
             }
 
             var detectedAt = burst.Items.Min(x => x.ReceivedAt);
