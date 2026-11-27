@@ -22,6 +22,11 @@ namespace Bot.ChromeNs
         private static readonly ConditionalWeakTable<QN, object> Qns = new ConditionalWeakTable<QN, object>();
         private static readonly object QnAttachSync = new object();
         private static readonly ConcurrentDictionary<string, DateTime> Reservations = new ConcurrentDictionary<string, DateTime>(StringComparer.Ordinal);
+        // An indeterminate physical send may already have reached the buyer. Keep its
+        // reservation for the full session-reset window so a duplicate inbound event cannot
+        // immediately dispatch the same returning-buyer fixed reply again.
+        private static readonly ConcurrentDictionary<string, DateTime> IndeterminateReservations =
+            new ConcurrentDictionary<string, DateTime>(StringComparer.Ordinal);
         private static Timer _timer;
         private static int _initialized;
         private static int _running;
@@ -69,12 +74,16 @@ namespace Bot.ChromeNs
                         Log.ErrorWithMaxCount("跳过异常千牛会话的回访首答订阅并继续：" + ex.Message, 10);
                     }
                 }
-                var cutoff = DateTime.Now.AddMinutes(-ReturningBuyerIdleMinutes);
+                var now = DateTime.Now;
                 foreach (var x in Reservations)
                 {
-                    if (x.Value >= cutoff) continue;
+                    var retentionMinutes = IndeterminateReservations.ContainsKey(x.Key)
+                        ? ExistingSessionResetMinutes
+                        : ReturningBuyerIdleMinutes;
+                    if (x.Value >= now.AddMinutes(-retentionMinutes)) continue;
                     DateTime ignored;
                     Reservations.TryRemove(x.Key, out ignored);
+                    IndeterminateReservations.TryRemove(x.Key, out ignored);
                 }
             }
             catch (Exception ex) { Log.ErrorWithMaxCount("回访首答检查失败：" + ex.Message, 10); }
