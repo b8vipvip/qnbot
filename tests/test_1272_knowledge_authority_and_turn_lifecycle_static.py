@@ -9,8 +9,8 @@ def read(path):
 
 def test_human_edit_is_authoritative_provenance_not_ai_classification():
     service = read("src/Bot/Knowledge/KnowledgeEngineV2.Service.Public.cs")
-    semantics = read("src/Bot/Knowledge/KnowledgeEngineV2.Semantics.cs")
     bridge = read("src/Bot/ChromeNs/KnowledgeEngineV2LearningBridge.cs")
+    repository = read("src/Bot/Knowledge/KnowledgeEngineV2.Repository.cs")
     ui = read("src/Bot/AssistWindow/Widget/Robot/CtlRobot.xaml.cs")
 
     assert "internal static class KnowledgeV2AuthorityPolicy" in bridge
@@ -18,15 +18,11 @@ def test_human_edit_is_authoritative_provenance_not_ai_classification():
     assert "ApplyHumanConfirmed(record)" in bridge
     assert 'record.Status = "active"' in bridge
     assert 'record.Type = "business_fact"' in bridge
-    from_legacy = semantics[
-        semantics.index("public static KnowledgeV2Record FromLegacy"):
-        semantics.index("public static KnowledgeV2Query Parse")
-    ]
-    assert "KnowledgeV2AuthorityPolicy.IsUnapprovedLegacyLearningEntry(entry)" in from_legacy
-    assert 'Status = isUnapprovedLearning ? "candidate" : "active"' in from_legacy
     assert "KnowledgeEngineV2Repository.TrySaveReviewedDirectAnswer(" in ui
     assert "KnowledgeLearningService.LearnAsync(e.Question, wnd.EditedAnswer" not in ui
     assert "KnowledgeV2AuthorityPolicy.IsProductionApproved" in service
+    assert 'SourceType = "manual_reviewed_direct"' in repository
+    assert "SaveRecordsInTransaction(new List<object> { ToRow(record), revision });" in repository
 
 def test_runtime_and_test_console_share_v2_authority_policy():
     service = read("src/Bot/Knowledge/KnowledgeEngineV2.Service.Public.cs")
@@ -71,14 +67,19 @@ def test_explicit_human_answer_is_saved_verbatim_without_ai_rewriting():
     assert "AnalyzeAsync" not in reviewed
     assert "record.Answer = answer;" in repository
 
-def test_v2_has_no_legacy_mirror_synchronizer_or_runtime_dual_write():
+def test_v2_has_no_legacy_mirror_migration_or_runtime_dual_write():
     bridge = read("src/Bot/ChromeNs/KnowledgeEngineV2LearningBridge.cs")
     repository = read("src/Bot/Knowledge/KnowledgeEngineV2.Repository.cs")
+    semantics = read("src/Bot/Knowledge/KnowledgeEngineV2.Semantics.cs")
+    ai = read("src/Bot/Knowledge/KnowledgeAiService.cs")
 
     assert "IsPersistedStateSynchronized" not in bridge
     assert "ShouldImportLegacyEntry" not in bridge
     assert "ApplyImportedLegacyProvenance" not in bridge
     assert "MirrorOneToLegacy" not in repository
+    assert "BotFeatureStore.GetKnowledgeBase" not in repository
     assert "BotFeatureStore.SaveKnowledgeBase" not in repository
-    assert "BotFeatureStore.TryGetKnowledgeBaseForMigration" in repository
+    assert "TryGetKnowledgeBaseForMigration" not in repository
+    assert "FromLegacy" not in semantics
+    assert "KnowledgeBaseEntry" not in ai
 
