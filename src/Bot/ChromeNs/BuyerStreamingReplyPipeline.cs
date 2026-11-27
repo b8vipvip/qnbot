@@ -1207,10 +1207,14 @@ namespace Bot.ChromeNs
                         || string.IsNullOrWhiteSpace(priorMatch.Record.Id))
                         return string.Empty;
 
-                    // Re-run the exact same V2 query after the outage is known. The
-                    // record ID and answer must still match the original approved
-                    // decision, so a changed/deleted fact cannot be sent from cache.
-                    var latest = KnowledgeEngineV2Service.Resolve(seller, buyer, question);
+                    // Re-run the exact same V2 query after the outage is known. Use
+                    // the original V2 query text rather than the AI-normalized prompt
+                    // question, so the same approved alias/intent is evaluated again.
+                    var v2Question = approvedDecision.Query == null
+                        || string.IsNullOrWhiteSpace(approvedDecision.Query.Original)
+                            ? question
+                            : approvedDecision.Query.Original;
+                    var latest = KnowledgeEngineV2Service.Resolve(seller, buyer, v2Question);
                     if (latest == null || !latest.CanDirectReply
                         || !string.IsNullOrWhiteSpace(latest.ConditionalAdviceKey)
                         || !string.Equals(latest.Answer, approvedDecision.Answer, StringComparison.Ordinal))
