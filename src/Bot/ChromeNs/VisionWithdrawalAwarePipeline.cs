@@ -650,15 +650,6 @@ namespace Bot.ChromeNs
                 else
                     ReplyDeduplicationService.RememberDelivered(
                         burst.SellerNick, burst.BuyerNick, answer, burst.ShopKey);
-                if (workflowDecision == null && string.IsNullOrWhiteSpace(result.MatchedVisualKnowledgeId))
-                {
-                    KnowledgeLearningService.QueueLearn(
-                        burst.CombinedQuestion,
-                        answer,
-                        "视觉AI",
-                        burst.SellerNick,
-                        burst.BuyerNick);
-                }
                 lifecycleLease.MarkCompleted("vision_send_completed");
             }
             else
