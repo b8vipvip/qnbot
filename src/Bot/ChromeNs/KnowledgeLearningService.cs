@@ -108,6 +108,26 @@ namespace Bot.ChromeNs
         {
             matched = null;
             score = 0;
+
+            // When Knowledge V2 is enabled it is the only authority allowed to decide
+            // whether a local record can answer directly. V2 may intentionally return
+            // Continue because of conflict, low confidence, typed-evidence requirements,
+            // or a cold index; a legacy fuzzy match here must not bypass those gates.
+            // If the exact ShopKey's V2 setting cannot be read, fail closed as well.
+            try
+            {
+                if (KnowledgeEngineV2Service.IsEnabled(seller))
+                {
+                    Log.Info("Knowledge V2已启用，跳过legacy本地直答，交由V2直答/已批准上下文决策: buyer=" + buyer);
+                    return false;
+                }
+            }
+            catch (Exception ex)
+            {
+                Log.ErrorWithMaxCount("无法确认Knowledge V2权威状态，拒绝legacy本地直答: " + ex.Message, 10);
+                return false;
+            }
+
             var policy = BotFeatureStore.GetMessagePolicy();
             if (policy == null || !policy.EnableKnowledgeBase || string.IsNullOrWhiteSpace(question)) return false;
 
