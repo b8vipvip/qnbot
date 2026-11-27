@@ -447,3 +447,75 @@ def test_legacy_local_answer_fails_closed_if_v2_authority_state_cannot_be_resolv
     assert "catch (Exception ex)" in method
     assert "无法确认Knowledge V2权威状态，拒绝legacy本地直答" in method
     assert method.index("return false;") < method.index("var policy = BotFeatureStore.GetMessagePolicy();")
+
+
+
+def test_smart_reply_router_suppresses_legacy_retrieval_when_v2_is_authoritative():
+    smart = read("src/Bot/ChromeNs/SmartReplyRouterService.cs")
+    state = read("src/Bot/ChromeNs/ConversationStateService.cs")
+    build = smart[
+        smart.index("public static async Task<SmartReplyPlan> BuildPlanAsync"):
+        smart.index("public static bool CanUseOfflineKnowledgeFallback")
+    ]
+    authority = smart[
+        smart.index("private static bool CanUseLegacyKnowledgeAuthority"):
+        smart.index("private static List<SmartKnowledgeCandidate> RetrieveCandidates")
+    ]
+
+    assert "CanUseLegacyKnowledgeAuthority(seller)" in build
+    assert "ConversationStateService.Build(" in build
+    assert "turns, allowLegacyKnowledge)" in build
+    assert "allowLegacyKnowledge" in build
+    assert "new List<SmartKnowledgeCandidate>()" in build
+    assert "allowLegacyKnowledge && !exactIndependent" in build
+    assert "KnowledgeEngineV2Service.IsEnabled(seller)" in authority
+    assert "return false;" in authority
+    assert "bool includeLegacyKnowledgeEntities = true" in state
+    assert "includeLegacyKnowledgeEntities ? ExtractKnownEntities(contextText)" in state
+
+
+def test_v2_runtime_yields_to_silence_and_manual_rules_before_local_knowledge():
+    runtime = read("src/Bot/ChromeNs/KnowledgeEngineV2RuntimeBridge.cs")
+    method = runtime[
+        runtime.index("internal static async Task<KnowledgeV2RuntimeResult> TryHandleWithContextAsync"):
+        runtime.index("internal static string BuildContextPromptAddon")
+    ]
+
+    resolve = method.index("KnowledgeEngineV2Service.Resolve(")
+    assert method.index("ReceptionFlowPolicy.TryChooseSilence") < resolve
+    assert method.index("BotFeatureStore.EvaluateAutoReplyRule(currentQuestion)") < resolve
+    assert "return KnowledgeV2RuntimeResult.Continue();" in method
+
+
+def test_legacy_ai_failure_fallback_cannot_bypass_v2_authority_or_use_unapproved_records():
+    source = read("src/Bot/ChromeNs/ReplyDeduplicationService.cs")
+    fallback = source[
+        source.index("private static bool TryResolveCore"):
+        source.index("private static bool IsAuthenticatedControlPlaneUpstreamFailure")
+    ]
+    resolver = source[
+        source.index("private static KnowledgeBaseEntry ResolveKnowledge"):
+        source.index("private static string RegenerateInvalidAnswer")
+    ]
+
+    assert "KnowledgeEngineV2Service.IsEnabled(seller)" in fallback
+    assert fallback.index("KnowledgeEngineV2Service.IsEnabled(seller)") < fallback.index("BotFeatureStore.GetKnowledgeBase()")
+    assert "KnowledgeV2AuthorityPolicy.IsUnapprovedLegacyLearningEntry(x)" in fallback
+    assert "ShopReceptionPolicy.IsQuarantined" in fallback
+    assert "KnowledgeEngineV2Service.IsEnabled(seller)" in resolver
+    assert resolver.index("KnowledgeEngineV2Service.IsEnabled(seller)") < resolver.index("BotFeatureStore.GetKnowledgeBase()")
+
+
+def test_approved_v2_context_reaches_pre_send_validation_and_one_time_regeneration():
+    pipeline = read("src/Bot/ChromeNs/BuyerStreamingReplyPipeline.cs")
+    dedup = read("src/Bot/ChromeNs/ReplyDeduplicationService.cs")
+    validator = read("src/Bot/ChromeNs/PreSendAnswerValidator.cs")
+
+    assert "knowledgeV2Result == null ? string.Empty : knowledgeV2Result.ContextPromptAddon" in pipeline
+    assert "string approvedV2ContextEvidence = null" in dedup
+    assert "PreSendAnswerValidator.Validate(" in dedup
+    assert "approvedV2ContextEvidence" in dedup
+    assert "RegenerateInvalidAnswer(" in dedup
+    assert "BuildAuthoritativeEvidence(knowledge, state, approvedV2ContextEvidence)" in validator
+    assert "HasKnowledgeContradiction(answer, knowledge, approvedV2ContextEvidence)" in validator
+    assert "KnowledgeEngineV2Service.IsEnabled(seller)" in validator
