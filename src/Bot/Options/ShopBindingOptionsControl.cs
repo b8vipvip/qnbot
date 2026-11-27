@@ -68,7 +68,7 @@ namespace Bot.Options
                     ? Visibility.Collapsed
                     : Visibility.Visible;
                 _allowNicknameFallback.IsChecked = false;
-                _knowledgeCloudSync.IsChecked = KnowledgeCloudSyncService.IsEnabledForShop(_shop);
+                _knowledgeCloudSync.IsChecked = KnowledgeV2CloudSyncService.IsEnabledForShop(_shop);
                 ResetDiagnostics();
                 SetEnabled(true);
                 RefreshTokenStatus();
@@ -100,7 +100,7 @@ namespace Bot.Options
             {
                 // Token changes are committed immediately and only through the dedicated
                 // management dialog. Saving the page must never silently replace a token.
-                KnowledgeCloudSyncService.SetEnabledForShop(
+                KnowledgeV2CloudSyncService.SetEnabledForShop(
                     _shop,
                     _knowledgeCloudSync.IsChecked == true,
                     queueCloudSync);
@@ -183,7 +183,7 @@ namespace Bot.Options
             if (_connection == null) return;
             _serverUrl.Text = _connection.GetServerUrl();
             _allowNicknameFallback.IsChecked = false;
-            _knowledgeCloudSync.IsChecked = _shop != null && KnowledgeCloudSyncService.IsEnabledForShop(_shop);
+            _knowledgeCloudSync.IsChecked = _shop != null && KnowledgeV2CloudSyncService.IsEnabledForShop(_shop);
             ResetDiagnostics();
             _status.Text = "已恢复界面内容；不会删除本店令牌或云端知识。服务端地址由程序统一提供。";
             _status.Foreground = Brushes.Gray;
@@ -528,7 +528,7 @@ namespace Bot.Options
 
                 _status.Text = "正在连接服务端并同步本店云端知识库...";
                 _status.Foreground = Brushes.SteelBlue;
-                await KnowledgeCloudSyncService.SyncNowAsync(_shop);
+                await KnowledgeV2CloudSyncService.SyncNowAsync(_shop);
                 _status.Text = "本店云端知识库同步完成。可以进入“知识库”页面核对条目；写入前的本机版本会保留在本店 backup 目录。";
                 _status.Foreground = Brushes.SeaGreen;
             }
