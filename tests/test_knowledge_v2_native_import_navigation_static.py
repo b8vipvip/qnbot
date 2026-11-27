@@ -45,7 +45,7 @@ def test_old_faq_shape_is_rejected_not_silently_promoted_by_smart_import():
     assert "缺少必需字段 title 或 answer" in service
 
 
-def test_history_result_is_written_directly_to_v2_without_legacy_delta_or_dual_write():
+def test_history_result_is_written_directly_to_v2_with_evidence_gated_publication():
     promotion = read("src/Bot/Knowledge/KnowledgeV2HistoryImportService.cs")
     history = read("src/Bot/Knowledge/ChatHistoryScanWindow.cs")
     repository = read("src/Bot/Knowledge/KnowledgeEngineV2.Repository.cs")
@@ -54,11 +54,15 @@ def test_history_result_is_written_directly_to_v2_without_legacy_delta_or_dual_w
         "KnowledgeEngineV2Semantics.NormalizeType",
         "KnowledgeEngineV2Semantics.NormalizeIntent",
         "KnowledgeEngineV2Semantics.NormalizePredicate",
-        'SourceType = "chat_history_import"',
         "KnowledgeEngineV2Repository.LoadAll",
         "KnowledgeEngineV2Repository.Save",
         "ShopContextLocator.ResolveRuntimeByShopKey(shopKey)",
         "using (ShopSettingsScope.Enter(shop))",
+        "SourceEvidenceByToken",
+        "ImportEvidenceTokens",
+        "evidenceValid",
+        "ai_auto_learned_human_evidence",
+        "chat_history_unverified_candidate",
     ]:
         assert marker in promotion
     assert "PromoteHistoryImport(_seller, _shopKey, scan.ImportResult)" in history
