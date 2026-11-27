@@ -39,7 +39,7 @@ def test_v2_cloud_conflicts_preserve_local_facts_as_disabled_review_candidates()
     assert "AddCandidate(merged, mergedIds, local, id)" in merge
 
 
-def test_v2_cloud_replacement_uses_atomic_repository_compare_and_swap():
+def test_v2_cloud_replacement_uses_atomic_repository_compare_and_swap_without_v1_mirror():
     repository = read("src/Bot/Knowledge/KnowledgeEngineV2.Repository.cs")
     method = repository[
         repository.index("internal static bool TryReplaceAllIfUnchanged"):
@@ -51,9 +51,9 @@ def test_v2_cloud_replacement_uses_atomic_repository_compare_and_swap():
     assert "if(!string.Equals(currentFingerprint,expectedFingerprint??string.Empty" in method
     assert method.index("if(!string.Equals(currentFingerprint") < method.index("state.Db.ReplaceRecordsInTransaction")
     assert "state.Db.ReplaceRecordsInTransaction" in method
-    assert "MirrorAllToLegacy(shop,normalized)" in method
     assert "KnowledgeEngineV2Service.ReplaceSnapshot(seller,normalized)" in method
-
+    assert "MirrorAllToLegacy" not in method
+    assert "BotFeatureStore.SaveKnowledgeBase" not in method
 
 def test_v2_cloud_sync_uses_same_canonical_fingerprint_for_persistence_and_compare():
     service = read("src/Bot/Knowledge/KnowledgeV2CloudSyncService.cs")
