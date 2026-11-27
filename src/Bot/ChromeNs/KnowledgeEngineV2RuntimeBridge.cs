@@ -383,6 +383,19 @@ namespace Bot.ChromeNs
                 return KnowledgeV2RuntimeResult.HandledResult();
             }
             answer = dedup.Answer;
+            string outgoingPolicyReason;
+            if (ShopReceptionPolicy.BlockOutgoing(
+                burst.SellerNick, burst.BuyerNick, burst.CombinedQuestion, answer,
+                out outgoingPolicyReason, burst.ShopKey, false))
+            {
+                if (ctl != null) ctl.SetSendResult(false, "未发送：" + outgoingPolicyReason);
+                lease.MarkCompleted("knowledge_v2_business_guard_suppressed");
+                ResponseProgressTracker.Complete(burst.SellerNick, burst.BuyerNick, burst.ShopKey);
+                Log.Info("Knowledge Engine V2本地直答被店铺出站规则阻止: buyer="
+                    + burst.BuyerNick + ", reason=" + outgoingPolicyReason);
+                return KnowledgeV2RuntimeResult.HandledResult();
+            }
+
             if (!string.IsNullOrWhiteSpace(decision.ConditionalAdviceKey)
                 && !ConditionalBusinessAdviceService.IsSafeRefundSuggestionText(answer))
             {
@@ -534,6 +547,8 @@ namespace Bot.ChromeNs
             // A passing last-mile guard means the transport may enter a send attempt.
             // If a later retry is cancelled, an earlier attempt may still have reached the buyer.
             var conditionalAdviceSendMayHaveStarted = false;
+            var outgoingPolicySuppressed = false;
+            var latestOutgoingPolicyReason = string.Empty;
             Func<bool> preSendGuard = () =>
             {
                 if (!lease.IsCurrent || lease.CancellationToken.IsCancellationRequested)
@@ -562,6 +577,15 @@ namespace Bot.ChromeNs
                 {
                     Log.Info("Knowledge Engine V2实际发送前检测到Bot开关关闭，取消旧直答: buyer="
                         + burst.BuyerNick);
+                    return false;
+                }
+                if (ShopReceptionPolicy.BlockOutgoing(
+                    burst.SellerNick, burst.BuyerNick, burst.CombinedQuestion, answer,
+                    out latestOutgoingPolicyReason, burst.ShopKey, false))
+                {
+                    outgoingPolicySuppressed = true;
+                    Log.Info("Knowledge Engine V2等待发送资源期间命中店铺出站规则，阻止发送: buyer="
+                        + burst.BuyerNick + ", reason=" + latestOutgoingPolicyReason);
                     return false;
                 }
                 string latestRelevanceReason;
@@ -606,6 +630,13 @@ namespace Bot.ChromeNs
                     burst.ShopKey, burst.SellerNick, burst.BuyerNick,
                     decision.ConditionalAdviceOrderId, decision.ConditionalAdviceKey,
                     sendOk, !conditionalAdviceSendMayHaveStarted);
+            if (outgoingPolicySuppressed)
+            {
+                if (ctl != null) ctl.SetSendResult(false, "未发送：" + latestOutgoingPolicyReason);
+                lease.MarkCompleted("knowledge_v2_business_guard_suppressed");
+                ResponseProgressTracker.Complete(burst.SellerNick, burst.BuyerNick, burst.ShopKey);
+                return KnowledgeV2RuntimeResult.HandledResult();
+            }
             if (sendOk)
                 ReplyDeduplicationService.RememberDelivered(
                     burst.SellerNick, burst.BuyerNick, answer, burst.ShopKey);
