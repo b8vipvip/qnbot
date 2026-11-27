@@ -111,31 +111,32 @@ def test_ocr_evidence_enriches_knowledge_recall_without_rewriting_buyer_query_or
     assert "BuildTimelineText" not in ocr
 
 
-def test_legacy_ai_generated_learning_is_imported_as_a_v2_candidate():
-    bridge = read("src/Bot/ChromeNs/KnowledgeEngineV2LearningBridge.cs")
+def test_history_import_uses_v2_evidence_gates_without_legacy_conversion():
+    importer = read("src/Bot/Knowledge/KnowledgeV2HistoryImportService.cs")
     semantics = read("src/Bot/Knowledge/KnowledgeEngineV2.Semantics.cs")
-    from_legacy = semantics[
-        semantics.index("public static KnowledgeV2Record FromLegacy"):
-        semantics.index("public static KnowledgeV2Query Parse")
-    ]
+    bridge = read("src/Bot/ChromeNs/KnowledgeEngineV2LearningBridge.cs")
 
-    assert "if (entry.AiGenerated) return true;" in bridge
-    assert "IsUnapprovedLegacyLearningEntry(entry)" in from_legacy
-    assert 'if (isUnapprovedLearning) type = "learning_candidate";' in from_legacy
-    assert 'Status = isUnapprovedLearning ? "candidate" : "active"' in from_legacy
-    assert "KnowledgeV2AuthorityPolicy.IsProductionApproved" in bridge
+    assert "evidenceValid" in importer
+    assert "autoPublish = evidenceValid" in importer
+    assert "record.Status = autoPublish ? \"active\" : \"candidate\";" in importer
+    assert "record.Enabled = autoPublish;" in importer
+    assert "chat_history_unverified_candidate" in importer
+    assert "ai_auto_learned_human_evidence" in importer
+    assert "FromLegacy" not in semantics
+    assert "IsUnapprovedLegacyLearningEntry" not in bridge
 
-def test_candidate_mirror_sync_compares_effective_legacy_enabled_state():
-    authority = read("src/Bot/ChromeNs/KnowledgeEngineV2LearningBridge.cs")
-    method = authority[
-        authority.index("public static bool IsPersistedStateSynchronized"):
-        authority.index("public static void ApplyImportedLegacyProvenance")
-    ]
-    assert "var isCandidate = IsCandidate(record);" in method
-    assert "var expectedLegacyEnabled = record.Enabled" in method
-    assert "if (entry.Enabled != expectedLegacyEnabled) return false;" in method
-    assert "if (isCandidate)" in method
+def test_v2_repository_has_no_legacy_candidate_mirror_or_dual_write():
+    repository = read("src/Bot/Knowledge/KnowledgeEngineV2.Repository.cs")
+    bridge = read("src/Bot/ChromeNs/KnowledgeEngineV2LearningBridge.cs")
+    props = read("src/Bot/Directory.Build.props")
 
+    assert "MirrorOneToLegacy" not in repository
+    assert "BotFeatureStore.GetKnowledgeBase" not in repository
+    assert "BotFeatureStore.SaveKnowledgeBase" not in repository
+    assert "IsPersistedStateSynchronized" not in bridge
+    assert "ApplyImportedLegacyProvenance" not in bridge
+    assert "KnowledgeContextualReplyService.cs" not in props
+    assert "SemanticEmbeddingService.cs" not in props
 
 def test_verified_human_evidence_is_normalized_before_building_v2_snapshot():
     index = read("src/Bot/Knowledge/KnowledgeEngineV2.Service.Index.cs")
@@ -275,7 +276,7 @@ def test_v2_startup_has_no_memory_v1_wrapper_or_reflection_patch():
     assert "MemoryHandlerWrapper" not in pipeline
     assert "V2HandlerWrapper" not in runtime
 
-def test_unapproved_legacy_learning_does_not_pollute_v2_conversation_entities():
+def test_conversation_entities_only_use_production_approved_v2_records():
     state = read("src/Bot/ChromeNs/ConversationStateService.cs")
     bridge = read("src/Bot/ChromeNs/KnowledgeEngineV2LearningBridge.cs")
 
@@ -284,7 +285,6 @@ def test_unapproved_legacy_learning_does_not_pollute_v2_conversation_entities():
         state.index("private static IEnumerable<string> CandidateEntityTerms")
     ]
     assert "KnowledgeEngineV2Service.GetRecords(seller)" in entity
-    assert 'string.Equals(x.Status, "active", StringComparison.OrdinalIgnoreCase)' in entity
     assert "KnowledgeV2AuthorityPolicy.IsProductionApproved(x)" in entity
     assert "BotFeatureStore.GetKnowledgeBase()" not in entity
     assert "KnowledgeMemoryEngine" not in state
@@ -302,48 +302,48 @@ def test_existing_v2_learning_candidates_are_normalized_without_disabling_v2_edi
     assert 'record.Status = "candidate";' in helper
     assert "state.Db.SaveRecordsInTransaction(" in helper
 
-def test_legacy_ai_generated_flag_is_authoritative_even_when_source_metadata_is_missing():
+def test_v2_authority_uses_v2_source_types_not_legacy_ai_flags():
     bridge = read("src/Bot/ChromeNs/KnowledgeEngineV2LearningBridge.cs")
     semantics = read("src/Bot/Knowledge/KnowledgeEngineV2.Semantics.cs")
-    helper = bridge[
-        bridge.index("public static bool IsUnapprovedLegacyLearningEntry"):
-        bridge.index("public static bool IsPersistedStateSynchronized")
-    ]
-    from_legacy = semantics[
-        semantics.index("public static KnowledgeV2Record FromLegacy"):
-        semantics.index("public static KnowledgeV2Query Parse")
-    ]
-    assert "if (entry.AiGenerated) return true;" in helper
-    assert "manual_ai_generated" in helper
-    assert "var isUnapprovedLearning = KnowledgeV2AuthorityPolicy.IsUnapprovedLegacyLearningEntry(entry)" in from_legacy
-    assert 'if (isUnapprovedLearning) type = "learning_candidate";' in from_legacy
-    assert "Status = isUnapprovedLearning ? \"candidate\" : \"active\"" in from_legacy
+    importer = read("src/Bot/Knowledge/KnowledgeV2HistoryImportService.cs")
 
+    assert "IsUnapprovedLegacyLearningEntry" not in bridge
+    assert "FromLegacy" not in semantics
+    assert "KnowledgeBaseEntry" not in importer
+    assert "chat_history_unverified_candidate" in importer
+    assert "ai_auto_learned_human_evidence" in importer
 
-def test_generic_manual_legacy_source_is_not_confused_with_ai_generated_provenance():
+def test_manual_and_ai_auto_published_v2_provenance_are_distinct():
     bridge = read("src/Bot/ChromeNs/KnowledgeEngineV2LearningBridge.cs")
-    helper = bridge[
-        bridge.index("public static bool IsUnapprovedLegacyLearningEntry"):
-        bridge.index("public static bool IsPersistedStateSynchronized")
+    explicit = bridge[
+        bridge.index("public static bool IsExplicitHumanConfirmationSource"):
+        bridge.index("public static bool IsAutoPublishedHumanEvidenceSource")
     ]
-    assert 'source.IndexOf("manual_ai_generated"' in helper
-    assert 'value.IndexOf("manual", StringComparison.OrdinalIgnoreCase)' not in helper
+    automatic = bridge[
+        bridge.index("public static bool IsAutoPublishedHumanEvidenceSource"):
+        bridge.index("private static bool IsTrustedProductionSource")
+    ]
 
+    assert "manual_reviewed_direct" in explicit
+    assert "human_evidence_auto_reviewed" in explicit
+    assert "ai_auto_learned_human_evidence" not in explicit
+    assert "ai_auto_learned_human_evidence" in automatic
+    assert "human_evidence_auto_learned" in automatic
 
-
-def test_existing_v2_records_keep_ai_generated_source_provenance_as_candidates():
+def test_existing_v2_ai_evidence_source_is_trusted_but_unverified_history_stays_candidate():
     bridge = read("src/Bot/ChromeNs/KnowledgeEngineV2LearningBridge.cs")
+    importer = read("src/Bot/Knowledge/KnowledgeV2HistoryImportService.cs")
     candidate = bridge[
         bridge.index("public static bool IsCandidate(KnowledgeV2Record record)"):
         bridge.index("public static bool IsProductionApproved")
     ]
-    assert 'if (IsTrustedProductionSource(record.SourceType)) return false;' in candidate
-    assert 'source.IndexOf("AI生成"' in candidate
-    assert 'source.IndexOf("manual_ai_generated"' in candidate
-    assert 'source.IndexOf("session"' in candidate
-    assert 'source.IndexOf("人工回复"' in candidate
 
-
+    assert "IsTrustedProductionSource(record.SourceType)" in candidate
+    assert "ai_auto_learned_human_evidence" in bridge
+    assert "chat_history_unverified_candidate" in importer
+    assert "record.Type = autoPublish" not in importer
+    assert 'record.Type = autoPublish' not in importer
+    assert 'record.Status = autoPublish ? "active" : "candidate";' in importer
 
 def test_old_ai_source_records_are_normalized_to_candidate_status_without_disabling_them():
     repository = read("src/Bot/Knowledge/KnowledgeEngineV2.Repository.cs")
