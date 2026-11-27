@@ -33,8 +33,6 @@ namespace Bot.ChromeNs
 
     internal static class KnowledgeEngineV2RuntimeBridge
     {
-        private static readonly ConcurrentDictionary<string, byte> PreparedShopKeys =
-            new ConcurrentDictionary<string, byte>(StringComparer.Ordinal);
         private static readonly ConcurrentDictionary<string, byte> WarmingShopKeys =
             new ConcurrentDictionary<string, byte>(StringComparer.Ordinal);
         private static int _initialized;
@@ -46,19 +44,9 @@ namespace Bot.ChromeNs
                 try { KnowledgeCenterV2UiBridge.Initialize(); } catch { }
                 try { KnowledgeV2QualityUiBridge.Initialize(); } catch { }
                 try { KnowledgeEngineV2FeedbackBridge.Initialize(); } catch { }
-                StopLegacyMemoryTimer();
                 Log.Info("Knowledge Engine V2已启动：回复主流程显式调用V2决策，不再与Smart Reply争抢反射包装顺序；SQLite知识库、结构化索引、Working Memory和反馈质量闭环已启用。");
             }
             return new object();
-        }
-
-        private static void StopLegacyMemoryTimer()
-        {
-            try { KnowledgeMemoryRuntimeBridge.DisableForV2(); }
-            catch (Exception ex)
-            {
-                Log.ErrorWithMaxCount("关闭Knowledge Memory V1运行时包装器失败: " + ex.Message, 10);
-            }
         }
 
         private static void PrepareSeller(string shopKey, string seller)
@@ -66,22 +54,6 @@ namespace Bot.ChromeNs
             shopKey = (shopKey ?? string.Empty).Trim();
             seller = (seller ?? string.Empty).Trim();
             if (shopKey.Length == 0 || seller.Length == 0) return;
-
-            // Runtime state is shop-scoped. Seller nicknames are display data and can
-            // be identical across multiple logged-in Qianniu stores.
-            if (PreparedShopKeys.TryAdd(shopKey, 1))
-            {
-                try
-                {
-                    KnowledgeMemoryEngine.SetEnabled(seller, false);
-                }
-                catch (Exception ex)
-                {
-                    PreparedShopKeys.TryRemove(shopKey, out _);
-                    Log.ErrorWithMaxCount("关闭Knowledge Memory v1店铺开关失败: shopRef="
-                        + MyWebSocketServer.DiagnosticRef("shop", shopKey) + ", error=" + ex.Message, 10);
-                }
-            }
             QueueWarm(shopKey, seller);
         }
 
