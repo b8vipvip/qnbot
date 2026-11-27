@@ -128,3 +128,19 @@ def test_remote_history_replay_does_not_hold_liveness_gate_for_async_order_reply
     assert "processingTask != null && !processingTask.IsCompleted" in method
     assert "_ = ObserveInboundProcessingAsync(processingTask);" in method
     assert "await processingTask.ConfigureAwait(false);" in method
+
+
+def test_duplicate_buyer_transport_event_does_not_advance_session_watermark():
+    source = read("src/Bot/ChromeNs/BuyerSessionAgent.cs")
+    method = source[
+        source.index("public BuyerSessionAgentObservation ObserveBuyerMessage"):
+        source.index("public BuyerSessionEventResult RecordEvent")
+    ]
+
+    duplicate = method.index("state.RecentMessageKeySet.Contains(messageKey)")
+    watermark = method.index("state.LastObservedAt = observedAt")
+    sort_watermark = method.index("state.LastBuyerEventSortValue = Math.Max")
+    remember = method.index("RememberMessageKeyLocked(state, messageKey)")
+
+    assert duplicate < watermark < sort_watermark < remember
+    assert "A replayed copy is not a new buyer turn" in method
