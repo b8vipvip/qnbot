@@ -352,6 +352,7 @@ try {
 
             using (ShopSettingsScope.Enter(shop, false))
             {
+            EnsureBusinessInboundCheckpointLoaded(shop);
             try
             {
                 if (!ReferenceEquals(CDP, client)
@@ -433,9 +434,12 @@ try {
 
                 var messages = history["result"]?["msgs"]?.ToObject<List<QNChatMessage>>()
                     ?? new List<QNChatMessage>();
-                var threshold = Math.Max(
-                    _messageSafetyStartedAt.AddSeconds(-8).Ticks,
-                    catchupFloor.Ticks);
+                // A persisted checkpoint is stronger than the process-start guard: it proves
+                // where the previous successful history scan stopped. On a fresh installation,
+                // keep the original startup safety window to avoid replaying old unread history.
+                var threshold = _businessInboundCheckpointRestored
+                    ? catchupFloor.Ticks
+                    : Math.Max(_messageSafetyStartedAt.AddSeconds(-8).Ticks, catchupFloor.Ticks);
                 var candidates = messages
                     .Where(m => m != null && IsRecoveredBuyerMessageForTarget(m, seller, buyer))
                     .Where(m => IncomingMessageSafety.GetSortValue(m) >= threshold)
