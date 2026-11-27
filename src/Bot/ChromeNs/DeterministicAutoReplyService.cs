@@ -23,8 +23,8 @@ namespace Bot.ChromeNs
 {
     /// <summary>
     /// Executes deterministic buyer replies before the burst/context merge window.
-    /// Fixed replies never inspect or wait for AI endpoints. Off-hours is an exclusive policy:
-    /// off-hours reply -> first-inquiry greeting -> configurable local short reply -> ordinary burst/context/AI handling.
+    /// Fixed replies never inspect or wait for AI endpoints. Off-hours is exclusive; explicit
+    /// manual rules, local short replies and first-inquiry greetings follow in priority order.
     /// </summary>
     internal static class DeterministicAutoReplyService
     {
@@ -402,6 +402,41 @@ namespace Bot.ChromeNs
                 return false;
             }
 
+            var manualDecision = BotFeatureStore.EvaluateAutoReplyRule(question);
+            if (manualDecision != null && manualDecision.Matched)
+            {
+                FirstInquiryFixedReplyService.ReleaseReservation(
+                    item.SellerNick, item.BuyerNick,
+                    "命中人工确认/转接规则，首条咨询固定回复让位于显式规则", item.ShopKey);
+                Log.Info("固定规则前置命中显式人工规则，跳过本地短消息和首条咨询回复，交由统一规则/转接链路处理: seller="
+                    + item.SellerNick + ", buyer=" + item.BuyerNick);
+                return true;
+            }
+
+            if (allowLocalShortReply)
+            {
+                string localAnswer;
+                string matchedPhrase;
+                if (LocalShortReplyService.TryResolve(
+                    item.SellerNick,
+                    question,
+                    out localAnswer,
+                    out matchedPhrase))
+                {
+                    var localOk = await SendFixedAsync(
+                        qn,
+                        item,
+                        localAnswer,
+                        "本地短消息回复").ConfigureAwait(false);
+                    Log.Info("本地短消息精确命中: seller=" + item.SellerNick
+                        + ", buyer=" + item.BuyerNick
+                        + ", phrase=" + matchedPhrase
+                        + ", success=" + localOk
+                        + ", aiCalled=false");
+                    return false;
+                }
+            }
+
             string firstReply;
             var firstReserved = FirstInquiryFixedReplyService.TryResolve(
                 item.SellerNick,
@@ -434,42 +469,6 @@ namespace Bot.ChromeNs
                             : qn.Rpa.GetSendFailureReason(),
                         item.ShopKey);
                     return false;
-                }
-            }
-
-            if (allowLocalShortReply)
-            {
-                var manualDecision = BotFeatureStore.EvaluateAutoReplyRule(question);
-                if (manualDecision == null || !manualDecision.Matched)
-                {
-                    string localAnswer;
-                    string matchedPhrase;
-                    if (LocalShortReplyService.TryResolve(
-                        item.SellerNick,
-                        question,
-                        out localAnswer,
-                        out matchedPhrase))
-                    {
-                        if (firstReserved)
-                        {
-                            Log.Info("本地短消息已由首条咨询固定回复覆盖，避免重复发送: seller="
-                                + item.SellerNick + ", buyer=" + item.BuyerNick
-                                + ", phrase=" + matchedPhrase);
-                            return false;
-                        }
-
-                        var localOk = await SendFixedAsync(
-                            qn,
-                            item,
-                            localAnswer,
-                            "本地短消息回复").ConfigureAwait(false);
-                        Log.Info("本地短消息精确命中: seller=" + item.SellerNick
-                            + ", buyer=" + item.BuyerNick
-                            + ", phrase=" + matchedPhrase
-                            + ", success=" + localOk
-                            + ", aiCalled=false");
-                        return false;
-                    }
                 }
             }
 

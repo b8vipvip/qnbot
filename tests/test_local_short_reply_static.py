@@ -76,9 +76,10 @@ def test_canonical_short_reply_precedes_normal_merge_and_preserves_handoff_prior
     outcome = "return localOutcome;"
     local_end = canonical.index(outcome, local) + len(outcome)
     handoff_check = canonical.rfind("BotFeatureStore.EvaluateAutoReplyRule(question)", 0, local)
+    first = canonical.index("FirstInquiryFixedReplyService.TryResolve(")
     local_block = canonical[local:local_end]
     assert handoff_check >= 0
-    assert handoff_check < local < local_end
+    assert handoff_check < local < local_end < first
     assert '"本地短消息回复"' in local_block
     assert outcome in local_block
     assert "aiCalled=false" in local_block
@@ -119,3 +120,16 @@ def test_management_page_registration_is_explicit_and_idempotent():
     assert "Interlocked.Exchange(ref _initialized, 1)" in service
     assert "EventManager.RegisterClassHandler(" in service
     assert "ConditionalWeakTable<KnowledgeCenterWindow, object>" in service
+
+def test_legacy_deterministic_fallback_uses_same_manual_short_first_inquiry_priority():
+    service = read("src/Bot/ChromeNs/DeterministicAutoReplyService.cs")
+    method = service[
+        service.index("private static async Task<bool> HandleScopedBeforeMergeAsync"):
+        service.index("private static async Task<bool> SendFixedAsync")
+    ]
+    manual = method.index("BotFeatureStore.EvaluateAutoReplyRule(question)")
+    local = method.index("LocalShortReplyService.TryResolve(")
+    first = method.index("FirstInquiryFixedReplyService.TryResolve(")
+    assert manual < local < first
+    assert "FirstInquiryFixedReplyService.ReleaseReservation(" in method[manual:local]
+    assert "return false;" in method[local:first]

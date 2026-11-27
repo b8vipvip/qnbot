@@ -143,12 +143,14 @@ def test_first_reply_is_premerge_prelude_and_same_problem_continues_normal_reply
     router = read("src/Bot/ChromeNs/VisionMessageDecision.cs")
     streaming = read("src/Bot/ChromeNs/BuyerStreamingReplyPipeline.cs")
 
-    resolve = deterministic.index("FirstInquiryFixedReplyService.TryResolve(")
+    manual = deterministic.index("var manualDecision = BotFeatureStore.EvaluateAutoReplyRule(question)")
+    local_short = deterministic.index("if (allowLocalShortReply)", manual)
+    local_resolve = deterministic.index("LocalShortReplyService.TryResolve(", local_short)
+    resolve = deterministic.index("FirstInquiryFixedReplyService.TryResolve(", local_resolve)
     invoke_send = deterministic.index("var firstOk = await SendFixedAsync(", resolve)
     mark = deterministic.index("FirstInquiryFixedReplyService.MarkDelivered(", invoke_send)
-    local_short = deterministic.index("if (allowLocalShortReply)", mark)
-    normal_continue = deterministic.index("return true;", local_short)
-    assert resolve < invoke_send < mark < local_short < normal_continue
+    normal_continue = deterministic.index("return true;", mark)
+    assert manual < local_short < local_resolve < resolve < invoke_send < mark < normal_continue
     assert "随后同一实际问题继续进入正常文本回复处理" in router
     assert "StreamingBuyerAnswerService.GetAnswerAsync(" in streaming
 
