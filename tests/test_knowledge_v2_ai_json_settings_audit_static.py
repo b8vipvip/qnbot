@@ -116,7 +116,7 @@ def test_knowledge_and_reply_score_clamps_reject_non_finite_values():
     for path in (
         "src/Bot/ChromeNs/KnowledgePolicyProfileService.cs",
         "src/Bot/ChromeNs/SmartReplyRouterService.cs",
-        "src/Bot/ChromeNs/KnowledgeMemoryEngine.cs",
+        "src/Bot/ChromeNs/ConversationStateService.cs",
         "src/Bot/Knowledge/KnowledgeEngineV2.Semantics.cs",
         "src/Bot/Knowledge/KnowledgeEngineV2.Service.Index.cs",
         "src/Bot/Knowledge/KnowledgeEngineV2FeedbackService.cs",
@@ -125,3 +125,4 @@ def test_knowledge_and_reply_score_clamps_reject_non_finite_values():
         clamp = source[source.index("private static double Clamp"):]
         assert "double.IsNaN(value)" in clamp
         assert "double.IsInfinity(value)" in clamp
+
