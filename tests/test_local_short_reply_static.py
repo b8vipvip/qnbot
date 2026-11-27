@@ -76,9 +76,10 @@ def test_canonical_short_reply_precedes_normal_merge_and_preserves_handoff_prior
     outcome = "return localOutcome;"
     local_end = canonical.index(outcome, local) + len(outcome)
     handoff_check = canonical.rfind("BotFeatureStore.EvaluateAutoReplyRule(question)", 0, local)
+    first = canonical.index("FirstInquiryFixedReplyService.TryResolve(")
     local_block = canonical[local:local_end]
     assert handoff_check >= 0
-    assert handoff_check < local < local_end
+    assert handoff_check < local < local_end < first
     assert '"本地短消息回复"' in local_block
     assert outcome in local_block
     assert "aiCalled=false" in local_block
