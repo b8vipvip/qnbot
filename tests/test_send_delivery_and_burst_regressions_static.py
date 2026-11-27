@@ -631,3 +631,22 @@ def test_withdrawn_image_vision_invalid_answer_fails_and_stale_sends_cancel_prog
         "var sendCancelled = !sent", 1
     )[0]
     assert "ResponseProgressTracker.Cancel(" in fallback_cancel
+
+
+def test_bot_flow_test_generation_and_send_failures_are_not_marked_completed():
+    source = read("src/Bot/ChromeNs/BotFlowTestService.cs")
+    generation = source.split('if (string.IsNullOrWhiteSpace(generated)', 1)[1].split(
+        'var outgoing = BotOutboundMessageFormatter.EnsureAiMarker', 1
+    )[0]
+    assert "ResponseProgressTracker.Fail(" in generation
+    assert "ResponseProgressTracker.Complete(" not in generation
+    assert "Bot真实流程测试答案生成失败：" in generation
+
+    send = source.split("var sendCancelled = !sent && qn.Rpa != null && qn.Rpa.LastSendWasCancelled;", 1)[1]
+    assert "if (sendCancelled)" in send
+    assert "ResponseProgressTracker.Cancel(" in send
+    assert "else if (sent)" in send
+    assert "ResponseProgressTracker.Complete(" in send
+    assert "ResponseProgressTracker.Fail(" in send
+    assert "Bot真实流程测试答案已生成，但实际发送未确认：" in send
+    assert "var sendFailureReason = qn.Rpa == null" in send
