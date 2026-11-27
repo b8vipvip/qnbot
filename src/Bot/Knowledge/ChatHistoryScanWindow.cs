@@ -55,7 +55,7 @@ namespace Bot.Knowledge
             });
             header.Children.Add(new TextBlock
             {
-                Text = "从千牛历史聊天中提取买家已提问、客服已回答的有效轮次。整理结果统一转换为当前 Knowledge Center V2 字段、按 V2 去重并写入当前店铺；本次扫描产生的旧格式临时记录会在 V2 写入后删除。不会向买家发送消息。",
+                Text = "从千牛历史聊天中提取买家已提问、客服已回答的有效轮次。整理结果统一转换为当前 Knowledge Center V2 字段、按 V2 去重并写入当前店铺；AI分析结果直接使用 Knowledge V2 结构化记录，只有当前店铺的 V2 数据库会接收写入。不会向买家发送消息。",
                 TextWrapping = TextWrapping.Wrap,
                 Foreground = new SolidColorBrush(Color.FromRgb(75, 85, 99)),
                 Margin = new Thickness(0, 5, 0, 0)
@@ -177,6 +177,7 @@ namespace Bot.Knowledge
             {
                 var service = new ChatHistoryScanService();
                 var scan = await service.ScanAndImportAsync(
+                    _shopKey,
                     options,
                     p => Dispatcher.BeginInvoke(new Action(() =>
                     {
