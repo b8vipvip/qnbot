@@ -119,3 +119,39 @@ def test_native_send_treats_missing_draft_after_physical_action_as_indeterminate
     assert "发送动作后草稿已不存在" in native
     assert "禁止重试" in native
     assert "SetSendIndeterminate" in native
+
+
+def test_physical_send_click_lease_is_shop_scoped_and_survives_wait_timeout_until_worker_exits():
+    source = read("src/Bot/ChromeNs/QNRpa.cs")
+    assert "ActivePhysicalSendActions" in source
+    assert "ConcurrentDictionary<string, Task<bool>>" in source
+    assert "ActivePhysicalSendActionsSync" in source
+    assert "ResolvePhysicalSendShopKey()" in source
+    assert "ShopSettingsScope.Current" in source
+    assert "ActivePhysicalSendActions[shopKey] = worker" in source
+    assert "active.IsCompleted" in source
+    assert "本店上一次物理发送按钮动作仍在后台执行" in source
+    assert "物理发送按钮动作超时" in source
+    assert "保留本店独占租约并禁止重试" in source
+    assert "worker.ContinueWith(" in source
+    assert "ReleasePhysicalSendAction(shopKey, worker)" in source
+    assert "发送按钮HWND安全消息" in source
+    assert "发送按钮左侧UIA安全调用" in source
+    assert "发送主按钮坐标点击" in source
+
+
+def test_timed_out_physical_send_action_never_falls_through_to_second_click():
+    native = read("src/Bot/ChromeNs/QNRpa.NativeSend.cs")
+    uia = read("src/Bot/ChromeNs/QNRpa.cs")
+    hwnd = native.index("var hwndPosted = await RunUiActionAsync")
+    hwnd_guard = native.index("if (!hwndPosted && LastSendWasIndeterminate) return false;", hwnd)
+    hwnd_fallback = native.index("if (!await HasExpectedDraftFastAsync(text, 900)", hwnd_guard)
+    safe = native.index("var safeUiaInvoked = await RunUiActionAsync", hwnd_fallback)
+    safe_guard = native.index("if (!safeUiaInvoked && LastSendWasIndeterminate) return false;", safe)
+    assert hwnd < hwnd_guard < hwnd_fallback < safe < safe_guard
+
+    click = uia.index("var clicked = await RunUiActionAsync")
+    click_guard = uia.index("if (!clicked && LastSendWasIndeterminate) return false;", click)
+    assert click < click_guard
+    assert "SetSendIndeterminate(\"发送主按钮坐标点击后确认\"" in uia
+    assert "SetSendIndeterminate(\"发送按钮左侧UIA安全调用后确认\"" in uia
