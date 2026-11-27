@@ -1,15 +1,18 @@
 using Bot.Knowledge;
+using Bot.ShopScope;
 using System;
 using System.Collections.Generic;
 using System.Linq;
-using System.Text.RegularExpressions;
 
 namespace Bot.ChromeNs
 {
+    /// <summary>
+    /// Explicitly accepted operator corrections are written directly to the
+    /// authoritative Knowledge V2 repository. This service never reads or
+    /// mutates the retired KnowledgeBaseJson store.
+    /// </summary>
     internal static class ReviewedKnowledgeLearningService
     {
-        private static readonly object SaveLock = new object();
-
         public static KnowledgeLearningResult ApplyReviewedKnowledge(
             string question,
             string answer,
@@ -19,253 +22,79 @@ namespace Bot.ChromeNs
             double confidence,
             string evidenceType)
         {
-            question = Clean(question, 400);
-            answer = StripAiMarker(Clean(answer, 1200));
-            category = Clean(category, 80);
-            keywords = Clean(keywords, 500);
-            sourceType = string.IsNullOrWhiteSpace(sourceType) ? "人工接待复盘" : sourceType.Trim();
+            question = (question ?? string.Empty).Trim();
+            answer = BotOutboundMessageFormatter.StripAiMarker((answer ?? string.Empty).Trim());
             evidenceType = (evidenceType ?? string.Empty).Trim().ToLowerInvariant();
 
-            if (double.IsNaN(confidence) || double.IsInfinity(confidence)
-                || confidence < 0.0 || confidence > 1.0)
-            {
-                return new KnowledgeLearningResult
-                {
-                    Success = false,
-                    Message = "置信度不是有效的0到1有限数值，未写入知识库"
-                };
-            }
-
-            if (string.IsNullOrWhiteSpace(question) || string.IsNullOrWhiteSpace(answer))
-            {
-                return new KnowledgeLearningResult
-                {
-                    Success = false,
-                    Message = "问题或答案为空，未写入知识库"
-                };
-            }
+            if (question.Length < 5 || question.Length > 500 || answer.Length < 2 || answer.Length > 4000)
+                return Failure("问题或答案长度不合法，未写入 Knowledge V2。");
             if (answer.StartsWith("错误：", StringComparison.Ordinal)
                 || answer.IndexOf("已跳过", StringComparison.Ordinal) >= 0)
+                return Failure("答案属于错误或跳过状态，未写入 Knowledge V2。");
+            if (double.IsNaN(confidence) || double.IsInfinity(confidence)
+                || confidence < 0.90 || confidence > 1.0)
+                return Failure("证据置信度未达到 Knowledge V2 直接发布门槛。");
+            if (evidenceType != "manual_reply"
+                && evidenceType != "manual_correction"
+                && evidenceType != "withdrawn_bot_then_manual"
+                && evidenceType != "repeated_human_pattern"
+                && evidenceType != "operator_reviewed")
+                return Failure("缺少可接受的真人或操作员审核证据类型。");
+
+            var shop = ShopSettingsScope.Current;
+            if (shop == null || !shop.HasStableSellerId || string.IsNullOrWhiteSpace(shop.SellerNick))
+                return Failure("当前没有已确认的店铺 ShopKey，拒绝跨店写入 Knowledge V2。");
+
+            try
             {
-                return new KnowledgeLearningResult
+                var before = KnowledgeEngineV2Repository.LoadAll(shop.SellerNick);
+                var normalizedQuestion = KnowledgeEngineV2Semantics.Compact(question);
+                var existing = (before ?? new List<KnowledgeV2Record>())
+                    .FirstOrDefault(x => x != null && x.Enabled
+                        && string.Equals(KnowledgeEngineV2Semantics.Compact(x.Title), normalizedQuestion, StringComparison.Ordinal));
+                string result;
+                string savedId;
+                var saved = KnowledgeEngineV2Repository.TrySaveReviewedDirectAnswer(
+                    shop.SellerNick, question, answer, string.Empty, out result, out savedId);
+                if (!saved)
+                    return Failure(string.IsNullOrWhiteSpace(result) ? "Knowledge V2 拒绝了本次直答写入。" : result);
+
+                var record = KnowledgeEngineV2Repository.LoadAll(shop.SellerNick)
+                    .FirstOrDefault(x => x != null && string.Equals(x.Id, savedId, StringComparison.Ordinal));
+                if (record != null)
                 {
-                    Success = false,
-                    Message = "答案属于错误或跳过状态，未写入知识库"
-                };
-            }
-
-            var strongCorrection = evidenceType == "manual_correction"
-                || evidenceType == "withdrawn_bot_then_manual"
-                || evidenceType == "repeated_human_pattern";
-            var normalizedQuestion = KnowledgeAiService.NormalizeQuestion(question);
-            var normalizedAnswer = Normalize(answer);
-            if (string.IsNullOrWhiteSpace(normalizedQuestion) || string.IsNullOrWhiteSpace(normalizedAnswer))
-            {
-                return new KnowledgeLearningResult
-                {
-                    Success = false,
-                    Message = "问题或答案规范化后为空，未写入知识库"
-                };
-            }
-
-            lock (SaveLock)
-            {
-                var list = BotFeatureStore.GetKnowledgeBase();
-                var existing = FindExisting(list, question);
-                var now = DateTime.Now.ToString("yyyy-MM-dd HH:mm:ss");
-                if (existing != null)
-                {
-                    var previousAnswer = existing.Answer ?? string.Empty;
-                    KnowledgePolicyProfileService.RecordReviewEvidence(
-                        question,
-                        previousAnswer,
-                        answer,
-                        evidenceType);
-                    ReplyQualityMetricsService.RecordHumanEvidence(evidenceType);
-
-                    if (Normalize(previousAnswer) == normalizedAnswer)
-                    {
-                        MergeMetadata(existing, category, keywords, sourceType, now);
-                        BotFeatureStore.SaveKnowledgeBase(list);
-                        RaiseChanged();
-                        return new KnowledgeLearningResult
-                        {
-                            Success = true,
-                            Message = evidenceType == "conversation_synthesis"
-                                ? "现有知识与本轮会话AI复盘结论一致，已完成去重并刷新知识元数据"
-                                : "现有知识答案与人工复盘结论一致，已提高该知识的人工确认可靠度"
-                        };
-                    }
-
-                    var existingSource = (existing.SourceType ?? string.Empty).Trim();
-                    var existingLooksCurated = !existing.AiGenerated
-                        && !existingSource.Contains("自动学习")
-                        && !existingSource.Contains("智能导入")
-                        && !existingSource.Contains("历史扫描")
-                        && !existingSource.Contains("AI生成")
-                        && !existingSource.Contains("人工接待复盘")
-                        && !existingSource.Contains("会话AI复盘");
-
-                    if (existingLooksCurated && (!strongCorrection || confidence < 0.95))
-                    {
-                        return new KnowledgeLearningResult
-                        {
-                            Success = true,
-                            Message = "现有知识属于人工维护内容，当前证据强度不足，未自动覆盖；可靠度证据已记录"
-                        };
-                    }
-
-                    existing.Answer = answer;
-                    existing.Category = string.IsNullOrWhiteSpace(category)
-                        ? (string.IsNullOrWhiteSpace(existing.Category) ? "自动学习" : existing.Category)
-                        : category;
-                    existing.Keywords = string.IsNullOrWhiteSpace(keywords) ? existing.Keywords : keywords;
-                    existing.UpdatedAt = now;
-                    existing.SourceType = sourceType;
-                    existing.AiGenerated = false;
-                    BotFeatureStore.SaveKnowledgeBase(list);
-                    RaiseChanged();
-                    return new KnowledgeLearningResult
-                    {
-                        Success = true,
-                        Updated = true,
-                        Message = evidenceType == "conversation_synthesis"
-                            ? "已根据本轮完整会话复盘优化相似知识答案"
-                            : "已根据本轮人工接待最终回复优化现有知识答案，并降低旧答案直答可靠度"
-                    };
+                    var aliases = (record.Aliases ?? new List<string>())
+                        .Concat((keywords ?? string.Empty).Split(new[] { ',', '，', ';', '；', '\n', '\r' }, StringSplitOptions.RemoveEmptyEntries))
+                        .Select(x => (x ?? string.Empty).Trim())
+                        .Where(x => x.Length >= 2 && x.Length <= 80)
+                        .Distinct(StringComparer.OrdinalIgnoreCase)
+                        .Take(40)
+                        .ToList();
+                    record.Aliases = aliases;
+                    KnowledgeEngineV2Repository.Save(shop.SellerNick, record);
                 }
 
-                var contentHash = KnowledgeAiService.ContentHash(question, answer);
-                if (list.Any(x => x != null
-                    && KnowledgeAiService.ContentHash(x.Title, x.Answer) == contentHash))
-                {
-                    KnowledgePolicyProfileService.RecordKnowledgeAccepted(question, answer);
-                    ReplyQualityMetricsService.RecordHumanEvidence(evidenceType == "conversation_synthesis" ? "conversation_synthesis" : "human_confirmed");
-                    return new KnowledgeLearningResult
-                    {
-                        Success = true,
-                        Message = "知识库已存在相同问答内容，已去重，不重复新增"
-                    };
-                }
-
-                var added = new KnowledgeBaseEntry
-                {
-                    Id = Guid.NewGuid().ToString("N"),
-                    Enabled = true,
-                    Category = string.IsNullOrWhiteSpace(category) ? "自动学习" : category,
-                    Title = question,
-                    Answer = answer,
-                    Keywords = keywords ?? string.Empty,
-                    CreatedAt = now,
-                    UpdatedAt = now,
-                    AiGenerated = false,
-                    SourceType = sourceType
-                };
-                list.Add(added);
-                BotFeatureStore.SaveKnowledgeBase(list);
-                KnowledgePolicyProfileService.RecordKnowledgeAccepted(question, answer);
-                ReplyQualityMetricsService.RecordHumanEvidence(evidenceType == "conversation_synthesis" ? "conversation_synthesis" : "human_confirmed");
-                RaiseChanged();
+                ReplyQualityMetricsService.RecordHumanEvidence(evidenceType);
                 return new KnowledgeLearningResult
                 {
                     Success = true,
-                    Added = true,
-                    Message = evidenceType == "conversation_synthesis"
-                        ? "已根据本轮完整会话AI复盘加入新的可复用知识"
-                        : "已根据本轮人工接待复盘加入新的可复用知识，并建立初始可靠度"
+                    Added = existing == null,
+                    Updated = existing != null,
+                    Message = string.IsNullOrWhiteSpace(result)
+                        ? "已写入 Knowledge V2 并刷新检索索引。"
+                        : result
                 };
             }
-        }
-
-        private static KnowledgeBaseEntry FindExisting(
-            List<KnowledgeBaseEntry> list,
-            string question)
-        {
-            if (list == null || list.Count == 0) return null;
-            var normalizedQuestion = KnowledgeAiService.NormalizeQuestion(question);
-            var exact = list.FirstOrDefault(x => x != null
-                && KnowledgeAiService.NormalizeQuestion(x.Title) == normalizedQuestion);
-            if (exact != null) return exact;
-
-            KnowledgeBaseEntry best = null;
-            var bestScore = 0.0;
-            foreach (var item in list.Where(x => x != null && !string.IsNullOrWhiteSpace(x.Title)))
+            catch (Exception ex)
             {
-                var score = Similarity(normalizedQuestion, KnowledgeAiService.NormalizeQuestion(item.Title));
-                if (score > bestScore)
-                {
-                    bestScore = score;
-                    best = item;
-                }
+                Log.ErrorWithMaxCount("Knowledge V2人工审核写入失败: " + ex.GetType().Name, 10);
+                return Failure("Knowledge V2 写入失败：" + ex.Message);
             }
-            return bestScore >= 0.92 ? best : null;
         }
 
-        private static double Similarity(string a, string b)
+        private static KnowledgeLearningResult Failure(string message)
         {
-            if (string.IsNullOrWhiteSpace(a) || string.IsNullOrWhiteSpace(b)) return 0;
-            if (a == b) return 1;
-            if (Math.Min(a.Length, b.Length) >= 4 && (a.Contains(b) || b.Contains(a))) return 0.96;
-            var aa = Bigrams(a);
-            var bb = Bigrams(b);
-            if (aa.Count == 0 || bb.Count == 0) return 0;
-            var common = aa.Intersect(bb).Count();
-            return (2.0 * common) / (aa.Count + bb.Count);
-        }
-
-        private static HashSet<string> Bigrams(string value)
-        {
-            var result = new HashSet<string>(StringComparer.Ordinal);
-            for (var i = 0; i + 1 < (value ?? string.Empty).Length; i++)
-            {
-                result.Add(value.Substring(i, 2));
-            }
-            return result;
-        }
-
-        private static void MergeMetadata(
-            KnowledgeBaseEntry entry,
-            string category,
-            string keywords,
-            string sourceType,
-            string now)
-        {
-            if (!string.IsNullOrWhiteSpace(category)) entry.Category = category;
-            if (!string.IsNullOrWhiteSpace(keywords)) entry.Keywords = keywords;
-            entry.UpdatedAt = now;
-            entry.SourceType = sourceType;
-            entry.AiGenerated = false;
-        }
-
-        private static void RaiseChanged()
-        {
-            // QueueLearn/SaveLearned raises this event from KnowledgeLearningService.
-            // Reviewed knowledge is immediately visible because BotFeatureStore is re-read by routing.
-        }
-
-        private static string StripAiMarker(string value)
-        {
-            value = (value ?? string.Empty).Trim();
-            while (value.EndsWith("[AI]", StringComparison.OrdinalIgnoreCase))
-            {
-                value = value.Substring(0, value.Length - 4).TrimEnd();
-            }
-            return value;
-        }
-
-        private static string Normalize(string value)
-        {
-            return Regex.Replace(
-                StripAiMarker(value).Trim().ToLowerInvariant(),
-                @"\s+",
-                string.Empty);
-        }
-
-        private static string Clean(string value, int max)
-        {
-            value = (value ?? string.Empty).Trim();
-            if (max > 0 && value.Length > max) value = value.Substring(0, max).Trim();
-            return value;
+            return new KnowledgeLearningResult { Success = false, Message = message ?? "Knowledge V2 写入失败。" };
         }
     }
 }
