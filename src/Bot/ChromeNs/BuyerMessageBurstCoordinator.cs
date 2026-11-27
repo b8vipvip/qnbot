@@ -64,7 +64,10 @@ namespace Bot.ChromeNs
         {
             get
             {
-                return Items.Any(
+                // Overflow bursts carry a diagnostic preview only. Mark them non-replyable
+                // so every optional runtime wrapper delegates to the canonical handler, which
+                // records the visible fail-closed outcome without sending the preview to a model.
+                return !InputOverflow && Items.Any(
                     x => x != null
                         && x.VisionDecision != null
                         && x.VisionDecision.Kind != VisionDecisionKind.Skip);
