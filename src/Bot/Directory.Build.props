@@ -7,11 +7,7 @@
     <Compile Include="$(MSBuildThisFileDirectory)Knowledge\RulePolicyImportExportUi.cs" />
   </ItemGroup>
 
-  <ItemGroup Condition="Exists('$(MSBuildThisFileDirectory)Knowledge\KnowledgeCloudSyncService.cs')">
-    <Compile Include="$(MSBuildThisFileDirectory)Knowledge\KnowledgeCloudSyncService.cs" />
-  </ItemGroup>
-
-  <ItemGroup Condition="Exists('$(MSBuildThisFileDirectory)Knowledge\StoreRuleCloudSyncService.cs')">
+<ItemGroup Condition="Exists('$(MSBuildThisFileDirectory)Knowledge\StoreRuleCloudSyncService.cs')">
     <Compile Include="$(MSBuildThisFileDirectory)Knowledge\StoreRuleCloudSyncService.cs" />
   </ItemGroup>
 
