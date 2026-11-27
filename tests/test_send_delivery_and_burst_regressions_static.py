@@ -642,14 +642,16 @@ def test_bot_flow_test_generation_and_send_failures_are_not_marked_completed():
     assert "ResponseProgressTracker.Complete(" not in generation
     assert "Bot真实流程测试答案生成失败：" in generation
 
-    send = source.split("var sendCancelled = !sent && qn.Rpa != null && qn.Rpa.LastSendWasCancelled;", 1)[1]
-    assert "if (sendCancelled)" in send
-    assert "ResponseProgressTracker.Cancel(" in send
-    assert "else if (sent)" in send
-    assert "ResponseProgressTracker.Complete(" in send
-    assert "ResponseProgressTracker.Fail(" in send
-    assert "Bot真实流程测试答案已生成，但实际发送未确认：" in send
-    assert "var sendFailureReason = qn.Rpa == null" in send
+    terminal = source.split("var sendCancelled = !sent && (sendException is OperationCanceledException", 1)[1].split(
+        "Log.Info(\"Bot真实流程测试完成", 1
+    )[0]
+    assert "if (sendCancelled)" in terminal
+    assert "ResponseProgressTracker.Cancel(" in terminal
+    assert "else if (sent)" in terminal
+    assert "ResponseProgressTracker.Complete(" in terminal
+    assert "ResponseProgressTracker.Fail(" in terminal
+    assert "Bot真实流程测试答案已生成，但实际发送未确认：" in terminal
+    assert "var sendFailureReason = sendException != null" in terminal
 
 
 def test_bot_flow_test_runs_generation_and_send_inside_the_verified_shop_scope_and_contains_exceptions():
