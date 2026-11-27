@@ -1045,19 +1045,12 @@ namespace Bot.ChromeNs
                             skipped++;
                             continue;
                         }
-                        if (!EnableAutomaticWrites)
-                        {
-                            suggestion.ApplyMessage = "通用会话AI建议仍为dry-run；只有独立验证的真人问答新增/修订路径可以自动写入";
-                            skipped++;
-                            continue;
-                        }
-                        var result = ReviewedKnowledgeLearningService.ApplyReviewedKnowledge(
-                            suggestion.Question, suggestion.Answer, suggestion.Category, suggestion.Keywords,
-                            localFirst ? "本地优先-会话AI复盘" : "人工接待复盘",
-                            suggestion.Confidence, suggestion.EvidenceType);
-                        suggestion.Applied = result != null && result.Success && (result.Added || result.Updated);
-                        suggestion.ApplyMessage = result == null ? "知识写入结果为空" : result.Message;
-                        if (suggestion.Applied) applied++; else skipped++;
+                        // Generic AI suggestions do not carry the exact source message IDs and
+                        // source-stable corpus fingerprint required for a production write.
+                        // Only the verified V2 add/correction paths below may publish automatically.
+                        suggestion.Applied = false;
+                        suggestion.ApplyMessage = "缺少完整的 Knowledge V2 真人消息证据链，保留候选；生产新增/修订由带消息ID和语料指纹的验证路径自动处理";
+                        skipped++;
                     }
 
                     if (EnableVerifiedCorpusNewKnowledgeWrites)
