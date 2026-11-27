@@ -62,12 +62,20 @@ def test_order_auto_reply_cannot_bypass_bot_master_switch():
     assert master_switch < config_read
 
 
-def test_real_flow_test_never_falls_back_to_another_seller():
+def test_real_flow_test_is_bound_to_the_original_shopkey_not_just_seller_nickname():
     source = read("src/Bot/ChromeNs/BotFlowTestService.cs")
-    assert "QN.FindExistingBySellerNick(candidate.Seller);" in source
-    assert "?? QN.CurQN" not in source
-    assert "已阻止回退到其他店铺" in source
-    assert "已阻止跨店铺执行测试" in source
+    qn = read("src/Bot/ChromeNs/QN.cs")
+    recovery = read("src/Bot/ChromeNs/QN.MessageRecovery.cs")
+    assert "QN.FindExistingByShopKey(shopKey)" in source
+    assert "QN.FindExistingBySellerNick(candidate.Seller)" not in source
+    assert "ShopKey = shopKey" in source
+    assert "ShopKey = shop.ShopKey" in source
+    assert "candidate.ShopKey" in source
+    assert "ShopContextLocator.ResolveRuntimeBySeller(qn)" in source
+    assert "BotFlowTestService.RecordCandidate(sellerNick, buyerNick, displayQuestion, detectedAt, shopKey);" in qn
+    assert "BotFlowTestService.RecordCandidate(sellerNick, buyerNick, displayQuestion, detectedAt, shopKey);" in recovery
+    assert "测试问题缺少可信ShopKey" in source
+    assert "目标店铺身份与测试问题来源不一致" in source
 
 
 def test_progress_tracker_does_not_delete_newer_buyer_message_state():
