@@ -1466,6 +1466,9 @@ namespace Bot.ChromeNs
             var sendOk = await SendTextWithRetryAsync(
                 burst.BuyerNick, answer, 1, lease.CancellationToken, preSendGuard);
             var sendCancelled = !sendOk && rpa != null && rpa.LastSendWasCancelled;
+            var sendFailureReason = rpa == null
+                ? "发送器不可用，未能确认实际送达状态"
+                : rpa.GetSendFailureReason();
             if (sendOk)
             {
                 lease.MarkCompleted("legacy_text_send_completed");
@@ -1494,7 +1497,7 @@ namespace Bot.ChromeNs
                 conversationCtl.SetSendResult(sendOk, sendOk
                     ? "已发送（合并本轮买家消息）"
                     : sendCancelled ? "未发送：人工接管或发送前会话门禁已取消"
-                    : "发送失败：" + rpa.GetSendFailureReason());
+                    : "发送失败：" + sendFailureReason);
             }
             Log.Info("文本真实流程完成: buyer=" + burst.BuyerNick + ", success=" + sendOk
                 + ", cancelled=" + sendCancelled
@@ -1502,8 +1505,12 @@ namespace Bot.ChromeNs
             if (sendCancelled)
                 ResponseProgressTracker.Cancel(
                     burst.SellerNick, burst.BuyerNick, "旧文本发送前会话门禁取消", burst.ShopKey);
-            else
+            else if (sendOk)
                 ResponseProgressTracker.Complete(burst.SellerNick, burst.BuyerNick, burst.ShopKey);
+            else
+                ResponseProgressTracker.Fail(
+                    burst.SellerNick, burst.BuyerNick,
+                    "文本答案已生成，但实际发送未确认：" + sendFailureReason, burst.ShopKey);
         }
 
         private async Task ProcessVisionBurstAsync(
@@ -1689,6 +1696,9 @@ namespace Bot.ChromeNs
                 throw;
             }
             var sendCancelled = !sendOk && rpa != null && rpa.LastSendWasCancelled;
+            var sendFailureReason = rpa == null
+                ? "发送器不可用，未能确认实际送达状态"
+                : rpa.GetSendFailureReason();
             if (conditionalAdviceReserved)
                 ConditionalBusinessAdviceService.CompleteDelivery(
                     burst.ShopKey, burst.SellerNick, burst.BuyerNick,
@@ -1711,15 +1721,19 @@ namespace Bot.ChromeNs
             if (ctl != null) ctl.SetSendResult(sendOk, sendOk
                 ? "已发送（合并图片与本轮消息）"
                 : sendCancelled ? "未发送：人工接管或发送前会话门禁已取消"
-                : "识别完成，但目标买家会话未确认，未发送。原因：" + rpa.GetSendFailureReason());
+                : "识别完成，但目标买家会话未确认，未发送。原因：" + sendFailureReason);
             Log.Info("视觉真实流程完成: buyer=" + burst.BuyerNick + ", success=" + sendOk
                 + ", cancelled=" + sendCancelled
                 + ", totalMs=" + Math.Max(0, (long)(DateTime.Now - detectedAt).TotalMilliseconds));
             if (sendCancelled)
                 ResponseProgressTracker.Cancel(
                     burst.SellerNick, burst.BuyerNick, "旧视觉发送前会话门禁取消", burst.ShopKey);
-            else
+            else if (sendOk)
                 ResponseProgressTracker.Complete(burst.SellerNick, burst.BuyerNick, burst.ShopKey);
+            else
+                ResponseProgressTracker.Fail(
+                    burst.SellerNick, burst.BuyerNick,
+                    "视觉答案已生成，但实际发送未确认：" + sendFailureReason, burst.ShopKey);
         }
 
         private void AddSkippedConversation(string seller, string buyer, string question, string note)
