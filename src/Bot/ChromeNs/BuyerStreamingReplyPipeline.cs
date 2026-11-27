@@ -303,7 +303,8 @@ namespace Bot.ChromeNs
                         answer, burst.ShopKey, lease.CancellationToken)
                     : ReplyDeduplicationService.EnsureDistinct(
                         burst.SellerNick, burst.BuyerNick, burst.CombinedQuestion,
-                        answer, lease.CancellationToken, false);
+                        answer, lease.CancellationToken, false,
+                        knowledgeV2Result == null ? string.Empty : knowledgeV2Result.ContextPromptAddon);
                 answer = deduplication.Answer;
             }
             catch (OperationCanceledException)

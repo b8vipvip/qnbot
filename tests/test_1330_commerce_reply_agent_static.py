@@ -121,7 +121,7 @@ def test_v2_direct_reply_obeys_shared_commerce_authority_before_resolve():
 def test_validator_only_promotes_verified_order_context_to_authoritative_evidence():
     text = read("src/Bot/ChromeNs/PreSendAnswerValidator.cs")
     validate = text[text.index("public static AnswerValidationResult Validate"):text.index("public static string BuildEvidenceText")]
-    assert validate.index("BuildState(seller, buyer, question)") < validate.index("BuildAuthoritativeEvidence(knowledge, state)")
+    assert validate.index("BuildState(seller, buyer, question)") < validate.index("BuildAuthoritativeEvidence(knowledge, state, approvedV2ContextEvidence)")
     evidence = text[text.index("private static string BuildAuthoritativeEvidence"):text.index("private static ConversationStateSnapshot BuildState")]
     assert "commerce != null && commerce.HasStructuredOrder" in evidence
     assert "购买阶段" in evidence
