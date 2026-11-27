@@ -413,30 +413,6 @@ namespace Bot.ChromeNs
                 return true;
             }
 
-            if (allowLocalShortReply)
-            {
-                string localAnswer;
-                string matchedPhrase;
-                if (LocalShortReplyService.TryResolve(
-                    item.SellerNick,
-                    question,
-                    out localAnswer,
-                    out matchedPhrase))
-                {
-                    var localOk = await SendFixedAsync(
-                        qn,
-                        item,
-                        localAnswer,
-                        "本地短消息回复").ConfigureAwait(false);
-                    Log.Info("本地短消息精确命中: seller=" + item.SellerNick
-                        + ", buyer=" + item.BuyerNick
-                        + ", phrase=" + matchedPhrase
-                        + ", success=" + localOk
-                        + ", aiCalled=false");
-                    return false;
-                }
-            }
-
             string firstReply;
             var firstReserved = FirstInquiryFixedReplyService.TryResolve(
                 item.SellerNick,
@@ -468,6 +444,30 @@ namespace Bot.ChromeNs
                             ? "首条咨询固定回复发送失败"
                             : qn.Rpa.GetSendFailureReason(),
                         item.ShopKey);
+                    return false;
+                }
+            }
+
+            if (allowLocalShortReply)
+            {
+                string localAnswer;
+                string matchedPhrase;
+                if (LocalShortReplyService.TryResolve(
+                    item.SellerNick,
+                    question,
+                    out localAnswer,
+                    out matchedPhrase))
+                {
+                    var localOk = await SendFixedAsync(
+                        qn,
+                        item,
+                        localAnswer,
+                        "本地短消息回复").ConfigureAwait(false);
+                    Log.Info("本地短消息精确命中: seller=" + item.SellerNick
+                        + ", buyer=" + item.BuyerNick
+                        + ", phrase=" + matchedPhrase
+                        + ", success=" + localOk
+                        + ", aiCalled=false");
                     return false;
                 }
             }

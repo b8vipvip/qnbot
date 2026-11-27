@@ -417,10 +417,9 @@ namespace Bot.ChromeNs
                 return productOutcome;
             }
 
-            // Priority is deliberate: configured manual/handoff rules own the turn first,
-            // then exact local short replies, then the first-inquiry greeting, then Knowledge/AI.
-            // This prevents a generic first-inquiry template from stealing a message that has
-            // an explicit operator rule or a matching shop-scoped short-reply entry.
+            // Explicit manual/handoff rules own the turn first. The first-inquiry greeting is a
+            // prelude; after it is delivered, the same problem continues through local short-reply
+            // and then the ordinary burst/context/AI pipeline.
             var manualDecision = BotFeatureStore.EvaluateAutoReplyRule(question);
             var manualRuleMatched = manualDecision != null && manualDecision.Matched;
             if (manualRuleMatched)
@@ -430,22 +429,6 @@ namespace Bot.ChromeNs
                     "命中人工确认/转接规则，首条咨询固定回复让位于显式规则", item.ShopKey);
                 Log.Info("买家消息命中显式人工规则，跳过首条咨询和本地短消息回复，交由统一规则/转接链路处理: seller="
                     + item.SellerNick + ", buyer=" + item.BuyerNick);
-            }
-
-            if (allowLocalShortReply && !manualRuleMatched)
-            {
-                string localAnswer;
-                string matchedPhrase;
-                if (LocalShortReplyService.TryResolve(
-                    item.SellerNick, question, out localAnswer, out matchedPhrase))
-                {
-                    var localOutcome = await SendFixedAsync(
-                        qn, item, localAnswer, "本地短消息回复", cancellationToken).ConfigureAwait(false);
-                    Log.Info("本地短消息精确命中: seller=" + item.SellerNick
-                        + ", buyer=" + item.BuyerNick + ", phrase=" + matchedPhrase
-                        + ", outcome=" + localOutcome + ", aiCalled=false");
-                    return localOutcome;
-                }
             }
 
             var firstReply = string.Empty;
@@ -498,6 +481,25 @@ namespace Bot.ChromeNs
                     Log.Info("首条咨询固定回复未确认送达，已释放首条资格并继续当前消息的后续视觉理解/AI: seller="
                         + item.SellerNick + ", buyer=" + item.BuyerNick
                         + ", image=" + isImageQuestion + ", reason=" + firstFailureReason);
+                }
+            }
+
+            if (!manualRuleMatched)
+            {
+                if (allowLocalShortReply)
+                {
+                    string localAnswer;
+                    string matchedPhrase;
+                    if (LocalShortReplyService.TryResolve(
+                        item.SellerNick, question, out localAnswer, out matchedPhrase))
+                    {
+                        var localOutcome = await SendFixedAsync(
+                            qn, item, localAnswer, "本地短消息回复", cancellationToken).ConfigureAwait(false);
+                        Log.Info("本地短消息精确命中: seller=" + item.SellerNick
+                            + ", buyer=" + item.BuyerNick + ", phrase=" + matchedPhrase
+                            + ", outcome=" + localOutcome + ", aiCalled=false");
+                        return localOutcome;
+                    }
                 }
             }
 
