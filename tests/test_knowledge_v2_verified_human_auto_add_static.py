@@ -192,7 +192,8 @@ def test_repository_directly_publishes_ai_knowledge_with_aliases_and_reversible_
     assert "Status = \"active\"" in method
     assert "SaveRecordsInTransaction(new List<object> { ToRow(record), revision });" in method
     assert "PreviousJson = JsonConvert.SerializeObject(tombstone)" in method
-    assert "MirrorOneToLegacy(shop, record)" in method
+    assert "MirrorOneToLegacy" not in method
+    assert "BotFeatureStore.SaveKnowledgeBase" not in method
     assert "KnowledgeEngineV2Service.ApplyRecordUpdate(seller, record)" in method
     assert "session_ai_auto_add" in method
     assert "recoveredExisting = true;" in method
@@ -250,7 +251,8 @@ def test_new_knowledge_write_mode_is_direct_ai_publish_not_dry_run():
     ]
 
     assert "ai_auto_publish_new_knowledge_and_verified_updates" in initial
-    assert '["newKnowledgeWriteMode"] = EnableVerifiedCorpusNewKnowledgeWrites ? "ai_auto_publish" : "dry_run"' in initial
+    assert '["newKnowledgeWriteMode"] = EnableVerifiedCorpusNewKnowledgeWrites
+                    ? "ai_auto_publish_verified_human_evidence" : "dry_run"' in initial
     assert "MaxVerifiedNewKnowledgePerSession = 8" in service
     assert "newKnowledgeApplied" in service
     assert "knowledgeCorpusNewCandidateApplied" in service
