@@ -35,7 +35,8 @@ def test_remote_history_fallback_reenters_single_normal_business_pipeline():
     assert "_messageSafetyStartedAt.AddSeconds(-8).Ticks" in text
     assert "catchupFloor.Ticks" in text
     assert "_businessInboundHistoryProbeLedger.TryAccept(messageKey)" in text
-    assert "await ProcessIncomingMessageAsync(message)" in text
+    assert "processingTask = ProcessIncomingMessageAsync(message)" in text
+    assert "await processingTask.ConfigureAwait(false)" in text
     assert "business-event-gap-confirmed" in text
     assert "unseen-buyer-message-detected" in text
     assert "recovered-inbound-replay" in text
@@ -199,3 +200,15 @@ def test_all_inbound_recovery_and_order_echo_history_reads_cover_a_full_buyer_bu
     assert "count = 100" in delivery_probe
     coordinator = (ROOT / "src" / "Bot" / "ChromeNs" / "BuyerMessageBurstCoordinator.cs").read_text(encoding="utf-8-sig")
     assert "MaxBurstMessageCount = 40" in coordinator
+
+
+def test_liveness_probe_releases_unaccepted_claim_and_holds_checkpoint_for_retry():
+    text = source()
+    method = text.split("internal async Task ProbeActiveConversationForMissedInboundAsync()", 1)[1]
+
+    assert "_businessInboundHistoryProbeLedger.TryAccept(messageKey)" in method
+    assert "_businessInboundHistoryProbeLedger.TryRelease(messageKey);" in method
+    assert "var replayFailed = false;" in method
+    assert "replayFailed = true;" in method
+    assert "if (unanswered.Count == 0 && !replayFailed)" in method
+    assert "replayFailed=" in method
