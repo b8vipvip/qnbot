@@ -63,7 +63,7 @@ def test_first_inquiry_is_sent_locally_and_committed_only_after_real_send():
     canonical = canonical_block()
 
     manual = canonical.index("var manualDecision = BotFeatureStore.EvaluateAutoReplyRule(question)")
-    local_short = canonical.index("if (allowLocalShortReply && !manualRuleMatched)", manual)
+    local_short = canonical.index("if (!manualRuleMatched && allowLocalShortReply)", manual)
     local_resolve = canonical.index("LocalShortReplyService.TryResolve(", local_short)
     resolve = canonical.index("FirstInquiryFixedReplyService.TryResolve(", local_resolve)
     invoke_send = canonical.index("var firstOutcome = await SendFixedAsync(", resolve)
