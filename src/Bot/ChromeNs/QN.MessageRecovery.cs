@@ -326,10 +326,13 @@ namespace Bot.ChromeNs
                         return false;
                     }
 
+                    // Match the normal liveness probe's 100-row history window. A 30-row
+                    // post-switch fetch can truncate the first half of a supported 40-message
+                    // buyer burst and silently omit fragments that still need normal processing.
                     var history = await cdp.Invoke<JObject>("im.singlemsg.GetRemoteHisMsg", new
                     {
                         cid = new { ccode = ccode, type = 1 },
-                        count = 30,
+                        count = 100,
                         gohistory = 1,
                         msgid = "-1",
                         msgtime = "-1"

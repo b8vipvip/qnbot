@@ -47,7 +47,9 @@ namespace Bot.ChromeNs
                 var history = await cdp.Invoke<JObject>("im.singlemsg.GetRemoteHisMsg", new
                 {
                     cid = new { ccode = ccode, type = 1 },
-                    count = 30,
+                    // A 40-message buyer burst can push the just-submitted seller echo
+                    // out of a 30-row window before order delivery verification reads it.
+                    count = 100,
                     gohistory = 1,
                     msgid = "-1",
                     msgtime = "-1"

@@ -62,7 +62,7 @@ def test_remote_history_fallback_catches_up_after_long_probe_gap():
     assert "_lastBusinessInboundHistoryProbeCompletedAt" in text
     assert "lastCompletedAt.Subtract(BusinessInboundCatchupOverlap)" in method
     assert "probeStartedAt.Subtract(BusinessInboundMaxCatchupLookback)" in method
-    assert "gapRecovery ? 100 : 20" in method
+    assert "var historyCount = 100;" in method
     assert "count = historyCount" in method
     assert "business-inbound-probe-gap-detected" in method
     assert "DateTime.Now.AddMinutes(-2).Ticks" not in method
@@ -166,3 +166,36 @@ def test_recovery_simulates_quiet_delay_at_previous_message_time_before_testing_
     assert "Simulate that timestamp" in helper
     assert "next item's arrival time" in helper
     assert "otherwise a fragment arriving just after the" in helper
+
+
+def test_normal_liveness_probe_history_window_covers_a_full_coalesced_buyer_burst():
+    method = source().split("internal async Task ProbeActiveConversationForMissedInboundAsync()", 1)[1]
+    coordinator = (ROOT / "src" / "Bot" / "ChromeNs" / "BuyerMessageBurstCoordinator.cs").read_text(encoding="utf-8-sig")
+    assert "var historyCount = 100;" in method
+    assert "count = historyCount" in method
+    assert "MaxBurstMessageCount = 40" in coordinator
+    assert "20-row history response can silently omit" in method
+    assert "then let an answered tail advance the durable checkpoint" in method
+
+
+def test_post_switch_background_history_fetch_also_covers_full_buyer_burst():
+    recovery = (ROOT / "src" / "Bot" / "ChromeNs" / "QN.MessageRecovery.cs").read_text(encoding="utf-8-sig")
+    method = recovery.split("private async Task<bool> RecoverMissedBuyerMessagesAsync(", 1)[1]
+    assert "count = 100" in method
+    assert "post-switch fetch can truncate" in method
+    coordinator = (ROOT / "src" / "Bot" / "ChromeNs" / "BuyerMessageBurstCoordinator.cs").read_text(encoding="utf-8-sig")
+    assert "MaxBurstMessageCount = 40" in coordinator
+
+
+def test_all_inbound_recovery_and_order_echo_history_reads_cover_a_full_buyer_burst():
+    first = (ROOT / "src" / "Bot" / "ChromeNs" / "FirstInquiryStreamingGuard.cs").read_text(encoding="utf-8-sig")
+    bulk = (ROOT / "src" / "Bot" / "ChromeNs" / "BulkListManagementUiBridge.cs").read_text(encoding="utf-8-sig")
+    delivery = (ROOT / "src" / "Bot" / "ChromeNs" / "QN.DeliveryVerification.cs").read_text(encoding="utf-8-sig")
+    first_probe = first.split("private async Task<bool> TryRecoverFirstInquiryFromNotificationAsync", 1)[1]
+    bulk_probe = bulk.split("private static async Task<bool> RecoverConversationAsync", 1)[1]
+    delivery_probe = delivery.split("internal async Task<RemoteSellerEchoVerification> VerifySellerEchoInRemoteHistoryAsync", 1)[1]
+    assert "count = 100" in first_probe
+    assert "count = 100" in bulk_probe
+    assert "count = 100" in delivery_probe
+    coordinator = (ROOT / "src" / "Bot" / "ChromeNs" / "BuyerMessageBurstCoordinator.cs").read_text(encoding="utf-8-sig")
+    assert "MaxBurstMessageCount = 40" in coordinator
