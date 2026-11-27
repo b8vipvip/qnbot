@@ -128,4 +128,5 @@ def test_one_seller_reply_closes_all_unanswered_fragments_in_the_same_buyer_burs
     assert "Remote history is for one verified ccode" in helper
     assert "sellerSort <= buyerSort" in helper
     assert "sellerSort >= nextBuyerSort" not in helper
-    assert "all earlier unanswered buyer messages in the same burst" in helper
+    assert "closes all earlier" in helper
+    assert "unanswered buyer messages in the same burst" in helper
