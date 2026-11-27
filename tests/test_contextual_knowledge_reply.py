@@ -7,41 +7,46 @@ def read(path):
     return (ROOT / path).read_text(encoding="utf-8-sig")
 
 
-def test_legacy_non_streaming_path_only_directs_when_smart_router_allows_it():
-    code = read("src/Bot/ChromeNs/MyOpenAI.cs")
-    helper = read("src/Bot/ChromeNs/KnowledgeContextualReplyService.cs")
-    assert "KnowledgeLearningService.TryFindLocalAnswer" in code
-    assert "if (!contextDecision.IsFollowUp)" in code
-    assert "SmartReplyRouterService.BuildPlan" in helper
-    assert "decision.SmartPlan.Route != SmartReplyRouteKind.DirectKnowledge" in helper
+def test_streaming_text_path_uses_v2_before_ai_generation():
+    runtime = read("src/Bot/ChromeNs/KnowledgeEngineV2RuntimeBridge.cs")
+    pipeline = read("src/Bot/ChromeNs/BuyerStreamingReplyPipeline.cs")
+    method = runtime[
+        runtime.index("internal static async Task<bool> TryHandleAsync"):
+        runtime.index("private static bool IsApprovedMatchForLogging")
+    ]
+    entry = pipeline[pipeline.index("private static async Task ProcessTextBurstStreamingAsync"):]
+
+    assert "KnowledgeEngineV2RuntimeBridge.TryHandleWithContextAsync(qn, lease)" in entry
+    assert entry.index("KnowledgeEngineV2RuntimeBridge.TryHandleWithContextAsync(qn, lease)") < entry.index(
+        'lease.MarkGenerating("streaming_answer_started")'
+    ) < entry.index("StreamingBuyerAnswerService.GetAnswerAsync(")
+    assert "KnowledgeEngineV2Service.Resolve(" in method
+    assert "KnowledgeV2RuntimeResult.Continue(contextPromptAddon)" in method
+    assert "KnowledgeV2RuntimeResult.HandledResult()" in method
+    assert "KnowledgeContextualReplyService" not in pipeline
 
 
-def test_contextual_knowledge_hit_uses_top_candidates_and_context_instead_of_fixed_copy():
-    helper = read("src/Bot/ChromeNs/KnowledgeContextualReplyService.cs")
+def test_contextual_ai_prompt_uses_v2_evidence_and_conversation_state_only():
     router = read("src/Bot/ChromeNs/SmartReplyRouterService.cs")
-    assert "SmartReplyRouterService.BuildPromptAddon(decision.SmartPlan)" in helper
-    assert "不得原样重复上一条客服回复或整段知识库答案" in helper
-    assert "当前消息不应机械套用固定答案" in helper
-    assert "PromptCandidateCount = 3" in router
-    assert "这些知识是候选事实依据，不是必须原样发送的固定答案" in router
+    pipeline = read("src/Bot/ChromeNs/BuyerStreamingReplyPipeline.cs")
+    assert "ConversationStateService.BuildPromptAddon(plan.ConversationState)" in router
+    assert "knowledgeV2Result.ContextPromptAddon" in pipeline
+    assert "CanUseOfflineKnowledgeFallback" in router
+    fallback = router.split("public static bool CanUseOfflineKnowledgeFallback", 1)[1].split(
+        "public static string BuildPromptAddon", 1
+    )[0]
+    assert "return false;" in fallback
+    assert "KnowledgeLearningService.TryFindLocalAnswer" not in router
+    assert not (ROOT / "src/Bot/ChromeNs/KnowledgeContextualReplyService.cs").exists()
 
 
-def test_tv_karaoke_confirmation_keeps_safe_offline_fallback_for_legacy_path():
-    helper = read("src/Bot/ChromeNs/KnowledgeContextualReplyService.cs")
-    assert "ExtractConfirmedFeature" in helper
-    assert "那就可以使用" in helper
-    assert "功能" in helper
-    assert '"有"' in helper
-    assert '"支持"' in helper
-    assert '"不支持"' in helper
-
-
-def test_contextual_replies_and_cancelled_drafts_do_not_pollute_learning():
-    code = read("src/Bot/ChromeNs/MyOpenAI.cs")
-    assert 'var answerSource = contextualKnowledge == null ? "AI生成" : "本地知识库上下文"' in code
-    local_branch = code.index("if (contextualKnowledge == null)")
-    deferred_guard = code.index("if (!deferLearningUntilDelivered)", local_branch)
-    queued = code.index("KnowledgeLearningService.QueueLearn", deferred_guard)
-    contextual_branch = code.index("else", queued)
-    contextual_log = code.index("上下文知识回复生成成功", contextual_branch)
-    assert local_branch < deferred_guard < queued < contextual_branch < contextual_log
+def test_contextual_or_cancelled_drafts_do_not_enter_legacy_learning_queue():
+    pipeline = read("src/Bot/ChromeNs/BuyerStreamingReplyPipeline.cs")
+    my_openai = read("src/Bot/ChromeNs/MyOpenAI.cs")
+    learning = read("src/Bot/ChromeNs/KnowledgeLearningService.cs")
+    assert "KnowledgeLearningService.QueueLearn" not in pipeline
+    assert "KnowledgeLearningService.QueueLearn" not in my_openai
+    assert "if (!lease.IsCurrent)" in pipeline
+    assert "QueueManualAnswerComparison" in learning
+    assert "buyerMessageId" in learning and "humanMessageId" in learning
+    assert "KnowledgeEngineV2Repository.TrySaveReviewedDirectAnswer(" in learning
