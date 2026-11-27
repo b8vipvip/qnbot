@@ -670,3 +670,14 @@ def test_bot_flow_test_runs_generation_and_send_inside_the_verified_shop_scope_a
     assert "catch (Exception ex)" in send
     assert "sendException is OperationCanceledException" in send
     assert "sendFailureReason = sendException != null" in send
+
+
+def test_bot_flow_test_reads_bot_master_switch_only_after_entering_verified_shop_scope():
+    source = read("src/Bot/ChromeNs/BotFlowTestService.cs")
+    shop = source.index("var qn = QN.FindExistingByShopKey(shopKey);")
+    scope = source.index("using (ShopSettingsScope.Enter(shop, false))", shop)
+    master = source.index("Params.Robot.CanUseRobotReal", scope)
+    generation = source.index("using (ShopSettingsScope.Enter(shop))", master)
+    assert shop < scope < master < generation
+    assert "if (!Params.Robot.CanUseRobotReal)" in source
+    assert "目标店铺的Bot总开关已停用" in source
