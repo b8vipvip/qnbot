@@ -786,6 +786,16 @@ namespace Bot.Options
         {
             var cfg = BotFeatureStore.GetMessagePolicy();
             var sp = new StackPanel { Margin = new Thickness(8) };
+            var storeRules = MakeButton("店铺规则中心", 110);
+            storeRules.Click += (s, e) => Bot.Knowledge.StorePromptProfileUi.Show(this);
+            sp.Children.Add(storeRules);
+            sp.Children.Add(new TextBlock
+            {
+                Text = "店铺规则中心独立管理当前 ShopKey 的业务规则与 AI 提示词，不属于知识库数据。",
+                TextWrapping = TextWrapping.Wrap,
+                Foreground = Brushes.DimGray,
+                Margin = new Thickness(0, 0, 0, 10)
+            });
             _oneSentence = new CheckBox { Content = "强制短句回复，避免长篇解释", IsChecked = cfg.OneSentence, Margin = new Thickness(0, 0, 0, 8) };
             sp.Children.Add(_oneSentence);
             var row = new StackPanel { Orientation = Orientation.Horizontal, Margin = new Thickness(0, 0, 0, 8) };
