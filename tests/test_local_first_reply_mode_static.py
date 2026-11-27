@@ -49,13 +49,16 @@ def test_local_first_high_confidence_v2_knowledge_returns_before_ai():
         runtime.index("internal static string BuildContextPromptAddon")
     ]
 
-    assert "ReplyModeService.IsLocalFirst(burst.SellerNick)" in route
-    assert route.index("KnowledgeEngineV2Service.Resolve(") < route.index("ReplyModeService.IsLocalFirst")
-    assert "KnowledgeV2RuntimeResult.HandledResult()" in route
-    assert "KnowledgeV2RuntimeBridge.TryHandleWithContextAsync(qn, lease)" in pipeline
+    resolve = route.index("KnowledgeEngineV2Service.Resolve(")
+    mode = route.index("ReplyModeService.IsLocalFirst(burst.SellerNick)")
+    direct = route.index("SendTextWithRetryAsync")
+    assert resolve < mode < direct
+    assert "KnowledgeEngineV2RuntimeBridge.TryHandleWithContextAsync(qn, lease)" in pipeline
     assert pipeline.index("KnowledgeEngineV2RuntimeBridge.TryHandleWithContextAsync(qn, lease)") < pipeline.index(
         "StreamingBuyerAnswerService.GetAnswerAsync("
     )
+    assert "if (!decision.CanDirectReply" in route
+    assert "KnowledgeV2RuntimeResult.HandledResult()" in route
 
 def test_ai_first_keeps_approved_v2_knowledge_as_context_and_does_not_direct_send():
     runtime = read("src/Bot/ChromeNs/KnowledgeEngineV2RuntimeBridge.cs")
