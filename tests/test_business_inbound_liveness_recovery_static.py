@@ -163,5 +163,6 @@ def test_recovery_simulates_quiet_delay_at_previous_message_time_before_testing_
     )[0]
     assert "groupItems, groupStartedAt, previousBuyerTime" in helper
     assert "var gapMs = (pair.Value - previousBuyerTime).TotalMilliseconds;" in helper
-    assert "not the next item's arrival time" in helper
+    assert "Simulate that timestamp" in helper
+    assert "next item's arrival time" in helper
     assert "otherwise a fragment arriving just after the" in helper
