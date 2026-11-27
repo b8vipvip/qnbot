@@ -31,8 +31,14 @@ def test_v2_context_memory_is_shop_scoped_and_does_not_reactivate_v1_retrieval()
     runtime = read("src/Bot/ChromeNs/KnowledgeEngineV2RuntimeBridge.cs")
     state = read("src/Bot/ChromeNs/ConversationStateService.cs")
     router = read("src/Bot/ChromeNs/SmartReplyRouterService.cs")
-    assert "ShopSettingsScope.Enter(shop)" in runtime
+
+    assert "var shopScope = ShopSettingsScope.Current;" in runtime
+    assert "shopScope.ShopKey, burst.ShopKey" in runtime
+    assert "ShopSettingsScope.Enter(shop)" not in runtime
     assert "ConversationStateService.Build(" in router
-    assert "ConversationStateService.BuildPromptAddon(" in router
+    assert "ContextualQueryRewriteService.Resolve(" in router
+    assert "retrievalQuestion = contextualResolution.ResolvedQuery;" in runtime
+    assert "decision.Query.UserOriginal = currentQuestion;" in runtime
     assert "KnowledgeLearningService.TryFindLocalAnswer" not in state
     assert "KnowledgeMemoryEngine" not in state
+
