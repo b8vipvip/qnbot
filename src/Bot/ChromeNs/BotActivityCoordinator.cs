@@ -483,7 +483,10 @@ namespace Bot.ChromeNs
                 return;
             }
 
-            if (!Params.Robot.CanUseRobotReal)
+            bool botEnabledForShop;
+            using (ShopSettingsScope.Enter(runtimeShop, false))
+                botEnabledForShop = Params.Robot.CanUseRobotReal;
+            if (!botEnabledForShop)
             {
                 Log.Info("[订单自动回复] 未发送原因=Bot已停用, orderId=" + snapshot.OrderId
                     + ", buyer=" + snapshot.Buyer);
