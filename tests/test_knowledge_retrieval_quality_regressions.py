@@ -601,3 +601,14 @@ def test_legacy_knowledge_prompt_injection_is_disabled_when_v2_is_authoritative(
     assert "contextForRules.ToString(), allowLegacyKnowledgePrompt" in streaming
     assert "allowLegacyKnowledgePrompt = !KnowledgeEngineV2Service.IsEnabled(seller)" in legacy
     assert "contextForKnowledge.ToString(), allowLegacyKnowledgePrompt" in legacy
+
+
+
+def test_legacy_knowledge_prompt_gate_requires_matching_shop_scope():
+    streaming = read("src/Bot/ChromeNs/BuyerStreamingReplyPipeline.cs")
+    legacy = read("src/Bot/ChromeNs/MyOpenAI.cs")
+
+    for source in (streaming, legacy):
+        assert "var currentShopScope = ShopSettingsScope.Current" in source
+        assert "currentShopScope.SellerNick, seller, StringComparison.Ordinal" in source
+        assert "allowLegacyKnowledgePrompt = !KnowledgeEngineV2Service.IsEnabled(seller)" in source
