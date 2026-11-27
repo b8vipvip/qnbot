@@ -12,6 +12,8 @@ namespace Bot.Knowledge
     {
         public int SourceItems { get; set; }
         public int Added { get; set; }
+        public int Published { get; set; }
+        public int Candidates { get; set; }
         public int DuplicateSkipped { get; set; }
         public List<KnowledgeV2Record> AddedItems { get; private set; }
 
@@ -66,15 +68,67 @@ namespace Bot.Knowledge
                         continue;
                     }
 
+                    var tokens = (source.ImportEvidenceTokens ?? new List<string>())
+                        .Select(x => (x ?? string.Empty).Trim())
+                        .Where(x => x.Length > 0)
+                        .Distinct(StringComparer.Ordinal)
+                        .Take(12)
+                        .ToList();
+                    var evidenceMap = importResult.SourceEvidenceByToken
+                        ?? new Dictionary<string, KnowledgeV2ImportEvidence>(StringComparer.Ordinal);
+                    var evidence = tokens.Select(token =>
+                    {
+                        KnowledgeV2ImportEvidence item;
+                        return evidenceMap.TryGetValue(token, out item) ? item : null;
+                    }).ToList();
+                    var allTokensKnown = tokens.Count > 0
+                        && evidence.Count == tokens.Count
+                        && evidence.All(x => x != null
+                            && string.Equals(x.EvidenceType, "historical_human_reply", StringComparison.Ordinal));
+                    var questionIds = evidence.Where(x => x != null)
+                        .SelectMany(x => x.QuestionMessageIds ?? new List<string>())
+                        .Select(x => (x ?? string.Empty).Trim())
+                        .Where(x => x.Length > 0 && !x.StartsWith("scan-turn:", StringComparison.Ordinal))
+                        .Distinct(StringComparer.Ordinal).Take(40).ToList();
+                    var answerIds = evidence.Where(x => x != null)
+                        .SelectMany(x => x.AnswerMessageIds ?? new List<string>())
+                        .Select(x => (x ?? string.Empty).Trim())
+                        .Where(x => x.Length > 0 && !x.StartsWith("scan-turn:", StringComparison.Ordinal))
+                        .Distinct(StringComparer.Ordinal).Take(40).ToList();
+                    var contextIds = evidence.Where(x => x != null)
+                        .SelectMany(x => x.ContextMessageIds ?? new List<string>())
+                        .Select(x => (x ?? string.Empty).Trim())
+                        .Where(x => x.Length > 0 && !x.StartsWith("scan-turn:", StringComparison.Ordinal))
+                        .Distinct(StringComparer.Ordinal).Take(12).ToList();
+                    var evidenceValid = allTokensKnown
+                        && evidence.All(x => x.QuestionMessageIds != null && x.QuestionMessageIds.Count > 0
+                            && x.AnswerMessageIds != null && x.AnswerMessageIds.Count > 0)
+                        && questionIds.Count > 0
+                        && answerIds.Count > 0
+                        && !questionIds.Intersect(answerIds, StringComparer.Ordinal).Any();
+
+                    // Preserve the transient tokens before cloning: they are intentionally
+                    // JsonIgnore and never become an independent V2 fact or cloud payload.
                     var record = JsonConvert.DeserializeObject<KnowledgeV2Record>(
                         JsonConvert.SerializeObject(source)) ?? new KnowledgeV2Record();
                     var parsed = KnowledgeEngineV2Semantics.Parse(title, null);
                     var risk = string.Equals(record.RiskLevel, "high", StringComparison.OrdinalIgnoreCase)
                         || KnowledgeEngineV2Semantics.IsHighRisk(title + " " + answer);
+                    var modelCandidate = string.Equals(record.Status, "candidate", StringComparison.OrdinalIgnoreCase)
+                        || string.Equals(record.Type, "learning_candidate", StringComparison.OrdinalIgnoreCase);
+                    var confidence = record.Confidence;
+                    var authority = record.Authority;
+                    var autoPublish = evidenceValid && !risk && !modelCandidate
+                        && !double.IsNaN(confidence) && !double.IsInfinity(confidence)
+                        && confidence >= 0.90 && !double.IsNaN(authority) && !double.IsInfinity(authority)
+                        && authority >= 0.90;
+
                     record.Id = string.IsNullOrWhiteSpace(record.Id) ? Guid.NewGuid().ToString("N") : record.Id;
                     record.Title = title;
                     record.Answer = answer;
-                    record.Type = risk ? "learning_candidate" : KnowledgeEngineV2Semantics.NormalizeType(record.Type);
+                    record.Type = autoPublish
+                        ? KnowledgeEngineV2Semantics.NormalizeType(record.Type)
+                        : "learning_candidate";
                     record.Intent = KnowledgeEngineV2Semantics.NormalizeIntent(
                         string.IsNullOrWhiteSpace(record.Intent) ? parsed.Intent : record.Intent);
                     record.Subject = string.IsNullOrWhiteSpace(record.Subject)
@@ -94,19 +148,32 @@ namespace Bot.Knowledge
                     record.RequiredContext = Clean(record.RequiredContext);
                     record.ProductIds = Clean(record.ProductIds);
                     record.RiskLevel = risk ? "high" : "normal";
-                    record.SourceType = "chat_history_import";
-                    record.SourceId = importId;
-                    record.Authority = risk ? Math.Min(record.Authority, 0.55) : Math.Max(record.Authority, 0.82);
-                    record.Confidence = risk ? Math.Min(record.Confidence, 0.55) : Math.Max(record.Confidence, 0.82);
-                    record.Enabled = !risk && string.Equals(record.Status, "active", StringComparison.OrdinalIgnoreCase);
-                    record.Status = record.Enabled ? "active" : "candidate";
+                    record.SourceType = autoPublish
+                        ? "ai_auto_learned_human_evidence"
+                        : "chat_history_unverified_candidate";
+                    record.SourceId = JsonConvert.SerializeObject(new
+                    {
+                        import_id = importId,
+                        evidence_type = autoPublish ? "historical_human_reply" : "unverified_history_import",
+                        source_evidence_ids = tokens,
+                        question_message_ids = questionIds,
+                        answer_message_ids = answerIds,
+                        context_message_ids = contextIds
+                    });
+                    record.Authority = autoPublish ? Math.Max(record.Authority, 0.90) : Math.Min(record.Authority, 0.69);
+                    record.Confidence = autoPublish ? Math.Max(record.Confidence, 0.90) : Math.Min(record.Confidence, 0.69);
+                    record.Enabled = autoPublish;
+                    record.Status = autoPublish ? "active" : "candidate";
                     record.CreatedAt = record.CreatedAt == DateTime.MinValue ? DateTime.Now : record.CreatedAt;
                     record.UpdatedAt = DateTime.Now;
-                    record.LastVerifiedAt = DateTime.Now;
+                    record.LastVerifiedAt = autoPublish ? DateTime.Now : DateTime.MinValue;
+                    record.ImportEvidenceTokens = new List<string>();
 
                     KnowledgeEngineV2Repository.Save(seller, record);
                     result.AddedItems.Add(record);
                     result.Added++;
+                    if (autoPublish) result.Published++;
+                    else result.Candidates++;
                 }
 
                 if (result.Added > 0) KnowledgeEngineV2Service.Warm(seller);
@@ -137,9 +204,9 @@ namespace Bot.Knowledge
                 KnowledgeEngineV2GovernanceAuditService.TryAppendAction(
                     seller, "chat_history_import", "knowledge_import", importId, string.Empty,
                     "历史聊天整理", string.Empty,
-                    string.Format("schema=knowledge_v2;source={0};added={1};duplicate_skipped={2}",
-                        result.SourceItems, result.Added, result.DuplicateSkipped),
-                    "历史聊天整理结果已写入唯一 Knowledge V2 仓库", "success", out ignored);
+                    string.Format("schema=knowledge_v2;source={0};added={1};published={2};candidates={3};duplicate_skipped={4}",
+                        result.SourceItems, result.Added, result.Published, result.Candidates, result.DuplicateSkipped),
+                    "历史聊天导入仅将带完整真人消息ID且通过置信度/风险门禁的知识自动发布；其余保留为V2候选。", "success", out ignored);
             }
             catch { }
         }
