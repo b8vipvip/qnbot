@@ -81,7 +81,7 @@ namespace Bot.ChromeNs
                 .ToList();
             var dependency = CalculateContextDependency(question, turns);
             var state = ConversationStateService.Build(
-                seller, buyer, question, turns, false);
+                seller, buyer, question, turns);
             var queryResolution = ContextualQueryRewriteService.Resolve(
                 question, dependency, state, turns);
             var recent = turns.Skip(Math.Max(0, turns.Count - 8)).ToList();
