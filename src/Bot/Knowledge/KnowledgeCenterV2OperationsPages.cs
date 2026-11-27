@@ -405,7 +405,7 @@ namespace Bot.Knowledge
             var export = Btn("导出V2完整包", 124); export.Click += delegate { ExportPackage(); };
             var import = Btn("导入V2完整包", 124); import.Click += delegate { ImportPackage(); };
             var exportRecords = Btn("仅导出结构化知识", 142); exportRecords.Click += delegate { ExportRecords(); };
-            var rebuild = Btn("从旧知识重新迁移", 140); rebuild.Click += delegate { RebuildLegacy(); };
+            var rebuild = Btn("重建V2检索索引", 140); rebuild.Click += delegate { RebuildIndex(); };
             actions.Children.Add(export); actions.Children.Add(import); actions.Children.Add(exportRecords); actions.Children.Add(rebuild);
             root.Children.Add(actions);
             _status = new TextBlock { Margin = new Thickness(0, 16, 0, 0), TextWrapping = TextWrapping.Wrap };
@@ -482,18 +482,18 @@ namespace Bot.Knowledge
             catch (Exception ex) { MessageBox.Show(_owner, "导入失败：" + ex.Message); }
         }
 
-        private void RebuildLegacy()
+        private void RebuildIndex()
         {
-            if (MessageBox.Show(_owner,
-                "将清空 V2 数据并从当前旧知识库重新迁移。建议先导出 V2 完整包。是否继续？",
-                "重新迁移", MessageBoxButton.YesNo, MessageBoxImage.Warning) != MessageBoxResult.Yes) return;
             try
             {
                 var backup = CreateAutomaticBackup();
-                KnowledgeEngineV2Service.RebuildFromLegacy(_seller);
-                _status.Text = "已从旧知识重新迁移。操作前备份：" + backup;
+                KnowledgeEngineV2Service.Invalidate(_seller);
+                KnowledgeEngineV2Service.Warm(_seller);
+                var stats = KnowledgeEngineV2Service.GetStats(_seller);
+                _status.Text = "已重建 Knowledge V2 检索索引；当前知识 " + stats.Total
+                    + " 条。数据未清空。操作前备份：" + backup;
             }
-            catch (Exception ex) { MessageBox.Show(_owner, "重新迁移失败：" + ex.Message); }
+            catch (Exception ex) { MessageBox.Show(_owner, "重建V2索引失败：" + ex.Message); }
         }
 
         private KnowledgeV2PortablePackage BuildPackage()
