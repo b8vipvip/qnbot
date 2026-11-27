@@ -1175,8 +1175,8 @@ namespace Bot.ChromeNs
             KnowledgeV2Decision approvedDecision,
             string reason)
         {
-            // This fallback is deliberately V2-only and never reopens the legacy
-            // KnowledgeBaseJson store. It is available only when the V2 runtime
+            // This fallback is deliberately V2-only and never opens another
+            // knowledge store. It is available only when the V2 runtime
             // already authorized a direct answer before the AI call began.
             if (approvedDecision == null || !approvedDecision.CanDirectReply
                 || string.IsNullOrWhiteSpace(approvedDecision.Answer)
