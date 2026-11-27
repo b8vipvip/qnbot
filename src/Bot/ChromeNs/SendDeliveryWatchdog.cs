@@ -52,8 +52,6 @@ namespace Bot.ChromeNs
             bool force = false,
             string shopKey = null)
         {
-            if (!Params.Robot.CanUseRobotReal) return;
-            if (!force && !Params.Robot.GetIsAutoReply()) return;
             answer = (answer ?? string.Empty).Trim();
             if (answer.Length == 0 || answer.StartsWith("错误：", StringComparison.Ordinal)) return;
 
@@ -62,6 +60,15 @@ namespace Bot.ChromeNs
             if (seller.Length == 0 || buyer.Length == 0) return;
             var shop = ResolveShop(seller, shopKey);
             if (shop == null) return;
+
+            bool botEnabledForShop;
+            bool autoReplyEnabledForShop;
+            using (ShopSettingsScope.Enter(shop, false))
+            {
+                botEnabledForShop = Params.Robot.CanUseRobotReal;
+                autoReplyEnabledForShop = Params.Robot.GetIsAutoReply();
+            }
+            if (!botEnabledForShop || (!force && !autoReplyEnabledForShop)) return;
 
             var existing = FindPending(shop, seller, buyer, answer);
             if (existing != null)
