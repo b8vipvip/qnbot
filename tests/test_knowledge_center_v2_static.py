@@ -32,13 +32,12 @@ def test_v2_query_does_not_periodically_rebuild_full_index():
 def test_buyer_runtime_never_waits_for_cold_v2_snapshot():
     public = read("src/Bot/Knowledge/KnowledgeEngineV2.Service.Public.cs")
     runtime = read("src/Bot/ChromeNs/KnowledgeEngineV2RuntimeBridge.cs")
-    assert 'public static bool IsSnapshotReady' in public
-    assert 'if (!KnowledgeEngineV2Service.IsSnapshotReady(burst.SellerNick))' in runtime
-    assert 'QueueWarm(burst.ShopKey, burst.SellerNick);' in runtime
-    assert 'return false;' in runtime
-    assert 'WarmingShopKeys.TryAdd(shopKey, 1)' in runtime
-    assert 'PreparedShopKeys.TryAdd(shopKey, 1)' in runtime
 
+    assert "public static bool IsSnapshotReady" in public
+    assert "if (!KnowledgeEngineV2Service.IsSnapshotReady(burst.SellerNick))" in runtime
+    assert "QueueWarm(burst.ShopKey, burst.SellerNick);" in runtime
+    assert "return KnowledgeV2RuntimeResult.Continue(warmContext);" in runtime
+    assert "WarmingShopKeys.TryAdd(shopKey, 1)" in runtime
 
 def test_v2_edits_use_atomic_incremental_snapshot_updates():
     repo = read("src/Bot/Knowledge/KnowledgeEngineV2.Repository.cs")
@@ -98,16 +97,17 @@ def test_working_memory_only_supplements_context_dependent_messages():
     assert 'if (query.Predicate == "general") query.Predicate = memory.Predicate;' in semantics
 
 
-def test_v2_runtime_retires_memory_v1_and_preserves_safe_send_path():
+def test_v2_runtime_has_no_memory_v1_handler_and_preserves_safe_send_path():
     runtime = read("src/Bot/ChromeNs/KnowledgeEngineV2RuntimeBridge.cs")
-    assert 'StopLegacyMemoryTimer();' in runtime
-    assert 'KnowledgeMemoryRuntimeBridge.DisableForV2();' in runtime
-    assert 'TryHandleAsync(QN qn, BuyerMessageBurstLease lease)' in runtime
-    assert 'if (!KnowledgeEngineV2Service.IsEnabled(burst.SellerNick))' in runtime
-    assert 'ReplyModeService.IsLocalFirst' not in runtime
-    assert 'ParallelReplyRelevanceGate.ShouldSend' in runtime
-    assert 'SendTextWithRetryAsync' in runtime
-
+    app = read("src/Bot/App.xaml.cs")
+    assert not (ROOT / "src/Bot/ChromeNs/KnowledgeMemoryEngine.cs").exists()
+    assert not (ROOT / "src/Bot/Knowledge/KnowledgeMemoryEngineUi.cs").exists()
+    assert "KnowledgeMemoryRuntimeBridge" not in runtime
+    assert "KnowledgeMemoryEngine" not in app
+    assert "TryHandleWithContextAsync(QN qn, BuyerMessageBurstLease lease)" in runtime
+    assert "if (!KnowledgeEngineV2Service.IsEnabled(burst.SellerNick))" in runtime
+    assert "ParallelReplyRelevanceGate.ShouldSend" in runtime
+    assert "SendTextWithRetryAsync" in runtime
 
 def test_v2_is_called_explicitly_by_the_canonical_streaming_handler_not_a_racing_reflection_wrapper():
     runtime = read("src/Bot/ChromeNs/KnowledgeEngineV2RuntimeBridge.cs")
@@ -125,27 +125,23 @@ def test_v2_is_called_explicitly_by_the_canonical_streaming_handler_not_a_racing
     assert "knowledgeV2Result.ContextPromptAddon" in streaming
 
 
-def test_learning_candidates_require_explicit_approval_before_direct_reply():
+def test_verified_human_evidence_auto_publishes_but_unverified_suggestions_remain_candidates():
     public = read("src/Bot/Knowledge/KnowledgeEngineV2.Service.Public.cs")
     bridge = read("src/Bot/ChromeNs/KnowledgeEngineV2LearningBridge.cs")
+    session = read("src/Bot/ChromeNs/ConversationSessionLearningService.cs")
     repo = read("src/Bot/Knowledge/KnowledgeEngineV2.Repository.cs")
-    assert 'productionMatches = rankedMatches' in public
-    assert '.Where(IsApprovedProductionMatch)' in public
-    assert 'var best = manualExact ?? manualSimilar ?? productionMatches.FirstOrDefault();' in public
-    assert 'var manualExactMatches = rankedMatches.Where(IsApprovedProductionMatch)' in public
-    assert 'var manualExactConflict = manualExactMatches.Count > 1;' in public
-    assert 'var visibleMatches = rankedMatches.Take(5).ToList();' in public
-    assert 'if (best != null && !visibleMatches.Contains(best)) visibleMatches.Add(best);' in public
-    assert 'KnowledgeV2AuthorityPolicy.IsProductionApproved' in public
-    assert 'public static bool IsCandidate(KnowledgeV2Record record)' in bridge
-    assert 'if (IsExplicitHumanConfirmationSource(record.SourceType)) return false;' in bridge
-    assert '当前只命中尚未批准的学习候选' in public
-    assert 'record.Type = "learning_candidate";' in bridge
-    assert 'record.Status = "candidate";' in bridge
-    assert 'KnowledgeV2Record existing = null;' in bridge
-    assert "item.Enabled = KnowledgeV2AuthorityPolicy.IsProductionApproved(record);" in repo
-    assert '&& !IsCandidate(record);' in bridge
 
+    assert "KnowledgeV2AuthorityPolicy.IsProductionApproved" in public
+    assert "public static bool IsCandidate(KnowledgeV2Record record)" in bridge
+    assert "public static bool IsAutoPublishedHumanEvidenceSource" in bridge
+    assert "ai_auto_publish_verified_human_evidence" in session
+    assert "EnableVerifiedCorpusNewKnowledgeWrites = true" in session
+    assert "EnableVerifiedCorpusCorrectionWrites = true" in session
+    assert "EnableAutomaticWrites = false" in session
+    assert "TryCreateVerifiedSessionKnowledge(" in repo
+    assert "if (IsAutoPublishedHumanEvidenceSource(record.SourceType))" in bridge
+    assert "learning_candidate" in bridge
+    assert "BotFeatureStore.SaveKnowledgeBase" not in repo
 
 def test_disabled_records_remain_visible_to_knowledge_center_management():
     public = read("src/Bot/Knowledge/KnowledgeEngineV2.Service.Public.cs")
