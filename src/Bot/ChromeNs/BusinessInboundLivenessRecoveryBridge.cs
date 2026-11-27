@@ -278,15 +278,79 @@ try {
             IList<QNChatMessage> allMessages,
             IList<QNChatMessage> buyerCandidates,
             string seller,
-            string buyer)
+            string buyer,
+            string shopKey)
         {
-            var buyerSort = IncomingMessageSafety.GetSortValue(buyerMessage);
-            if (buyerSort <= 0) return false;
+            DateTime buyerTime;
+            if (!IncomingMessageSafety.TryGetMessageTime(buyerMessage, out buyerTime)) return false;
+            var buyerSort = buyerTime.Ticks;
+            var orderedCandidates = new List<KeyValuePair<QNChatMessage, DateTime>>();
+            foreach (var candidate in buyerCandidates ?? new List<QNChatMessage>())
+            {
+                DateTime candidateTime;
+                if (candidate == null || !IncomingMessageSafety.TryGetMessageTime(candidate, out candidateTime))
+                {
+                    // An unparseable source timestamp makes burst boundaries unknowable. Do not
+                    // infer acknowledgement from a later seller message in that case.
+                    return false;
+                }
+                orderedCandidates.Add(new KeyValuePair<QNChatMessage, DateTime>(candidate, candidateTime));
+            }
+            orderedCandidates = orderedCandidates.OrderBy(x => x.Value).ToList();
 
-            // Remote history is for one verified ccode. A later seller turn closes all earlier
-            // unanswered buyer messages in the same burst, not just the last buyer fragment.
-            // Otherwise a reply to "多少钱？可以优惠吗？" would acknowledge only the second
-            // fragment and replay the first one after a restart.
+            var groupItems = new List<BuyerMessageBurstItem>();
+            var groupStartedAt = DateTime.MinValue;
+            var previousBuyerTime = DateTime.MinValue;
+            var nextBurstStartTicks = long.MaxValue;
+            var targetFound = false;
+            foreach (var pair in orderedCandidates)
+            {
+                if (pair.Value < buyerTime && groupItems.Count == 0)
+                {
+                    // Keep earlier fragments because the 4-second hard cap is measured from
+                    // the first message in the actual coordinator burst, not from this fragment.
+                }
+
+                if (groupItems.Count == 0)
+                {
+                    groupStartedAt = pair.Value;
+                }
+                else
+                {
+                    var quietDelay = BuyerMessageBurstCoordinator.QuietDelayMilliseconds(
+                        groupItems, groupStartedAt, pair.Value);
+                    var gapMs = (pair.Value - previousBuyerTime).TotalMilliseconds;
+                    if (gapMs > quietDelay)
+                    {
+                        if (targetFound)
+                        {
+                            nextBurstStartTicks = pair.Value.Ticks;
+                            break;
+                        }
+                        groupItems.Clear();
+                        groupStartedAt = pair.Value;
+                    }
+                }
+
+                var candidateText = GetMessageText(pair.Key);
+                groupItems.Add(new BuyerMessageBurstItem
+                {
+                    ShopKey = shopKey,
+                    SellerNick = seller,
+                    BuyerNick = buyer,
+                    Message = pair.Key,
+                    DisplayText = candidateText,
+                    SortValue = pair.Value.Ticks,
+                    ReceivedAt = pair.Value
+                });
+                previousBuyerTime = pair.Value;
+                if (ReferenceEquals(pair.Key, buyerMessage)) targetFound = true;
+            }
+            if (!targetFound) return false;
+
+            // A later seller message only acknowledges this buyer turn if it appears before the
+            // next distinct burst. A reply after a later, separately dispatched buyer question
+            // must not suppress recovery of the earlier unanswered question.
             foreach (var message in allMessages ?? new List<QNChatMessage>())
             {
                 if (message == null || !IsSellerMessage(message) || message.toid == null) continue;
@@ -294,8 +358,10 @@ try {
                 if (ConversationContextStore.IsWithdrawalNotice(message, sellerText)
                     || ConversationContextStore.IsPlatformSystemTip(message, sellerText))
                     continue;
-                var sellerSort = IncomingMessageSafety.GetSortValue(message);
-                if (sellerSort <= buyerSort) continue;
+                DateTime sellerTime;
+                if (!IncomingMessageSafety.TryGetMessageTime(message, out sellerTime)) continue;
+                var sellerSort = sellerTime.Ticks;
+                if (sellerSort <= buyerSort || sellerSort >= nextBurstStartTicks) continue;
                 var recipient = (message.toid.nick ?? string.Empty).Trim();
                 if (recipient.Length == 0
                     || AreBuyerAliasesEquivalentInShop(seller, recipient, buyer))
@@ -469,7 +535,7 @@ try {
                     .ToList();
                 var alreadyAnswered = candidates
                     .Where(message => HasSellerReplyAfterRecoveredBuyer(
-                        message, messages, candidates, seller, buyer))
+                        message, messages, candidates, seller, buyer, shop.ShopKey))
                     .ToList();
                 var unanswered = candidates
                     .Where(message => !alreadyAnswered.Contains(message))
