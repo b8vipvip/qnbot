@@ -359,6 +359,8 @@ namespace Bot.ChromeNs
             if (ShopReceptionPolicy.TryWaitForEvidence(
                 item.SellerNick, item.BuyerNick, question, out waitingReason))
             {
+                FirstInquiryFixedReplyService.ReleaseReservation(
+                    item.SellerNick, item.BuyerNick, "接待流程等待截图，释放被更高优先级规则遮蔽的首条咨询资格", item.ShopKey);
                 Log.Info("接待流程明确等待截图，已消费手机号消息且未发送回复: seller="
                     + item.SellerNick + ", buyer=" + item.BuyerNick + ", reason=" + waitingReason);
                 return CanonicalPreMergeOutcome.Consumed;
@@ -369,6 +371,8 @@ namespace Bot.ChromeNs
                 item,
                 cancellationToken).ConfigureAwait(false))
             {
+                FirstInquiryFixedReplyService.ReleaseReservation(
+                    item.SellerNick, item.BuyerNick, "人工代充安全状态机已接管当前消息", item.ShopKey);
                 Log.Info("人工代充安全状态机已消费当前买家消息: seller="
                     + item.SellerNick + ", buyer=" + item.BuyerNick);
                 return CanonicalPreMergeOutcome.Consumed;
@@ -378,6 +382,8 @@ namespace Bot.ChromeNs
             string offHoursReply;
             if (TryResolveOffHours(out offHoursReply))
             {
+                FirstInquiryFixedReplyService.ReleaseReservation(
+                    item.SellerNick, item.BuyerNick, "下班自动回复优先于首条咨询固定回复", item.ShopKey);
                 DateTime until;
                 if (!OffHoursDeliveredUntil.TryGetValue(buyerKey, out until) || until <= DateTime.Now)
                 {
@@ -401,6 +407,8 @@ namespace Bot.ChromeNs
             if (ConversationContextStore.TryTakeProductLinkReply(
                 item.SellerNick, item.BuyerNick, question, out productLinkReply, item.ShopKey))
             {
+                FirstInquiryFixedReplyService.ReleaseReservation(
+                    item.SellerNick, item.BuyerNick, "商品链接预设优先于首条咨询固定回复", item.ShopKey);
                 string supersededReason;
                 if (HasNewerSubstantiveConversationTurn(item, question, out supersededReason))
                 {
@@ -437,6 +445,8 @@ namespace Bot.ChromeNs
                 if (LocalShortReplyService.TryResolve(
                     item.SellerNick, question, out localAnswer, out matchedPhrase))
                 {
+                    FirstInquiryFixedReplyService.ReleaseReservation(
+                        item.SellerNick, item.BuyerNick, "命中本地短消息规则，释放被遮蔽的首条咨询资格", item.ShopKey);
                     var localOutcome = await SendFixedAsync(
                         qn, item, localAnswer, "本地短消息回复", cancellationToken).ConfigureAwait(false);
                     Log.Info("本地短消息精确命中: seller=" + item.SellerNick
