@@ -68,7 +68,8 @@ namespace Bot.ChromeNs
             string question,
             string answer,
             KnowledgeBaseEntry knowledge,
-            bool secondAttempt)
+            bool secondAttempt,
+            string approvedV2ContextEvidence = null)
         {
             var result = new AnswerValidationResult();
             answer = BotOutboundMessageFormatter.StripAiMarker(answer);
@@ -84,7 +85,7 @@ namespace Bot.ChromeNs
 
             var compactAnswer = Compact(answer);
             var state = BuildState(seller, buyer, question);
-            var authoritativeEvidence = BuildAuthoritativeEvidence(knowledge, state);
+            var authoritativeEvidence = BuildAuthoritativeEvidence(knowledge, state, approvedV2ContextEvidence);
 
             if (MachinePhrases.Any(x => compactAnswer.Contains(Compact(x))))
             {
@@ -136,7 +137,7 @@ namespace Bot.ChromeNs
                 result.Issues.Add("声称已经核实或完成具体订单/售后状态，但没有可靠依据：" + string.Join("、", unsupportedStatus));
             }
 
-            if (HasKnowledgeContradiction(answer, knowledge))
+            if (HasKnowledgeContradiction(answer, knowledge, approvedV2ContextEvidence))
             {
                 result.Issues.Add("生成答案与高可信知识或事实约束的支持/不支持结论相反");
             }
@@ -151,7 +152,7 @@ namespace Bot.ChromeNs
             var highRisk = unsupportedAbsolute.Count > 0
                 || unsupportedStatus.Count > 0
                 || HasHighRiskUnsupportedClaim(answer, authoritativeEvidence)
-                || HasKnowledgeContradiction(answer, knowledge);
+                || HasKnowledgeContradiction(answer, knowledge, approvedV2ContextEvidence);
             if (highRisk || secondAttempt)
             {
                 result.Action = AnswerValidationAction.Manual;
@@ -203,9 +204,16 @@ namespace Bot.ChromeNs
 
         private static string BuildAuthoritativeEvidence(
             KnowledgeBaseEntry knowledge,
-            ConversationStateSnapshot state)
+            ConversationStateSnapshot state,
+            string approvedV2ContextEvidence)
         {
             var sb = new StringBuilder(BuildEvidenceText(knowledge));
+            if (!string.IsNullOrWhiteSpace(approvedV2ContextEvidence))
+            {
+                sb.Append("\n【Knowledge V2已批准上下文证据】\n")
+                    .Append(Safe(approvedV2ContextEvidence, 5000))
+                    .Append("\n");
+            }
             var commerce = state == null ? null : state.CommerceContext;
             if (commerce != null && commerce.HasStructuredOrder)
             {
@@ -232,7 +240,11 @@ namespace Bot.ChromeNs
             try
             {
                 var turns = ConversationContextStore.GetRecentTurns(seller, buyer, question, 12);
-                return ConversationStateService.Build(seller, buyer, question, turns);
+                var includeLegacyKnowledgeEntities = false;
+                try { includeLegacyKnowledgeEntities = !KnowledgeEngineV2Service.IsEnabled(seller); }
+                catch { includeLegacyKnowledgeEntities = false; }
+                return ConversationStateService.Build(
+                    seller, buyer, question, turns, includeLegacyKnowledgeEntities);
             }
             catch
             {
@@ -292,18 +304,35 @@ namespace Bot.ChromeNs
                 || a == "稍等一下";
         }
 
-        private static bool HasKnowledgeContradiction(string answer, KnowledgeBaseEntry knowledge)
+        private static bool HasKnowledgeContradiction(
+            string answer,
+            KnowledgeBaseEntry knowledge,
+            string approvedV2ContextEvidence)
         {
-            if (knowledge == null || string.IsNullOrWhiteSpace(knowledge.Answer)) return false;
-            var policy = KnowledgePolicyProfileService.GetProfile(knowledge);
-            var trusted = policy != null
-                && (KnowledgeAnswerModes.Normalize(policy.AnswerMode) == KnowledgeAnswerModes.Constraint
-                    || policy.Confidence >= 0.80
-                    || policy.ReliabilityScore >= 0.72);
-            if (!trusted) return false;
-            var expected = DetectPolarity(knowledge.Answer);
-            var actual = DetectPolarity(answer);
-            return expected != 0 && actual != 0 && expected != actual;
+            if (knowledge != null && !string.IsNullOrWhiteSpace(knowledge.Answer))
+            {
+                var policy = KnowledgePolicyProfileService.GetProfile(knowledge);
+                var trusted = policy != null
+                    && (KnowledgeAnswerModes.Normalize(policy.AnswerMode) == KnowledgeAnswerModes.Constraint
+                        || policy.Confidence >= 0.80
+                        || policy.ReliabilityScore >= 0.72);
+                if (trusted)
+                {
+                    var expected = DetectPolarity(knowledge.Answer);
+                    var actual = DetectPolarity(answer);
+                    if (expected != 0 && actual != 0 && expected != actual) return true;
+                }
+            }
+
+            // V2 context is already restricted to approved, normal-risk records and ordered
+            // by relevance. Use the top selected answer as the factual polarity boundary.
+            var v2Answer = Regex.Match(
+                approvedV2ContextEvidence ?? string.Empty,
+                @"(?m)^答案：([^\r\n]+)");
+            if (!v2Answer.Success) return false;
+            var expectedV2 = DetectPolarity(v2Answer.Groups[1].Value);
+            var actualAnswer = DetectPolarity(answer);
+            return expectedV2 != 0 && actualAnswer != 0 && expectedV2 != actualAnswer;
         }
 
         private static int DetectPolarity(string value)
