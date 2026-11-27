@@ -794,6 +794,12 @@ namespace Bot.ChromeNs
             }
             catch (OperationCanceledException)
             {
+                if (physicalSendAttempted && qn.Rpa != null && qn.Rpa.LastSendWasIndeterminate)
+                {
+                    sendFailureReason = qn.Rpa.GetSendFailureReason();
+                    if (ctl != null) ctl.SetSendResult(false, "发送结果不确定，等待回显核验：" + sendFailureReason);
+                    return CanonicalPreMergeOutcome.Indeterminate;
+                }
                 sendCancelled = true;
                 if (ctl != null) ctl.SetSendResult(false, "generation已失效，固定回复发送已取消");
                 return CanonicalPreMergeOutcome.Cancelled;
