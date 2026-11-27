@@ -1043,32 +1043,7 @@ namespace Bot.ChromeNs
             var routeStarted = Stopwatch.StartNew();
             var plan = await SmartReplyRouterService.BuildPlanAsync(seller, buyer, question, token);
             routeStarted.Stop();
-            var best = plan.BestCandidate;
             var replyMode = ReplyModeService.GetMode(seller);
-            if (replyMode == BotReplyMode.LocalFirst
-                && plan.Route == SmartReplyRouteKind.DirectKnowledge
-                && best != null
-                && best.Entry != null)
-            {
-                var directAnswer = BotFeatureStore.ApplyOutputPolicy(best.Entry.Answer);
-                if (string.IsNullOrWhiteSpace(directAnswer)
-                    || ConversationContextStore.IsWithdrawnAnswer(seller, buyer, directAnswer))
-                    return "错误：本地知识回复为空或已被客服撤回，已阻止再次发送。";
-                KnowledgeLearningService.RegisterAnswerSource(seller, buyer, question, directAnswer, "智能路由-本地直答");
-                MessageProcessingTraceService.RecordKnowledgeDecision(
-                    seller,
-                    buyer,
-                    "知识库高置信直答",
-                    "knowledgeId=" + best.Entry.Id
-                        + "；score=" + best.FinalScore.ToString("0.00")
-                        + "；reason=" + plan.Reason,
-                    routeStarted.ElapsedMilliseconds);
-                Log.Info("本地优先高置信知识直答: buyer=" + buyer
-                    + ", knowledgeId=" + best.Entry.Id
-                    + ", score=" + best.FinalScore.ToString("0.00")
-                    + ", contextDependency=" + plan.ContextDependencyScore.ToString("0.00"));
-                return directAnswer;
-            }
 
             MessageProcessingTraceService.RecordKnowledgeDecision(
                 seller,
@@ -1084,23 +1059,7 @@ namespace Bot.ChromeNs
 
             var endpoints = AiEndpointStore.GetEnabledEndpoints();
             if (endpoints == null || endpoints.Count < 1)
-            {
-                if (SmartReplyRouterService.CanUseOfflineKnowledgeFallback(plan)
-                    && best != null
-                    && best.Entry != null)
-                {
-                    var fallback = BotFeatureStore.ApplyOutputPolicy(best.Entry.Answer);
-                    if (!string.IsNullOrWhiteSpace(fallback)
-                        && !ConversationContextStore.IsWithdrawnAnswer(seller, buyer, fallback))
-                    {
-                        KnowledgeLearningService.RegisterAnswerSource(seller, buyer, question, fallback, "智能路由-离线知识兜底");
-                        MessageProcessingTraceService.RecordKnowledgeDecision(
-                            seller, buyer, "AI不可用，使用安全离线知识兜底", "knowledgeId=" + best.Entry.Id, 0);
-                        return fallback;
-                    }
-                }
-                return "错误：没有可用的AI接口；当前问题需要结合上下文，已阻止直接套用可能不合适的本地固定答案。";
-            }
+                return "错误：没有可用的AI接口；Knowledge V2 未提供可直接发送的批准答案，已阻止旧知识库离线兜底。";
 
             MessageProcessingTraceService.RecordAiFallbackStarted(
                 seller,
@@ -1125,17 +1084,8 @@ namespace Bot.ChromeNs
                 if (contextForRules.Length > 2200) break;
                 contextForRules.Append(' ').Append(turn.Text);
             }
-            var allowLegacyKnowledgePrompt = false;
-            try
-            {
-                var currentShopScope = ShopSettingsScope.Current;
-                if (currentShopScope == null
-                    || string.Equals(currentShopScope.SellerNick, seller, StringComparison.Ordinal))
-                    allowLegacyKnowledgePrompt = !KnowledgeEngineV2Service.IsEnabled(seller);
-            }
-            catch { allowLegacyKnowledgePrompt = false; }
             dynamicSystemPrompt += BotFeatureStore.BuildPromptAddon(
-                contextForRules.ToString(), allowLegacyKnowledgePrompt);
+                contextForRules.ToString(), false);
             dynamicSystemPrompt += SmartReplyRouterService.BuildPromptAddon(plan);
             dynamicSystemPrompt += knowledgeV2ContextAddon ?? string.Empty;
             dynamicSystemPrompt += ReceptionFlowPolicy.BuildPromptAddon(seller, buyer, question);
@@ -1171,24 +1121,7 @@ namespace Bot.ChromeNs
 
             var permit = ShopScopedReplyCircuitBreaker.TryEnter(shopKey);
             if (!permit.Allowed)
-            {
-                if (SmartReplyRouterService.CanUseOfflineKnowledgeFallback(plan)
-                    && best != null && best.Entry != null)
-                {
-                    var safeFallback = BotFeatureStore.ApplyOutputPolicy(best.Entry.Answer);
-                    if (!string.IsNullOrWhiteSpace(safeFallback)
-                        && !ConversationContextStore.IsWithdrawnAnswer(seller, buyer, safeFallback))
-                    {
-                        KnowledgeLearningService.RegisterAnswerSource(
-                            seller, buyer, question, safeFallback, "智能路由-AI熔断离线安全兜底");
-                        MessageProcessingTraceService.RecordKnowledgeDecision(
-                            seller, buyer, "AI上游熔断，使用安全离线知识兜底",
-                            "knowledgeId=" + best.Entry.Id + "；route=" + plan.Route, 0);
-                        return safeFallback;
-                    }
-                }
-                return "错误：当前店铺AI上游处于熔断保护期，且没有可用的安全离线知识，已阻止自动发送并建议转人工。";
-            }
+                return "错误：当前店铺AI上游处于熔断保护期，Knowledge V2 未提供可直接发送的批准答案，已阻止旧知识库离线兜底并建议转人工。";
 
             string answer = string.Empty;
             try
@@ -1211,26 +1144,7 @@ namespace Bot.ChromeNs
             }
 
             if (string.IsNullOrWhiteSpace(answer) || answer.StartsWith("错误：", StringComparison.Ordinal))
-            {
-                if (SmartReplyRouterService.CanUseOfflineKnowledgeFallback(plan)
-                    && best != null && best.Entry != null)
-                {
-                    var safeFallback = BotFeatureStore.ApplyOutputPolicy(best.Entry.Answer);
-                    if (!string.IsNullOrWhiteSpace(safeFallback)
-                        && !ConversationContextStore.IsWithdrawnAnswer(seller, buyer, safeFallback))
-                    {
-                        KnowledgeLearningService.RegisterAnswerSource(
-                            seller, buyer, question, safeFallback, "智能路由-AI失败离线安全兜底");
-                        MessageProcessingTraceService.RecordKnowledgeDecision(
-                            seller, buyer, "AI接口失败，使用安全离线知识兜底",
-                            "knowledgeId=" + best.Entry.Id + "；route=" + plan.Route, 0);
-                        Log.Info("Smart Reply AI失败后使用安全离线知识兜底: buyer=" + buyer
-                            + ", knowledgeId=" + best.Entry.Id);
-                        return safeFallback;
-                    }
-                }
-                return "错误：所有AI接口均未返回有效答案。";
-            }
+                return "错误：所有AI接口均未返回有效答案；Knowledge V2 未提供可直接发送的批准答案，已阻止旧知识库兜底。";
             answer = ReplyTranscriptSanitizer.Sanitize(answer);
             answer = BotFeatureStore.ApplyOutputPolicy(answer);
             if (ConversationContextStore.IsWithdrawnAnswer(seller, buyer, answer))
@@ -1238,16 +1152,10 @@ namespace Bot.ChromeNs
                 return "错误：该回复已被客服撤回，已阻止再次发送。";
             }
 
-            var source = plan.Route == SmartReplyRouteKind.ContextualKnowledge
-                ? "智能路由-知识上下文"
-                : "AI生成";
+            var source = string.IsNullOrWhiteSpace(knowledgeV2ContextAddon)
+                ? "AI生成"
+                : "AI生成（Knowledge V2上下文）";
             KnowledgeLearningService.RegisterAnswerSource(seller, buyer, question, answer, source);
-            if (plan.Route == SmartReplyRouteKind.ContextualKnowledge && best != null && best.Entry != null)
-            {
-                Log.Info("Smart Reply知识上下文回复生成成功: buyer=" + buyer
-                    + ", knowledgeId=" + best.Entry.Id
-                    + ", score=" + best.FinalScore.ToString("0.00"));
-            }
             return answer;
         }
 
