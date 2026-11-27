@@ -47,7 +47,7 @@ def test_recovery_uses_live_source_checkpoint_not_wall_clock_staleness_timeout()
     assert "_latestBuyerMessageObserved.TryGetValue(recoveryKey, out observedAt)" in method
     assert "IncomingMessageSafety.GetSortValue(message) > observedAt.Ticks" in method
     assert "var missedCandidates = candidates" in method
-    assert "foreach (var message in missedCandidates)" in method
+    assert "foreach (var message in missedToReplay)" in method
     assert "DateTime.Now.AddSeconds(-2)" not in method
     assert "liveBusinessEventAgeSeconds" not in method
     assert "business-event-stale" not in method
@@ -66,9 +66,8 @@ def test_remote_history_fallback_catches_up_after_long_probe_gap():
     assert "count = historyCount" in method
     assert "business-inbound-probe-gap-detected" in method
     assert "DateTime.Now.AddMinutes(-2).Ticks" not in method
-    assert method.rfind("_lastBusinessInboundHistoryProbeCompletedAt = DateTime.Now;") > method.find(
-        "await ProcessIncomingMessageAsync(message)"
-    )
+    assert "PersistBusinessInboundCheckpoint(shop, DateTime.Now)" in method
+    assert "business-inbound-checkpoint-held-for-unanswered-turns" in method
 
 
 def test_history_fallback_does_not_hijack_visible_chat():
@@ -77,3 +76,41 @@ def test_history_fallback_does_not_hijack_visible_chat():
     assert "OpenChat(" not in history_method
     assert "Task.Delay(180)" in history_method
     assert "businessInboundLivenessStableProbe" in history_method
+
+def test_business_inbound_checkpoint_is_persisted_encrypted_per_exact_shopkey_and_restored_after_restart():
+    text = source()
+    assert 'BusinessInboundCheckpointSettingKey = "BusinessInboundLastHistoryProbeUtcTicks"' in text
+    assert "new ShopScopedSettingsStore(shop, new ShopScopedPathProvider())" in text
+    assert "store.TryGetString(BusinessInboundCheckpointSettingKey, out raw)" in text
+    assert "store.SetString(" in text
+    assert "utcTicks.ToString(CultureInfo.InvariantCulture)" in text
+    assert "EnsureBusinessInboundCheckpointLoaded(shop)" in text
+    assert "_businessInboundCheckpointRestored" in text
+    assert "var threshold = _businessInboundCheckpointRestored" in text
+    assert "PersistBusinessInboundCheckpoint(shop, DateTime.Now)" in text
+
+
+def test_restart_recovery_skips_buyer_messages_with_a_later_seller_reply_in_remote_history():
+    text = source()
+    assert "HasSellerReplyAfterRecoveredBuyer(" in text
+    helper = text.split("private bool HasSellerReplyAfterRecoveredBuyer", 1)[1].split(
+        "internal async Task RepairBusinessInboundHookAsync", 1
+    )[0]
+    assert "IsSellerMessage(message)" in helper
+    assert "AreBuyerAliasesEquivalentInShop(seller, message.toid.nick, buyer)" in helper
+    assert "sellerSort > buyerSort" in helper
+    assert "sellerSort < nextBuyerSort" in helper
+    method = text.split("internal async Task ProbeActiveConversationForMissedInboundAsync()", 1)[1]
+    assert "business-inbound-recovery-skipped-already-answered" in method
+    assert "var unanswered = candidates" in method
+    assert "var missedToReplay = missedCandidates" in method
+
+
+def test_durable_checkpoint_is_not_advanced_past_an_unanswered_or_inflight_buyer_turn():
+    text = source()
+    method = text.split("internal async Task ProbeActiveConversationForMissedInboundAsync()", 1)[1]
+    assert "if (unanswered.Count == 0)" in method
+    assert "Do not advance past an unanswered buyer turn" in method
+    assert "if (!_businessInboundCheckpointRestored)" in method
+    assert "PersistBusinessInboundCheckpoint(shop, safeBaseline)" in method
+    assert "BusinessInboundMaxCatchupLookback = TimeSpan.FromMinutes(45)" in text
