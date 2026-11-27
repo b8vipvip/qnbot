@@ -204,6 +204,9 @@ namespace Bot.Knowledge
     internal sealed class KnowledgeV2Query
     {
         public string Original { get; set; }
+        // Original buyer wording is retained separately when V2 retrieval uses a
+        // context-resolved query; it is for trace/prompt display, not scoring.
+        public string UserOriginal { get; set; }
         public string Normalized { get; set; }
         public string Intent { get; set; }
         public string Subject { get; set; }
