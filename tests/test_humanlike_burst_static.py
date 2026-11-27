@@ -132,3 +132,16 @@ def test_burst_combined_question_preserves_all_parts_when_within_limits():
     assert "string.Join(\"\\n\", parts)" in build
     assert "if (!inputOverflow) return combined;" in build
     assert "Substring(0, OverflowPreviewCharacters)" in build
+
+
+def test_oversized_burst_builder_stops_before_materializing_unbounded_source_text():
+    coordinator = text("src/Bot/ChromeNs/BuyerMessageBurstCoordinator.cs")
+    build = coordinator[
+        coordinator.index("private static string BuildCombinedQuestion("):
+        coordinator.index("private static string NormalizeDisplay", coordinator.index("private static string BuildCombinedQuestion("))
+    ]
+    assert "processedItems > MaxBurstMessageCount" in build
+    assert "text.Length > MaxBurstQuestionCharacters" in build
+    assert "projectedLength > MaxBurstQuestionCharacters" in build
+    assert "text.Substring(0, Math.Min(remainingPreview, text.Length))" in build
+    assert "combined.Substring(0, OverflowPreviewCharacters)" in build
