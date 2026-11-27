@@ -119,3 +119,12 @@ def test_long_order_reply_task_does_not_hold_shared_inbound_receive_gate():
     assert "await processingTask;" in receive
     assert "await processingTask.ConfigureAwait(false);" in observer
     assert "catch (Exception ex)" in observer
+
+
+def test_remote_history_replay_does_not_hold_liveness_gate_for_async_order_reply():
+    source = read("src/Bot/ChromeNs/BusinessInboundLivenessRecoveryBridge.cs")
+    method = source.split("internal async Task ProbeActiveConversationForMissedInboundAsync()", 1)[1]
+
+    assert "processingTask != null && !processingTask.IsCompleted" in method
+    assert "_ = ObserveInboundProcessingAsync(processingTask);" in method
+    assert "await processingTask.ConfigureAwait(false);" in method
