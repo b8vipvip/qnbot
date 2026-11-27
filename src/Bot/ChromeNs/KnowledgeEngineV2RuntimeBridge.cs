@@ -364,7 +364,16 @@ namespace Bot.ChromeNs
 
             var ctl = ResponseProgressTracker.BeginAnswer(
                 burst.SellerNick, burst.BuyerNick, burst.CombinedQuestion, detectedAt);
-            var answer = BotMessageSuffixService.Apply(burst.SellerNick, decision.Answer);
+            var answer = ReplyTranscriptSanitizer.Sanitize(decision.Answer);
+            answer = BotFeatureStore.ApplyOutputPolicy(answer);
+            if (string.IsNullOrWhiteSpace(answer))
+            {
+                if (ctl != null) ctl.SetSendResult(false, "未发送：答案经店铺输出策略清理后为空");
+                lease.MarkCompleted("knowledge_v2_output_policy_empty");
+                ResponseProgressTracker.Complete(burst.SellerNick, burst.BuyerNick, burst.ShopKey);
+                return KnowledgeV2RuntimeResult.HandledResult();
+            }
+            answer = BotMessageSuffixService.Apply(burst.SellerNick, answer);
             ReplyDeduplicationResult dedup;
             try
             {
