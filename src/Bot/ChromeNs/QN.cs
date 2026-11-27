@@ -1214,6 +1214,9 @@ namespace Bot.ChromeNs
                 Log.Info("已实际处理的买家消息不再重复入队: key=" + messageKey);
                 return Task.CompletedTask;
             }
+
+            try
+            {
             ConversationContextStore.RefreshAndRecord(message, messageText);
             MarkBuyerMessageObserved(sellerNick, buyerNick);
 
@@ -1800,7 +1803,16 @@ namespace Bot.ChromeNs
                 // 聚合器只在买家停止输入后生成一次答案，不再丢弃较早的短片段。
                 foreach (var message in messages)
                 {
-                    await ProcessIncomingMessageAsync(message);
+                    try
+                    {
+                        await ProcessIncomingMessageAsync(message);
+                    }
+                    catch (Exception ex)
+                    {
+                        // One malformed or transiently failing message must not abort the
+                        // remaining messages in the same Qianniu payload.
+                        Log.ErrorWithMaxCount("单条千牛消息处理失败，已隔离并继续处理同批次后续消息: " + ex.Message, 20);
+                    }
                     await Task.Delay(30);
                 }
             }
@@ -2035,5 +2047,15 @@ namespace Bot.ChromeNs
         {
             return await cdp.GetCurrentConversationID();
         }
-    }
+    
+            }
+            catch (Exception ex)
+            {
+                // The claim is a processing reservation, not proof of successful ingress.
+                // If synchronous routing failed before an order/burst handler accepted it,
+                // release it so the background history recovery can retry the exact message.
+                _handledBuyerMessageDeduplicator.TryRelease(messageKey);
+                Log.ErrorWithMaxCount("买家消息同步入站处理异常，已释放去重占位以便后台补偿重试: " + ex.Message, 20);
+                throw;
+            }}
 }
