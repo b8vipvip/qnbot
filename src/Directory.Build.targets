@@ -73,9 +73,6 @@
   <ItemGroup Condition="Exists('$(MSBuildProjectDirectory)\ChromeNs\ReviewedKnowledgeLearningService.cs')">
     <Compile Include="$(MSBuildProjectDirectory)\ChromeNs\ReviewedKnowledgeLearningService.cs" />
   </ItemGroup>
-  <ItemGroup Condition="Exists('$(MSBuildProjectDirectory)\ChromeNs\KnowledgeContextualReplyService.cs')">
-    <Compile Include="$(MSBuildProjectDirectory)\ChromeNs\KnowledgeContextualReplyService.cs" />
-  </ItemGroup>
   <ItemGroup Condition="Exists('$(MSBuildProjectDirectory)\ChromeNs\SmartReplyRouterService.cs')">
     <Compile Include="$(MSBuildProjectDirectory)\ChromeNs\SmartReplyRouterService.cs" />
   </ItemGroup>
