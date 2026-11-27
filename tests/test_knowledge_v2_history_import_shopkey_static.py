@@ -39,19 +39,32 @@ def test_history_promotion_uses_exact_shopkey_and_v2_repository_only():
     assert "BotFeatureStore.SaveKnowledgeBase" not in service
 
 
-def test_history_import_does_not_use_bot_echoes_as_human_answer_evidence():
+def test_history_import_uses_exact_buyer_and_human_message_ids_and_excludes_bot_echoes():
     source = read("src/Bot/Knowledge/ChatHistoryScanService.cs")
-    build_pairs = source[
-        source.index("private static List<Tuple<string, string, string>> BuildPairs("):
-        source.index("private static bool IsUsefulPair(", source.index("private static List<Tuple<string, string, string>> BuildPairs("))
-    ]
+    importer = read("src/Bot/Knowledge/KnowledgeV2HistoryImportService.cs")
+    ai = read("src/Bot/Knowledge/KnowledgeAiService.cs")
+    model = read("src/Bot/Knowledge/KnowledgeEngineV2.Models.cs")
 
+    build_pairs = source[
+        source.index("private static List<HistoryEvidencePair> BuildPairs("):
+        source.index("private static bool IsBotMarkedSellerReply(")
+    ]
     assert "public bool IsBotReply;" in source
     assert "IsBotReply = string.Equals(role, \"seller\"" in source
     assert "IsBotMarkedSellerReply(text)" in source
     assert "turn.IsBotReply || IsBotMarkedSellerReply(turn.Text)" in build_pairs
-    assert "[A]/[AI]自动回复不能作为答案证据" in source
-    assert "sellers.Add(turn.Text)" in build_pairs
-    assert build_pairs.index("turn.IsBotReply || IsBotMarkedSellerReply(turn.Text)") < build_pairs.index(
-        "sellers.Add(turn.Text)"
-    )
+    assert "questionIds.Count == buyers.Count" in build_pairs
+    assert "answerIds.Count == sellers.Count" in build_pairs
+    assert "MessageKey" in build_pairs
+    assert "botAnsweredPendingQuestion && sellers.Count == 0" in build_pairs
+    assert "source_evidence_id：" in source
+    assert "source_evidence_ids" in ai
+    assert "ImportEvidenceTokens = ReadStrings(item, \"source_evidence_ids\")" in ai
+    assert "[JsonIgnore]" in model and "ImportEvidenceTokens" in model
+    assert "allTokensKnown" in importer
+    assert "evidenceValid" in importer
+    assert "record.SourceType = autoPublish" in importer
+    assert "ai_auto_learned_human_evidence" in importer
+    assert "chat_history_unverified_candidate" in importer
+    assert "question_message_ids" in importer and "answer_message_ids" in importer
+
