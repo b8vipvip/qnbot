@@ -5,6 +5,7 @@ using DbEntity;
 using Newtonsoft.Json.Linq;
 using System;
 using System.Collections.Concurrent;
+using System.Globalization;
 using System.Collections.Generic;
 using System.Linq;
 using System.Threading;
@@ -152,6 +153,11 @@ namespace Bot.ChromeNs
         private readonly SemaphoreSlim _businessInboundLivenessGate = new SemaphoreSlim(1, 1);
         private readonly IncomingMessageDeduplicator _businessInboundHistoryProbeLedger =
             new IncomingMessageDeduplicator(8000);
+        private const string BusinessInboundCheckpointSettingKey = "BusinessInboundLastHistoryProbeUtcTicks";
+        private readonly object _businessInboundCheckpointSync = new object();
+        private string _businessInboundCheckpointShopKey = string.Empty;
+        private bool _businessInboundCheckpointLoaded;
+        private bool _businessInboundCheckpointRestored;
         private DateTime _lastBusinessInboundHookRepairLogAt = DateTime.MinValue;
         private DateTime _lastBusinessInboundHistoryProbeCompletedAt = DateTime.MinValue;
         private DateTime _lastBusinessInboundProbeGapLogAt = DateTime.MinValue;
@@ -197,6 +203,102 @@ try {
   return 'installed';
 } catch (e) { return 'error:' + (e && e.message ? e.message : String(e)); }
 })()";
+
+
+        private void EnsureBusinessInboundCheckpointLoaded(ShopContext shop)
+        {
+            if (shop == null || string.IsNullOrWhiteSpace(shop.ShopKey)) return;
+            lock (_businessInboundCheckpointSync)
+            {
+                if (_businessInboundCheckpointLoaded
+                    && string.Equals(_businessInboundCheckpointShopKey, shop.ShopKey, StringComparison.Ordinal))
+                    return;
+
+                _businessInboundCheckpointLoaded = true;
+                _businessInboundCheckpointRestored = false;
+                _businessInboundCheckpointShopKey = shop.ShopKey;
+                _lastBusinessInboundHistoryProbeCompletedAt = DateTime.MinValue;
+                try
+                {
+                    var store = new ShopScopedSettingsStore(shop, new ShopScopedPathProvider());
+                    string raw;
+                    long ticks;
+                    if (store.TryGetString(BusinessInboundCheckpointSettingKey, out raw)
+                        && long.TryParse(raw, NumberStyles.Integer, CultureInfo.InvariantCulture, out ticks)
+                        && ticks > 0 && ticks <= DateTime.UtcNow.Ticks)
+                    {
+                        _lastBusinessInboundHistoryProbeCompletedAt =
+                            new DateTime(ticks, DateTimeKind.Utc).ToLocalTime();
+                        _businessInboundCheckpointRestored = true;
+                        Log.Info("business-inbound-checkpoint-restored: shopRef="
+                            + MyWebSocketServer.DiagnosticRef("shop", shop.ShopKey)
+                            + ", checkpoint=" + _lastBusinessInboundHistoryProbeCompletedAt.ToString("O"));
+                    }
+                }
+                catch (Exception ex)
+                {
+                    Log.ErrorWithMaxCount("读取本店业务入站恢复检查点失败，保留启动安全窗口: "
+                        + ex.GetType().Name + ": " + ex.Message, 10);
+                }
+            }
+        }
+
+        private bool PersistBusinessInboundCheckpoint(ShopContext shop, DateTime checkpoint)
+        {
+            if (shop == null || string.IsNullOrWhiteSpace(shop.ShopKey)) return false;
+            try
+            {
+                var utcTicks = checkpoint.ToUniversalTime().Ticks;
+                var store = new ShopScopedSettingsStore(shop, new ShopScopedPathProvider());
+                store.SetString(
+                    BusinessInboundCheckpointSettingKey,
+                    utcTicks.ToString(CultureInfo.InvariantCulture));
+                lock (_businessInboundCheckpointSync)
+                {
+                    _businessInboundCheckpointLoaded = true;
+                    _businessInboundCheckpointRestored = true;
+                    _businessInboundCheckpointShopKey = shop.ShopKey;
+                    _lastBusinessInboundHistoryProbeCompletedAt = checkpoint;
+                }
+                Log.Info("business-inbound-checkpoint-persisted: shopRef="
+                    + MyWebSocketServer.DiagnosticRef("shop", shop.ShopKey)
+                    + ", checkpoint=" + checkpoint.ToString("O"));
+                return true;
+            }
+            catch (Exception ex)
+            {
+                Log.ErrorWithMaxCount("保存本店业务入站恢复检查点失败，下一轮将重试: "
+                    + ex.GetType().Name + ": " + ex.Message, 10);
+                return false;
+            }
+        }
+
+        private bool HasSellerReplyAfterRecoveredBuyer(
+            QNChatMessage buyerMessage,
+            IList<QNChatMessage> allMessages,
+            IList<QNChatMessage> buyerCandidates,
+            string seller,
+            string buyer)
+        {
+            var buyerSort = IncomingMessageSafety.GetSortValue(buyerMessage);
+            if (buyerSort <= 0) return false;
+            var nextBuyerSort = (buyerCandidates ?? new List<QNChatMessage>())
+                .Where(x => x != null)
+                .Select(IncomingMessageSafety.GetSortValue)
+                .Where(x => x > buyerSort)
+                .DefaultIfEmpty(long.MaxValue)
+                .Min();
+
+            foreach (var message in allMessages ?? new List<QNChatMessage>())
+            {
+                if (message == null || !IsSellerMessage(message) || message.toid == null) continue;
+                var sellerSort = IncomingMessageSafety.GetSortValue(message);
+                if (sellerSort <= buyerSort || sellerSort >= nextBuyerSort) continue;
+                if (AreBuyerAliasesEquivalentInShop(seller, message.toid.nick, buyer))
+                    return true;
+            }
+            return false;
+        }
 
         internal async Task RepairBusinessInboundHookAsync()
         {
@@ -250,6 +352,7 @@ try {
 
             using (ShopSettingsScope.Enter(shop, false))
             {
+            EnsureBusinessInboundCheckpointLoaded(shop);
             try
             {
                 if (!ReferenceEquals(CDP, client)
@@ -331,9 +434,12 @@ try {
 
                 var messages = history["result"]?["msgs"]?.ToObject<List<QNChatMessage>>()
                     ?? new List<QNChatMessage>();
-                var threshold = Math.Max(
-                    _messageSafetyStartedAt.AddSeconds(-8).Ticks,
-                    catchupFloor.Ticks);
+                // A persisted checkpoint is stronger than the process-start guard: it proves
+                // where the previous successful history scan stopped. On a fresh installation,
+                // keep the original startup safety window to avoid replaying old unread history.
+                var threshold = _businessInboundCheckpointRestored
+                    ? catchupFloor.Ticks
+                    : Math.Max(_messageSafetyStartedAt.AddSeconds(-8).Ticks, catchupFloor.Ticks);
                 var candidates = messages
                     .Where(m => m != null && IsRecoveredBuyerMessageForTarget(m, seller, buyer))
                     .Where(m => IncomingMessageSafety.GetSortValue(m) >= threshold)
@@ -341,7 +447,7 @@ try {
                     .ToList();
                 if (candidates.Count == 0)
                 {
-                    _lastBusinessInboundHistoryProbeCompletedAt = DateTime.Now;
+                    PersistBusinessInboundCheckpoint(shop, DateTime.Now);
                     return;
                 }
 
@@ -349,30 +455,42 @@ try {
                 DateTime observedAt;
                 var hasObserved = _latestBuyerMessageObserved.TryGetValue(recoveryKey, out observedAt);
 
-                // Recovery must be decided by source chronology, not by a wall-clock freshness
-                // timeout. A 12-second history probe naturally runs more than two seconds after a
-                // healthy live event; treating that age as "stale" replayed already-observed messages
-                // and let the recovery bridge compete with the live path. The last live observation
-                // is the transport checkpoint. Only source messages newer than that checkpoint are
-                // eligible for replay; the normal ProcessIncomingMessageAsync path remains the sole
-                // business side-effect owner.
+                // Recovery is source-chronology based. A live-observed buyer turn remains
+                // unresolved until a seller message for that same buyer appears after it in
+                // remote history. This prevents advancing the durable checkpoint past a message
+                // whose generation/send may still be in flight when the client process exits.
                 var missedCandidates = candidates
                     .Where(message => !hasObserved
                         || IncomingMessageSafety.GetSortValue(message) > observedAt.Ticks)
                     .ToList();
-                if (missedCandidates.Count == 0)
+                var alreadyAnswered = candidates
+                    .Where(message => HasSellerReplyAfterRecoveredBuyer(
+                        message, messages, candidates, seller, buyer))
+                    .ToList();
+                var unanswered = candidates
+                    .Where(message => !alreadyAnswered.Contains(message))
+                    .ToList();
+                var missedToReplay = missedCandidates
+                    .Where(message => !alreadyAnswered.Contains(message))
+                    .ToList();
+
+                if (alreadyAnswered.Count > 0)
                 {
-                    _lastBusinessInboundHistoryProbeCompletedAt = DateTime.Now;
-                    return;
+                    Log.Info("business-inbound-recovery-skipped-already-answered: seller=" + seller
+                        + ", buyer=" + buyer + ", count=" + alreadyAnswered.Count
+                        + ", source=remote-seller-history");
                 }
 
-                Log.Info("business-event-gap-confirmed: seller=" + seller + ", buyer=" + buyer
-                    + ", transport=connected, liveCheckpoint="
-                    + (hasObserved ? observedAt.ToString("HH:mm:ss.fff") : "none")
-                    + ", recoveredCount=" + missedCandidates.Count
-                    + ", recovery=remote-history");
+                if (missedToReplay.Count > 0)
+                {
+                    Log.Info("business-event-gap-confirmed: seller=" + seller + ", buyer=" + buyer
+                        + ", transport=connected, liveCheckpoint="
+                        + (hasObserved ? observedAt.ToString("HH:mm:ss.fff") : "none")
+                        + ", recoveredCount=" + missedToReplay.Count
+                        + ", recovery=remote-history");
+                }
 
-                foreach (var message in missedCandidates)
+                foreach (var message in missedToReplay)
                 {
                     if (!ReferenceEquals(CDP, client)
                         || !server.IsAuthoritativeShopSession(shop.ShopKey, client.SessionId)) return;
@@ -391,7 +509,26 @@ try {
                         + ", key=" + messageKey + ", route=ProcessIncomingMessageAsync");
                 }
 
-                _lastBusinessInboundHistoryProbeCompletedAt = DateTime.Now;
+                if (unanswered.Count == 0)
+                {
+                    PersistBusinessInboundCheckpoint(shop, DateTime.Now);
+                }
+                else
+                {
+                    // Do not advance past an unanswered buyer turn. It may still be generating or
+                    // sending; retaining the earlier checkpoint lets a new process recover it after
+                    // restart. The 45-minute catch-up cap bounds stale replay.
+                    if (!_businessInboundCheckpointRestored)
+                    {
+                        var safeBaseline = new DateTime(threshold, DateTimeKind.Local);
+                        PersistBusinessInboundCheckpoint(shop, safeBaseline);
+                    }
+                    Log.Info("business-inbound-checkpoint-held-for-unanswered-turns: shopRef="
+                        + MyWebSocketServer.DiagnosticRef("shop", shop.ShopKey)
+                        + ", seller=" + seller + ", buyer=" + buyer
+                        + ", unansweredCount=" + unanswered.Count
+                        + ", replayedCount=" + missedToReplay.Count);
+                }
             }
             catch (Exception ex)
             {
