@@ -97,9 +97,13 @@ def test_restart_recovery_skips_buyer_messages_with_a_later_seller_reply_in_remo
         "internal async Task RepairBusinessInboundHookAsync", 1
     )[0]
     assert "IsSellerMessage(message)" in helper
-    assert "AreBuyerAliasesEquivalentInShop(seller, message.toid.nick, buyer)" in helper
+    assert "AreBuyerAliasesEquivalentInShop(seller, recipient, buyer)" in helper
     assert "sellerSort <= buyerSort" in helper
-    assert "sellerSort >= nextBuyerSort" in helper
+    assert "recipient.Length == 0" in helper
+    assert "IsWithdrawalNotice(message, sellerText)" in helper
+    assert "IsPlatformSystemTip(message, sellerText)" in helper
+    assert "nextBuyerSort" not in helper
+    assert "closes all earlier" in helper
     method = text.split("internal async Task ProbeActiveConversationForMissedInboundAsync()", 1)[1]
     assert "business-inbound-recovery-skipped-already-answered" in method
     assert "var unanswered = candidates" in method
@@ -114,3 +118,14 @@ def test_durable_checkpoint_is_not_advanced_past_an_unanswered_or_inflight_buyer
     assert "if (!_businessInboundCheckpointRestored)" in method
     assert "PersistBusinessInboundCheckpoint(shop, safeBaseline)" in method
     assert "BusinessInboundMaxCatchupLookback = TimeSpan.FromMinutes(45)" in text
+
+
+def test_one_seller_reply_closes_all_unanswered_fragments_in_the_same_buyer_burst():
+    text = source()
+    helper = text.split("private bool HasSellerReplyAfterRecoveredBuyer", 1)[1].split(
+        "internal async Task RepairBusinessInboundHookAsync", 1
+    )[0]
+    assert "Remote history is for one verified ccode" in helper
+    assert "sellerSort <= buyerSort" in helper
+    assert "sellerSort >= nextBuyerSort" not in helper
+    assert "all earlier unanswered buyer messages in the same burst" in helper
