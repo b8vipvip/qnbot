@@ -758,10 +758,15 @@ namespace Bot.ChromeNs
                         && TryClickCachedSendButtonNow(),
                     "发送主按钮坐标点击",
                     UiActionTimeoutMs).ConfigureAwait(false);
+                if (!clicked && LastSendWasIndeterminate) return false;
                 if (clicked)
                 {
-                    return await WaitForTextSendConfirmedAsync(
+                    var confirmed = await WaitForTextSendConfirmedAsync(
                         buyer, text, sendStart, "发送主按钮坐标", 3600).ConfigureAwait(false);
+                    if (!confirmed && !LastSendWasCancelled)
+                        SetSendIndeterminate("发送主按钮坐标点击后确认",
+                            "发送按钮已点击但未取得可靠提交/回显证据，禁止再次点击或自动重试");
+                    return confirmed;
                 }
 
                 if (!_lastSendButtonCoordinateClickRejected)
@@ -792,12 +797,17 @@ namespace Bot.ChromeNs
                     UiActionTimeoutMs).ConfigureAwait(false);
                 if (!invoked)
                 {
+                    if (LastSendWasIndeterminate) return false;
                     SetSendFailure("发送按钮UIA回退", "坐标输入被系统拒绝且未找到安全主发送UIA子控件（已禁止整块分裂按钮Invoke）");
                     return false;
                 }
 
-                return await WaitForTextSendConfirmedAsync(
+                var invokedConfirmed = await WaitForTextSendConfirmedAsync(
                     buyer, text, sendStart, "发送按钮左侧UIA安全调用", 3600).ConfigureAwait(false);
+                if (!invokedConfirmed && !LastSendWasCancelled)
+                    SetSendIndeterminate("发送按钮左侧UIA安全调用后确认",
+                        "UIA主发送动作已执行但未取得可靠提交/回显证据，禁止再次点击或自动重试");
+                return invokedConfirmed;
             }
             catch (Exception ex)
             {
