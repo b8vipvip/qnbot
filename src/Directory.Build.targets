@@ -76,10 +76,7 @@
   <ItemGroup Condition="Exists('$(MSBuildProjectDirectory)\ChromeNs\SmartReplyRouterService.cs')">
     <Compile Include="$(MSBuildProjectDirectory)\ChromeNs\SmartReplyRouterService.cs" />
   </ItemGroup>
-  <ItemGroup Condition="Exists('$(MSBuildProjectDirectory)\ChromeNs\SemanticEmbeddingService.cs')">
-    <Compile Include="$(MSBuildProjectDirectory)\ChromeNs\SemanticEmbeddingService.cs" />
-  </ItemGroup>
-<ItemGroup Condition="Exists('$(MSBuildProjectDirectory)\ChromeNs\PreSendAnswerValidator.cs')">
+  <ItemGroup Condition="Exists('$(MSBuildProjectDirectory)\ChromeNs\PreSendAnswerValidator.cs')">
     <Compile Include="$(MSBuildProjectDirectory)\ChromeNs\PreSendAnswerValidator.cs" />
   </ItemGroup>
   <ItemGroup Condition="Exists('$(MSBuildProjectDirectory)\ChromeNs\ReplyQualityMetricsService.cs')">
