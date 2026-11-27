@@ -368,6 +368,21 @@ namespace Bot.ChromeNs
                         + ", reason=" + rpa.GetSendFailureReason());
                     return false;
                 }
+                if (!ok && rpa.LastSendWasIndeterminate)
+                {
+                    if (await WaitForSellerEchoGraceAsync(buyer, text, sendStartedAt, 2800, cancellationToken))
+                    {
+                        rpa.ResetSendFailure();
+                        ok = true;
+                        Log.Info("发送动作结果不确定，但已从本店当前/旧QN会话收到精确卖家回显，按真实送达处理: buyer=" + buyer);
+                    }
+                    else
+                    {
+                        Log.Error("发送动作结果不确定，已禁止自动重试以避免重复消息；保留SendDeliveryWatchdog等待提交/回显核验: buyer="
+                            + buyer + ", reason=" + rpa.GetSendFailureReason());
+                        return false;
+                    }
+                }
                 if (!ok && await WaitForSellerEchoGraceAsync(buyer, text, sendStartedAt, 900, cancellationToken))
                 {
                     rpa.ResetSendFailure();
@@ -431,6 +446,21 @@ namespace Bot.ChromeNs
                         Log.Info("自动发送重试期间人工接管或发送前状态门禁取消，立即停止后续重试: buyer=" + buyer
                             + ", reason=" + rpa.GetSendFailureReason());
                         return false;
+                    }
+                    if (!ok && rpa.LastSendWasIndeterminate)
+                    {
+                        if (await WaitForSellerEchoGraceAsync(buyer, text, sendStartedAt, 2800, cancellationToken))
+                        {
+                            rpa.ResetSendFailure();
+                            ok = true;
+                            Log.Info("重试动作结果不确定，但已从本店当前/旧QN会话收到精确卖家回显: buyer=" + buyer);
+                        }
+                        else
+                        {
+                            Log.Error("重试动作结果不确定，停止后续重试并等待发送回显监控: buyer="
+                                + buyer + ", reason=" + rpa.GetSendFailureReason());
+                            return false;
+                        }
                     }
                     if (!ok && await WaitForSellerEchoGraceAsync(buyer, text, sendStartedAt, 900, cancellationToken))
                     {
