@@ -187,17 +187,14 @@ def test_knowledge_v2_disabled_and_deleted_provenance_is_never_normalized_back_t
     human = bridge.split("private static void ApplyHumanConfirmed(", 1)[1].split(
         "\n    }\n}", 1
     )[0]
-    sync = bridge.split("public static bool IsPersistedStateSynchronized(", 1)[1].split(
-        "public static void ApplyImportedLegacyProvenance(", 1
-    )[0]
 
     for method in (auto, human):
-        assert "!record.Enabled" in method
-        assert 'record.Status, "disabled"' in method
-        assert 'record.Status, "deleted"' in method
-    assert "if (!record.Enabled || isDisabledStatus) return true;" in sync
-    assert "var expectedLegacyEnabled = record.Enabled" in sync
-
+        assert "record == null || !record.Enabled" in method
+        assert 'string.Equals(record.Status, "disabled"' in method
+        assert 'string.Equals(record.Status, "deleted"' in method
+        assert 'record.Status = "active";' in method
+    assert "IsPersistedStateSynchronized" not in bridge
+    assert "MirrorOneToLegacy" not in read("src/Bot/Knowledge/KnowledgeEngineV2.Repository.cs")
 
 def test_knowledge_center_hides_deleted_tombstones_but_keeps_disabled_records_manageable():
     page = read("src/Bot/Knowledge/KnowledgeCenterV2RecordsPage.cs")
