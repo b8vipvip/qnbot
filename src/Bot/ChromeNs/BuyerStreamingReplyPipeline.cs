@@ -1123,7 +1123,11 @@ namespace Bot.ChromeNs
                 if (contextForRules.Length > 2200) break;
                 contextForRules.Append(' ').Append(turn.Text);
             }
-            dynamicSystemPrompt += BotFeatureStore.BuildPromptAddon(contextForRules.ToString());
+            var allowLegacyKnowledgePrompt = false;
+            try { allowLegacyKnowledgePrompt = !KnowledgeEngineV2Service.IsEnabled(seller); }
+            catch { allowLegacyKnowledgePrompt = false; }
+            dynamicSystemPrompt += BotFeatureStore.BuildPromptAddon(
+                contextForRules.ToString(), allowLegacyKnowledgePrompt);
             dynamicSystemPrompt += SmartReplyRouterService.BuildPromptAddon(plan);
             dynamicSystemPrompt += knowledgeV2ContextAddon ?? string.Empty;
             dynamicSystemPrompt += ReceptionFlowPolicy.BuildPromptAddon(seller, buyer, question);
