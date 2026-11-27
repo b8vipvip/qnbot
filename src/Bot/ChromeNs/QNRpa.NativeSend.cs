@@ -134,13 +134,13 @@ namespace Bot.ChromeNs
                 // uncertain submission. Never fall through to HWND/UIA and risk a duplicate.
                 if (!IsExpectedShopSessionCurrent(sourceClient, shopKey))
                 {
-                    SetSendFailure("CDP页面发送后会话复核", "页面发送后来源CDP会话已变化；禁止其他发送回退以避免重复发送");
+                    SetSendIndeterminate("CDP页面发送后会话复核", "页面发送按钮已触发，但来源CDP会话随后变化；禁止重试，等待同店卖家回显核验");
                     return false;
                 }
 
                 if (!await HasExpectedDraftFastAsync(text, 800).ConfigureAwait(false))
                 {
-                    SetSendFailure("CDP页面发送按钮后确认", "发送动作后草稿已不存在，但未能完成安全提交确认；禁止重复写入");
+                    SetSendIndeterminate("CDP页面发送按钮后确认", "发送动作后草稿已不存在，但提交证据尚不完整；禁止重试，等待卖家回显核验");
                     return false;
                 }
                 ResetSendFailure();
@@ -176,7 +176,7 @@ namespace Bot.ChromeNs
                 if (LastSendWasCancelled) return false;
                 if (!await HasExpectedDraftFastAsync(text, 800).ConfigureAwait(false))
                 {
-                    SetSendFailure("HWND安全消息后确认", "发送动作后草稿已不存在，但未能完成安全提交确认；禁止重复写入");
+                    SetSendIndeterminate("HWND安全消息后确认", "HWND发送动作后草稿已不存在，但提交证据尚不完整；禁止重试，等待卖家回显核验");
                     return false;
                 }
                 ResetSendFailure();
@@ -213,7 +213,7 @@ namespace Bot.ChromeNs
                 if (LastSendWasCancelled) return false;
                 if (!await HasExpectedDraftFastAsync(text, 800).ConfigureAwait(false))
                 {
-                    SetSendFailure("安全UIA调用后确认", "发送动作后草稿已不存在，但未能完成安全提交确认；禁止重复写入");
+                    SetSendIndeterminate("安全UIA调用后确认", "UIA发送动作后草稿已不存在，但提交证据尚不完整；禁止重试，等待卖家回显核验");
                     return false;
                 }
                 ResetSendFailure();
@@ -245,6 +245,7 @@ namespace Bot.ChromeNs
                 var accepted = await WaitForTextSubmissionAcceptedAsync(
                     buyer, text, sendStart, "UIA兼容发送后提交确认", 1300, shopKey).ConfigureAwait(false);
                 if (accepted) return true;
+                SetSendIndeterminate("UIA兼容发送后提交确认", "发送动作后输入框已不再包含本次草稿，但未取得回显/提交确认；禁止重试");
             }
 
             if (_lastSendButtonCoordinateClickRejected)
