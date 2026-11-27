@@ -371,8 +371,8 @@ namespace Bot.Knowledge
                 string confidenceRaw;
                 double threshold;
                 double confidence;
-                var enabled = !values.TryGetValue(KnowledgeEngineV2Constants.SettingsEnabled, out enabledRaw)
-                    || !string.Equals((enabledRaw ?? string.Empty).Trim(), "0", StringComparison.Ordinal);
+                // V2 is mandatory. Legacy settings cannot turn it off.
+                var enabled = true;
                 var mode = KnowledgeEngineV2Constants.ModeProduction;
                 threshold = values.TryGetValue(KnowledgeEngineV2Constants.SettingsDirectThreshold, out thresholdRaw)
                     && double.TryParse(thresholdRaw, System.Globalization.NumberStyles.Float,
