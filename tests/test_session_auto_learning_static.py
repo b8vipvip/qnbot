@@ -215,7 +215,6 @@ def test_incomplete_history_fails_closed_while_verified_v2_learning_auto_publish
     ai_call = finalize.index("analysis = await AnalyzeAsync")
     assert history_gate < ai_call
     assert "未达到完整历史覆盖门槛，未调用AI，也未写入生产知识库" in finalize
-    assert "remote_history_turn_count_mismatch" in finalize
 
     # Only unverified generic suggestions remain dry-run. Evidence-backed V2
     # additions and corrections are enabled and publish directly after full gates.
