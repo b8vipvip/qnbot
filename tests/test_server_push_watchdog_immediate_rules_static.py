@@ -23,15 +23,16 @@ def test_fixed_rules_run_before_any_burst_quiet_delay_or_context_merge():
     canonical_end = coordinator.index("internal sealed class BuyerMessageBurstCoordinator", canonical_start)
     canonical = coordinator[canonical_start:canonical_end]
     off_hours = canonical.index("TryResolveOffHours(out offHoursReply)")
-    first = canonical.index("FirstInquiryFixedReplyService.TryResolve(")
+    manual = canonical.index("var manualDecision = BotFeatureStore.EvaluateAutoReplyRule(question)")
     local_short = canonical.index("LocalShortReplyService.TryResolve(")
-    assert off_hours < first < local_short
+    first = canonical.index("FirstInquiryFixedReplyService.TryResolve(")
+    assert off_hours < manual < local_short < first
     assert "OffHoursRepeatMinutes = 2" in canonical
     assert "SendTextWithRetryAsync(" in canonical
     assert "SemaphoreSlim" not in canonical
     assert "BuyerSessionAgent" not in canonical
 
-    first_block = canonical[first:local_short]
+    first_block = canonical[first:canonical.index("private static bool HasNewerSubstantiveConversationTurn", first)]
     release = first_block.index("FirstInquiryFixedReplyService.ReleaseReservation(")
     assert "return firstOutcome;" in first_block[release:]
     assert "CanonicalPreMergeOutcome.Cancelled" in first_block
