@@ -217,3 +217,17 @@ def test_configured_order_template_reads_bot_switch_inside_runtime_shop_scope():
     config = method.index("cfg = BotFeatureStore.GetAutoReplyRules();")
     bot = method.index("botEnabledForShop = Params.Robot.CanUseRobotReal;")
     assert scope < config < bot
+
+
+def test_order_attention_worker_checks_bot_switch_for_the_order_shop():
+    source = read("src/Bot/ChromeNs/NewOrderAttentionQueue.cs")
+    method = source[
+        source.index("private async Task<AutoFocusCheck> CanAutoFocusOrderAsync"):
+        source.index("private async Task<bool> FocusOrderBuyerAsync")
+    ]
+
+    resolve = method.index("ShopContextLocator.ResolveRuntimeByShopKey(snapshot.ShopKey)")
+    scope = method.index("using (ShopSettingsScope.Enter(shop, false))")
+    bot = method.index("botEnabledForShop = Params.Robot.CanUseRobotReal;")
+    assert resolve < scope < bot
+    assert "if (!botEnabledForShop) return Denied(\"Bot当前未启用\");" in method
