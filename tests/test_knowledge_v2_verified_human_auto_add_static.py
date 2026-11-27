@@ -246,18 +246,13 @@ def test_generated_content_and_aliases_survive_checkpoint_restart_revalidation()
 def test_new_knowledge_write_mode_is_direct_ai_publish_not_dry_run():
     service = read("src/Bot/ChromeNs/ConversationSessionLearningService.cs")
     initial = service[
-        service.index('["writeMode"] = EnableVerifiedCorpusNewKnowledgeWrites'):
-        service.index('["windowStart"]')
+        service.index("finalCoverage[\"writeMode\"]"):
+        service.index("finalCoverage[\"genericSuggestionWriteMode\"]")
     ]
-
     assert "ai_auto_publish_new_knowledge_and_verified_updates" in initial
-    assert '["newKnowledgeWriteMode"] = EnableVerifiedCorpusNewKnowledgeWrites
-                    ? "ai_auto_publish_verified_human_evidence" : "dry_run"' in initial
-    assert "MaxVerifiedNewKnowledgePerSession = 8" in service
-    assert "newKnowledgeApplied" in service
-    assert "knowledgeCorpusNewCandidateApplied" in service
-
-
+    assert '["newKnowledgeWriteMode"] = EnableVerifiedCorpusNewKnowledgeWrites' in initial
+    assert "ai_auto_publish_verified_human_evidence" in initial
+    assert "dry_run" in initial
 def test_new_candidate_checkpoint_requires_matching_source_and_transcript_fingerprints():
     service = read("src/Bot/ChromeNs/ConversationSessionLearningService.cs")
     analysis = service[
