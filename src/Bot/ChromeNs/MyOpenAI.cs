@@ -87,7 +87,7 @@ namespace Bot.ChromeNs
 
                 var primary = endpoints.First();
                 systemPrompt = BuildSystemPrompt(string.IsNullOrWhiteSpace(primary.SystemPrompt) ? Params.Robot.GetSystemPrompt() : primary.SystemPrompt);
-                var featureFingerprint = BotFeatureStore.GetMessagePolicy().Tone + ":" + BotFeatureStore.GetKnowledgeBase().Count + ":" + BotFeatureStore.GetAutoReplyRules().Enabled;
+                var featureFingerprint = BotFeatureStore.GetMessagePolicy().Tone + ":" + BotFeatureStore.GetAutoReplyRules().Enabled;
                 var fingerprint = string.Join("|", endpoints.Select(e => string.Format("{0}:{1}:{2}:{3}", e.Name, e.BaseUrl, e.TextModel, e.Enabled))) + "|" + featureFingerprint;
                 if (fingerprint != lastConfigFingerprint)
                 {
