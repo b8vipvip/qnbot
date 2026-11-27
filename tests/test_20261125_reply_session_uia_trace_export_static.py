@@ -74,6 +74,8 @@ def test_manual_and_local_short_rules_precede_first_inquiry_and_image_fallback_i
     assert "FirstInquiryFixedReplyService.ReleaseReservation(" in canonical[manual:local]
     assert "firstReserved" in canonical[first:]
     assert "failedBeforeSend" in canonical[first:]
+    assert "sendIsIndeterminate" in canonical[first:]
+    assert "var failedBeforeSend = !sendIsIndeterminate" in canonical[first:]
     assert 'string.Equals(question, "[图片]"' in canonical[first:]
     assert "已释放首条资格并继续当前消息的后续视觉理解/AI" in canonical[first:]
     assert "if (firstOutcome == CanonicalPreMergeOutcome.Suppressed) return firstOutcome;" in canonical[first:]
