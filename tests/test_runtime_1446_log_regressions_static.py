@@ -13,12 +13,13 @@ def test_product_link_preset_is_consumed_by_canonical_owner_before_first_inquiry
 
     offhours = canonical.index("TryResolveOffHours(out offHoursReply)")
     product = canonical.index("ConversationContextStore.TryTakeProductLinkReply(")
-    first = canonical.index("FirstInquiryFixedReplyService.TryResolve(")
+    manual = canonical.index("var manualDecision = BotFeatureStore.EvaluateAutoReplyRule(question)")
     local = canonical.index("LocalShortReplyService.TryResolve(")
-    assert offhours < product < first < local
-    assert "BotReplyPresetService.ResolveSourceLabel(item.SellerNick, productLinkReply, item.ShopKey)" in canonical[product:first]
-    assert "CanonicalPreMergeOutcome.Consumed" in canonical[product:first]
-    assert "aiCalled=false" in canonical[product:first]
+    first = canonical.index("FirstInquiryFixedReplyService.TryResolve(")
+    assert offhours < product < manual < local < first
+    assert "BotReplyPresetService.ResolveSourceLabel(item.SellerNick, productLinkReply, item.ShopKey)" in canonical[product:manual]
+    assert "CanonicalPreMergeOutcome.Consumed" in canonical[product:manual]
+    assert "aiCalled=false" in canonical[product:manual]
 
 
 def test_one_buyer_queue_owner_tracks_parallel_dispatched_generations_without_head_of_line_blocking():
