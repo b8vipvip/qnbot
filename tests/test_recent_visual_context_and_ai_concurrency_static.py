@@ -143,3 +143,39 @@ def test_withdrawn_visual_context_is_injected_only_for_explicit_historical_image
     assert r'Regex.Replace(question ?? string.Empty, @"\s+"' in method
     assert "allowWithdrawnContext || !IsWithdrawnObservation(" in prompt
     assert "已撤回，仅限买家明确引用时使用" in prompt
+
+
+def test_oversized_bursts_cannot_be_intercepted_by_knowledge_or_vision_runtime_wrappers():
+    burst = text("src/Bot/ChromeNs/BuyerMessageBurstCoordinator.cs")
+    memory = text("src/Bot/ChromeNs/KnowledgeMemoryEngine.cs")
+    v2 = text("src/Bot/ChromeNs/KnowledgeEngineV2RuntimeBridge.cs")
+    streaming = text("src/Bot/ChromeNs/BuyerStreamingReplyPipeline.cs")
+    vision = text("src/Bot/ChromeNs/VisionWithdrawalAwarePipeline.cs")
+
+    property_block = burst[
+        burst.index("public bool HasReplyableItem"):
+        burst.index("public BuyerMessageBurst(", burst.index("public bool HasReplyableItem"))
+    ]
+    assert "return !InputOverflow && Items.Any(" in property_block
+
+    memory_guard = memory.split("var burst = lease == null ? null : lease.Burst;", 1)[1].split(
+        "var workflowDecision", 1
+    )[0]
+    assert "!burst.HasReplyableItem" in memory_guard
+
+    v2_guard = v2.split("var burst = lease == null ? null : lease.Burst;", 1)[1].split(
+        "var shopScope", 1
+    )[0]
+    assert "!burst.HasReplyableItem" in v2_guard
+
+    streaming_guard = streaming.split("var burst = lease == null ? null : lease.Burst;", 1)[1].split(
+        "await ProcessTextBurstStreamingAsync", 1
+    )[0]
+    assert "burst.InputOverflow" in streaming_guard
+
+    vision_guard = vision.split("private static async Task HandleAsync", 1)[1].split(
+        "private static async Task ProcessVisionAsync", 1
+    )[0]
+    assert "burst.InputOverflow" in vision_guard
+    assert vision_guard.index("burst.InputOverflow") < vision_guard.index("var visionItem = burst.LatestVisionItem")
+    assert "diagnostic-only truncated question" in vision_guard
