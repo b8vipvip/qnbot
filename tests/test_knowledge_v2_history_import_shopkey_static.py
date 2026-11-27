@@ -3,7 +3,7 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 
 
-def read(path: str) -> str:
+def read(path):
     return (ROOT / path).read_text(encoding="utf-8-sig")
 
 
@@ -16,32 +16,42 @@ def test_history_scan_captures_attached_shopkey_and_refuses_nickname_only_write(
     assert "PromoteHistoryImport(_seller, _shopKey, scan.ImportResult)" in page
 
 
-def test_history_promotion_uses_exact_shopkey_and_one_scope_for_all_store_operations():
-    service = read("src/Bot/Knowledge/KnowledgeV2LegacyDeltaImportService.cs")
+def test_history_promotion_uses_exact_shopkey_and_v2_repository_only():
+    service = read("src/Bot/Knowledge/KnowledgeV2HistoryImportService.cs")
+    props = read("src/Bot/Directory.Build.props")
     method = service[
-        service.index("public static KnowledgeV2HistoryPromotionResult PromoteHistoryImport(\n            string seller, string shopKey"):
-        service.index("public static int ImportMissingHistoryKnowledge", service.index("public static KnowledgeV2HistoryPromotionResult PromoteHistoryImport(\n            string seller, string shopKey"))
-    ]
-    scope_start = method.index("using (ShopSettingsScope.Enter(shop))")
-    scope_end = method.index("\n            }\n        }", scope_start)
-    scoped = method[scope_start:scope_end]
-
-    assert "ShopContextLocator.ResolveRuntimeByShopKey(shopKey)" in service
-    assert "var current = ShopSettingsScope.Current;" in service
-    assert scoped.index("KnowledgeEngineV2Repository.LoadAll(seller)") < scoped.index("KnowledgeEngineV2Repository.Save(seller, record)")
-    assert scoped.index("KnowledgeEngineV2Repository.Save(seller, record)") < scoped.index("KnowledgeEngineV2Service.Warm(seller)")
-    assert scoped.index("KnowledgeEngineV2Service.Warm(seller)") < scoped.index("RemoveCurrentScanLegacyEntries(shop, sourceItems)")
-    assert scoped.index("RemoveCurrentScanLegacyEntries(shop, sourceItems)") < scoped.index("AppendAudit(seller, importId, result)")
-
-
-def test_missing_history_import_reuses_explicit_shopkey_scope():
-    service = read("src/Bot/Knowledge/KnowledgeV2LegacyDeltaImportService.cs")
-    method = service[
-        service.index("public static int ImportMissingHistoryKnowledge(string seller, string shopKey)"):
-        service.index("private static ShopContext ResolveShop", service.index("public static int ImportMissingHistoryKnowledge(string seller, string shopKey)"))
+        service.index("public static KnowledgeV2HistoryPromotionResult PromoteHistoryImport("):
+        service.index("private static List<string> Clean(")
     ]
 
-    assert "var shop = ResolveShop(seller, shopKey)" in method
+    assert "ShopContextLocator.ResolveRuntimeByShopKey(shopKey)" in method
+    assert "shop == null || !shop.HasStableSellerId" in method
+    assert "string.Equals(shop.ShopKey, shopKey, StringComparison.Ordinal)" in method
     assert "using (ShopSettingsScope.Enter(shop))" in method
-    assert "seller, shop.ShopKey," in method
-    assert "new KnowledgeImportResult { AddedItems = candidates, Added = candidates.Count }" in method
+    assert method.index("KnowledgeEngineV2Repository.LoadAll(seller)") < method.index(
+        "KnowledgeEngineV2Repository.Save(seller, record)"
+    ) < method.index("KnowledgeEngineV2Service.Warm(seller)") < method.index(
+        "AppendAudit(seller, importId, result)"
+    )
+    assert "KnowledgeV2HistoryImportService.cs" in props
+    assert "KnowledgeV2LegacyDeltaImportService.cs" not in props
+    assert not (ROOT / "src/Bot/Knowledge/KnowledgeV2LegacyDeltaImportService.cs").exists()
+    assert "BotFeatureStore.SaveKnowledgeBase" not in service
+
+
+def test_history_import_does_not_use_bot_echoes_as_human_answer_evidence():
+    source = read("src/Bot/Knowledge/ChatHistoryScanService.cs")
+    build_pairs = source[
+        source.index("private static List<Tuple<string, string, string>> BuildPairs("):
+        source.index("private static bool IsUsefulPair(", source.index("private static List<Tuple<string, string, string>> BuildPairs("))
+    ]
+
+    assert "public bool IsBotReply;" in source
+    assert "IsBotReply = string.Equals(role, \"seller\"" in source
+    assert "IsBotMarkedSellerReply(text)" in source
+    assert "turn.IsBotReply || IsBotMarkedSellerReply(turn.Text)" in build_pairs
+    assert "[A]/[AI]自动回复不能作为答案证据" in source
+    assert "sellers.Add(turn.Text)" in build_pairs
+    assert build_pairs.index("turn.IsBotReply || IsBotMarkedSellerReply(turn.Text)") < build_pairs.index(
+        "sellers.Add(turn.Text)"
+    )
