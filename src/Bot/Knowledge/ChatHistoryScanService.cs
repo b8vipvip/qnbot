@@ -111,6 +111,7 @@ namespace Bot.Knowledge
             public string Text;
             public DateTime Time;
             public string MessageKey;
+            public bool IsBotReply;
         }
 
         // Only explicitly Bot-marked seller echoes are matched to buyer turns.
@@ -132,7 +133,7 @@ namespace Bot.Knowledge
                 }
                 if (turn.Item1 != "seller") continue;
                 var raw = (turn.Item2 ?? "").Trim();
-                if (!raw.EndsWith("[A]", StringComparison.OrdinalIgnoreCase))
+                if (!IsBotMarkedSellerReply(raw))
                 {
                     // Human responses terminate this unmatched question; do not
                     // misattribute a later background Bot echo to an old question.
@@ -665,7 +666,6 @@ namespace Bot.Knowledge
                 () => token.IsCancellationRequested ? SmartImportCancelSource.UserCancel : SmartImportCancelSource.None,
                 text => Report(progress, text, orderedContacts.Count, orderedContacts.Count, string.Empty, totalMessages, pairCount, transcript.Length));
 
-            MarkImportedSource(importResult, "历史聊天扫描");
             Report(progress, "历史聊天扫描完成。", orderedContacts.Count, orderedContacts.Count, string.Empty, totalMessages, pairCount, transcript.Length);
 
             return new ChatHistoryScanResult
@@ -1437,7 +1437,9 @@ namespace Bot.Knowledge
             turn = new HistoryTurn
             {
                 Role = role, Text = text, Time = time,
-                MessageKey = IncomingMessageSafety.BuildMessageKey(message, text)
+                MessageKey = IncomingMessageSafety.BuildMessageKey(message, text),
+                IsBotReply = string.Equals(role, "seller", StringComparison.Ordinal)
+                    && IsBotMarkedSellerReply(text)
             };
             return true;
         }
@@ -1512,7 +1514,7 @@ namespace Bot.Knowledge
         private static string BuildTranscript(List<ContactHistory> histories, ChatHistoryScanOptions options)
         {
             var sb = new StringBuilder();
-            sb.AppendLine("以下资料来自同一店铺的历史客服聊天。只生成可复用、客服已经明确回答且不依赖某个具体订单/买家身份的知识库问答。");
+            sb.AppendLine("以下资料来自同一店铺的历史客服聊天。只使用未标记为Bot的真人客服回复作为知识事实；[A]/[AI]自动回复不能作为答案证据。只生成可复用、客服已经明确回答且不依赖某个具体订单/买家身份的知识库问答。");
             sb.AppendLine("忽略退款成功卡片、系统通知、寒暄、纯表情、未回答问题和一次性订单状态；账号、手机号、订单号等必须泛化为字段说明，不得保留个人数据。");
             sb.AppendLine("当买家只回复数字、账号、型号等短内容时，必须结合同一块中的“客服前置提问”理解含义。");
             sb.AppendLine();
@@ -1541,51 +1543,84 @@ namespace Bot.Knowledge
             var sellers = new List<string>();
             var previousSeller = string.Empty;
             var previousSellerTime = DateTime.MinValue;
+            var botAnsweredPendingQuestion = false;
 
             Action flush = () =>
             {
-                if (buyers.Count < 1 || sellers.Count < 1) return;
-                var question = NormalizeText(string.Join(" ", buyers));
-                var answer = NormalizeText(string.Join(" ", sellers));
-                var context = previousSeller;
-                if (IsUsefulPair(question, answer))
+                if (buyers.Count > 0 && sellers.Count > 0)
                 {
-                    result.Add(Tuple.Create(question, answer, context));
+                    var question = NormalizeText(string.Join(" ", buyers));
+                    var answer = NormalizeText(string.Join(" ", sellers));
+                    if (IsUsefulPair(question, answer))
+                        result.Add(Tuple.Create(question, answer, previousSeller));
                 }
                 buyers.Clear();
                 sellers.Clear();
                 previousSeller = string.Empty;
                 previousSellerTime = DateTime.MinValue;
+                botAnsweredPendingQuestion = false;
             };
 
             foreach (var turn in history.Turns.OrderBy(x => x.Time))
             {
                 if (turn.Role == "buyer")
                 {
-                    if (sellers.Count > 0) flush();
+                    if (sellers.Count > 0)
+                        flush();
+                    else if (botAnsweredPendingQuestion)
+                    {
+                        // A Bot answer closes the prior unanswered question for history
+                        // import. Never carry that question forward and pair it with a
+                        // later human reply to a different buyer turn.
+                        buyers.Clear();
+                        previousSeller = string.Empty;
+                        previousSellerTime = DateTime.MinValue;
+                        botAnsweredPendingQuestion = false;
+                    }
+
                     if (buyers.Count == 0 && !string.IsNullOrWhiteSpace(previousSeller)
                         && previousSellerTime != DateTime.MinValue && turn.Time != DateTime.MinValue
                         && turn.Time - previousSellerTime > TimeSpan.FromMinutes(30))
                     {
                         previousSeller = string.Empty;
+                        previousSellerTime = DateTime.MinValue;
                     }
                     buyers.Add(turn.Text);
+                    continue;
+                }
+
+                if (turn.Role != "seller") continue;
+                if (turn.IsBotReply || IsBotMarkedSellerReply(turn.Text))
+                {
+                    if (buyers.Count > 0 && sellers.Count == 0)
+                        botAnsweredPendingQuestion = true;
+                    continue;
+                }
+
+                if (buyers.Count > 0)
+                {
+                    sellers.Add(turn.Text);
+                    botAnsweredPendingQuestion = false;
                 }
                 else
                 {
-                    if (buyers.Count > 0)
-                    {
-                        sellers.Add(turn.Text);
-                    }
-                    else
-                    {
-                        previousSeller = turn.Text;
-                        previousSellerTime = turn.Time;
-                    }
+                    // A human seller message before the buyer's short answer is context,
+                    // not an answer. Bot echoes are deliberately excluded above.
+                    previousSeller = turn.Text;
+                    previousSellerTime = turn.Time;
                 }
             }
+
             flush();
             return result;
+        }
+
+        private static bool IsBotMarkedSellerReply(string value)
+        {
+            return Regex.IsMatch(
+                (value ?? string.Empty).Trim(),
+                @"(?:\[\s*A\s*\]|\[\s*AI\s*\]|【\s*AI\s*】|［\s*AI\s*］)\s*$",
+                RegexOptions.IgnoreCase);
         }
 
         private static bool IsUsefulPair(string question, string answer)
