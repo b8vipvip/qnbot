@@ -96,9 +96,10 @@ def test_recovered_order_handoff_keeps_claim_after_durable_order_ledger_owns_it(
         method.index("var decision = IncomingMessageSafety.Evaluate")
     ]
 
+    handoff = order[order.index("if (orderPlan != null && orderPlan.IsBuyerFollowUp)"):]
     assert "accepted = true;" in order
-    assert order.index("ResponseProgressTracker.ObserveNewBuyerTurn") < order.index("accepted = true;")
-    assert order.index("accepted = true;") < order.index("return ProcessOrderPlacedReplyAsync(orderPlan);")
+    assert handoff.index("ResponseProgressTracker.ObserveNewBuyerTurn") < handoff.index("accepted = true;")
+    assert handoff.index("accepted = true;") < handoff.index("return ProcessOrderPlacedReplyAsync(orderPlan);")
     assert "if (!accepted)" in method
 
 
