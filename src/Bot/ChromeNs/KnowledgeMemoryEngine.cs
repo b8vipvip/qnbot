@@ -1084,7 +1084,6 @@ namespace Bot.ChromeNs
 
             var sourceClient = qn.CDP;
             var sourceSessionId = sourceClient == null ? string.Empty : (sourceClient.SessionId ?? string.Empty).Trim();
-            var sourceServer = MyWebSocketServer.WSocketSvrInst;
             Func<bool> sourceSessionCurrent = () =>
             {
                 var currentClient = qn.CDP;
@@ -1161,7 +1160,7 @@ namespace Bot.ChromeNs
                     detectedAt,
                     readyAt,
                     shopKey);
-                var autoSend = Params.Robot.GetIsAutoReply();
+                var autoSend = Params.Robot.CanUseRobotReal && Params.Robot.GetIsAutoReply();
                 BotRuntimeStats.RecordDisplayedAnswer(autoSend);
                 Log.Info("Knowledge Memory本地答案已就绪: buyer=" + burst.BuyerNick
                     + ", score=" + decision.Best.Score.ToString("0.00")
@@ -1227,7 +1226,7 @@ namespace Bot.ChromeNs
                     }
                 }
 
-                string relevanceReason;
+                string relevanceReason = string.Empty;
                 if (!sourceSessionCurrent()
                     || !ParallelReplyRelevanceGate.ShouldSend(
                         burst.SellerNick, burst.BuyerNick, burst.CombinedQuestion, detectedAt,
@@ -1278,8 +1277,10 @@ namespace Bot.ChromeNs
                 {
                     sendException = ex;
                 }
-                var sendCancelled = !sendOk && (sendException is OperationCanceledException
-                    || (qn.Rpa != null && qn.Rpa.LastSendWasCancelled));
+                var sendCancelled = !sendOk && qn.Rpa != null && qn.Rpa.LastSendWasCancelled;
+                var sendIndeterminate = !sendOk && qn.Rpa != null && qn.Rpa.LastSendWasIndeterminate;
+                if (!sendOk && sendException is OperationCanceledException && !sendIndeterminate)
+                    sendCancelled = true;
                 var sendFailureReason = sendException != null
                     ? sendException.Message
                     : qn.Rpa == null
