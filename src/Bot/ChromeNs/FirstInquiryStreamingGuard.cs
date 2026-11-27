@@ -274,7 +274,10 @@ namespace Bot.ChromeNs
             var history = await sourceClient.Invoke<JObject>("im.singlemsg.GetRemoteHisMsg", new
             {
                 cid = new { ccode = ccode, type = 1 },
-                count = 30,
+                // This fast path may be the only recovery source while the normal receive
+                // callback is absent. Fetch enough to retain the earliest substantive item
+                // from a supported 40-message burst.
+                count = 100,
                 gohistory = 1,
                 msgid = "-1",
                 msgtime = "-1"
