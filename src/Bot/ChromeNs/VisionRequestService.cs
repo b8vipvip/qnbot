@@ -265,15 +265,6 @@ namespace Bot.ChromeNs
                                 ? "视觉知识"
                                 : (!string.IsNullOrWhiteSpace(result.MatchedImageKnowledgeId) ? "图片知识辅助AI" : "AI生成");
                             KnowledgeLearningService.RegisterAnswerSource(task.SellerNick, task.BuyerNick, currentQuestion, result.Answer, source);
-                            if (!task.DeferLearningUntilDelivered && string.IsNullOrWhiteSpace(result.MatchedVisualKnowledgeId))
-                            {
-                                KnowledgeLearningService.QueueLearn(
-                                    "买家本轮消息：" + currentQuestion + (string.IsNullOrWhiteSpace(timeline) ? string.Empty : "\n" + timeline),
-                                    result.Answer,
-                                    "视觉AI",
-                                    task.SellerNick,
-                                    task.BuyerNick);
-                            }
                             return result;
                         }
                         last = result;
