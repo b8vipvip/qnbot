@@ -91,8 +91,9 @@ def test_help_source_and_written_guide_ship_with_the_client_change():
     assert "KnowledgeCenterHelpWindow.cs" in PROPS
     assert "# Knowledge Center V2 客户端使用帮助" in DOC
     assert "### 单一知识引擎" in DOC
-    assert "首次迁移只用于把既有数据导入 V2" in DOC
+    assert "旧版知识库页面、旧版数据模型、旧版检索/自动回复、旧版写入和同步路径均已删除" in DOC
+    assert "新安装只初始化空 V2 数据库" in DOC
+    assert "不提供 V1 自动迁移或回退" in DOC
     assert "帮助窗口不会保存设置、修改知识或触发同步" in DOC
     assert not (ROOT / "src/Bot/Directory.Build.targets").exists()
-
 
