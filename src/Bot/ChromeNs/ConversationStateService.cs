@@ -70,8 +70,7 @@ namespace Bot.ChromeNs
             string seller,
             string buyer,
             string currentQuestion,
-            IList<ConversationContextTurn> turns,
-            bool includeLegacyKnowledgeEntities = true)
+            IList<ConversationContextTurn> turns)
         {
             var state = new ConversationStateSnapshot
             {
@@ -87,7 +86,7 @@ namespace Bot.ChromeNs
             state.ConversationStage = DetectStage(contextText);
             state.PendingQuestion = FindPendingQuestion(ordered);
             state.CurrentTopic = FindCurrentTopic(ordered, currentQuestion);
-            state.Entities = includeLegacyKnowledgeEntities ? ExtractKnownEntities(contextText) : new List<string>();
+            state.Entities = ExtractKnownEntities(seller, contextText);
             state.CurrentEntity = ResolvePrimaryEntity(state.Entities, ordered, currentQuestion);
             state.BuyerGoal = DetectIntent((currentQuestion ?? string.Empty) + " " + state.CurrentTopic);
 
@@ -175,14 +174,27 @@ namespace Bot.ChromeNs
             return current;
         }
 
-        private static List<string> ExtractKnownEntities(string context)
+        private static List<string> ExtractKnownEntities(string seller, string context)
         {
             var compactContext = Compact(context);
             if (compactContext.Length == 0) return new List<string>();
             var scores = new Dictionary<string, int>(StringComparer.OrdinalIgnoreCase);
-            var knowledge = BotFeatureStore.GetKnowledgeBase() ?? new List<KnowledgeBaseEntry>();
-            foreach (var item in knowledge.Where(x => x != null && x.Enabled
-                && !Bot.Knowledge.KnowledgeV2AuthorityPolicy.IsUnapprovedLegacyLearningEntry(x)))
+            List<KnowledgeV2Record> knowledge;
+            try
+            {
+                knowledge = KnowledgeEngineV2Service.GetRecords(seller)
+                    .Where(x => x != null && x.Enabled
+                        && string.Equals(x.Status, "active", StringComparison.OrdinalIgnoreCase)
+                        && KnowledgeV2AuthorityPolicy.IsProductionApproved(x))
+                    .ToList();
+            }
+            catch (Exception ex)
+            {
+                Log.ErrorWithMaxCount("会话实体抽取读取Knowledge V2失败，已跳过知识实体扩展: " + ex.Message, 10);
+                return new List<string>();
+            }
+
+            foreach (var item in knowledge)
             {
                 foreach (var term in CandidateEntityTerms(item))
                 {
@@ -202,10 +214,12 @@ namespace Bot.ChromeNs
                 .ToList();
         }
 
-        private static IEnumerable<string> CandidateEntityTerms(KnowledgeBaseEntry item)
+        private static IEnumerable<string> CandidateEntityTerms(KnowledgeV2Record item)
         {
-            foreach (var keyword in SplitTerms(item.Keywords)) yield return keyword;
-            if (!string.IsNullOrWhiteSpace(item.Category)) yield return item.Category.Trim();
+            if (item == null) yield break;
+            foreach (var entity in item.Entities ?? new List<string>()) yield return entity;
+            foreach (var alias in item.Aliases ?? new List<string>()) yield return alias;
+            if (!string.IsNullOrWhiteSpace(item.Subject)) yield return item.Subject.Trim();
 
             var title = item.Title ?? string.Empty;
             foreach (Match match in Regex.Matches(title, @"[\u4e00-\u9fa5A-Za-z0-9]+"))
