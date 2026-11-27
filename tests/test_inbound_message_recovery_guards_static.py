@@ -175,3 +175,17 @@ def test_background_recovery_bot_switches_are_read_under_the_exact_shop_scope():
     recovery_switch = schedule_recovery.index("botEnabledForShop = Params.Robot.CanUseRobotReal;")
     assert recovery_scope < recovery_switch
     assert "if (!botEnabledForShop) return;" in schedule_recovery
+
+
+def test_order_plan_master_switch_is_resolved_from_the_plan_shop_not_global_fallback():
+    source = read("src/Bot/ChromeNs/OrderPlacedAutoReplyService.cs")
+    method = source[
+        source.index("public static bool TryCreatePlan"):
+        source.index("private static bool TryCreateBuyerFollowUpPlan")
+    ]
+
+    resolve_shop = method.index("ShopContextLocator.ResolveRuntimeByShopKey(shopKey)")
+    scope = method.index("using (ShopSettingsScope.Enter(shop, false))")
+    master_switch = method.index("botEnabledForShop = Params.Robot.CanUseRobotReal;")
+    assert resolve_shop < scope < master_switch
+    assert "if (!botEnabledForShop) return false;" in method
