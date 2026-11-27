@@ -5,11 +5,24 @@ ROOT = Path(__file__).resolve().parents[1]
 def read(path: str) -> str:
     return (ROOT / path).read_text(encoding="utf-8-sig")
 
-def test_knowledge_manager_has_ai_optimization_runtime_ui():
-    ui = read("src/Bot/Knowledge/KnowledgeOptimizationUi.cs"); service = read("src/Bot/Knowledge/KnowledgeOptimizationService.cs"); app = read("src/Bot/App.xaml.cs"); targets = read("src/Directory.Build.targets")
-    assert 'Content = "优化问答"' in ui; assert "KnowledgeOptimizationService.OptimizeAsync" in ui; assert "仅优化 智能导入 / 历史扫描 / 自动学习 / AI生成" in ui
-    assert "knowledge-before-optimize-" in service; assert "BatchSize = 5" in service; assert "BackgroundTimeoutSeconds = 300" in service; assert "明显截断" in service; assert "不得新增价格" in service
-    assert "KnowledgeOptimizationUi.Initialize();" in app; assert "Knowledge\\KnowledgeOptimizationService.cs" in targets; assert "Knowledge\\KnowledgeOptimizationUi.cs" in targets
+def test_v2_optimization_replaces_legacy_v1_optimizer_and_preserves_revision_workflow():
+    ui = read("src/Bot/Knowledge/KnowledgeCenterV2AiToolsUi.cs")
+    service = read("src/Bot/Knowledge/KnowledgeV2SmartImportService.cs")
+    revision = read("src/Bot/Knowledge/KnowledgeEngineV2RevisionService.cs")
+    targets = read("src/Directory.Build.targets")
+    shell = read("src/Bot/Knowledge/KnowledgeCenterV2Ui.cs")
+
+    assert not (ROOT / "src/Bot/Knowledge/KnowledgeOptimizationService.cs").exists()
+    assert not (ROOT / "src/Bot/Knowledge/KnowledgeOptimizationUi.cs").exists()
+    assert 'Nav("智能导入", () => new KnowledgeV2SmartImportPage' in shell
+    assert 'Nav("优化记录", () => new KnowledgeV2AiOptimizationHistoryPage' in shell
+    assert "KnowledgeEngineV2Repository.Save(seller, record)" in service
+    assert "KnowledgeEngineV2GovernanceAuditService.TryAppendAction" in service
+    assert "GenerateRevisionCandidates" in revision
+    assert "KnowledgeEngineV2GovernanceAuditService.GetEntries" in ui
+    assert "KnowledgeOptimizationService.cs" not in targets
+    assert "KnowledgeOptimizationUi.cs" not in targets
+
 
 def test_order_auto_reply_uses_mandatory_segment_sender_even_after_manual_takeover():
     order = read("src/Bot/ChromeNs/OrderPlacedAutoReplyService.cs"); app = read("src/Bot/App.xaml.cs"); targets = read("src/Directory.Build.targets")
