@@ -45,18 +45,25 @@ def test_incremental_idempotent_save_and_hashes_use_v2_repository_only():
     assert "SaveDeduped(parsed.Items)" not in V2
 
 
-def test_error_classification_and_cancellation_sources():
+def test_error_classification_and_cancellation_sources_are_owned_by_v2_import_services():
+    service = read("src/Bot/Knowledge/KnowledgeV2SmartImportService.cs")
+    ai = read("src/Bot/Knowledge/KnowledgeAiService.cs")
+    ui = read("src/Bot/Knowledge/KnowledgeCenterV2AiToolsUi.cs")
     for term in ["UserCancel", "Timeout", "WindowClosed", "ReplacedByNewTask"]:
-        assert term in V2 and term in UI
-    assert "智能导入超时" in V2
-    assert "V2 JSON解析失败" in V2
-    assert "HttpRequestException" in UI
+        assert term in service and term in ui
+    assert "OperationCanceledException" in service
+    assert "SmartImportException" in service
+    assert "HttpRequestException" in service or "HttpRequestException" in ai
+    assert "智能导入超时" in service
+    assert "V2 JSON解析失败" in service
 
+def test_json_fence_and_truncated_json_handling_are_shared_by_v2_ai_import():
+    ai = read("src/Bot/Knowledge/KnowledgeAiService.cs")
+    smart = read("src/Bot/Knowledge/KnowledgeV2SmartImportService.cs")
 
-def test_json_fence_and_truncated_json_handling():
-    assert "StripFence" in V2
-    assert "可能是响应被截断" in V2
-
+    assert "StripFence" in ai
+    assert "StripFence" in smart or "KnowledgeAiService.ParseAiKnowledgeResult" in smart
+    assert "可能是响应被截断" in ai or "可能是响应被截断" in smart
 
 def test_progress_fields_are_reported_from_v2_import_batches():
     for term in [
