@@ -408,7 +408,9 @@ namespace Bot.ChromeNs
                 ReceptionWorkflowRuntimeService.CancelDecision(workflowDecision);
                 lifecycleLease.MarkFailed("vision_answer_invalid");
                 if (ctl != null) ctl.SetSendResult(false, "未发送：AI错误");
-                ResponseProgressTracker.Complete(burst.SellerNick, burst.BuyerNick, burst.ShopKey);
+                ResponseProgressTracker.Fail(
+                    burst.SellerNick, burst.BuyerNick,
+                    "视觉AI未返回有效答案，未发送给买家", burst.ShopKey);
                 return;
             }
             if (!lifecycleLease.IsCurrent)
@@ -535,6 +537,9 @@ namespace Bot.ChromeNs
                 ReceptionWorkflowRuntimeService.CompleteDecision(workflowDecision, false);
                 if (lifecycleLease.IsCurrent) lifecycleLease.MarkFailed("vision_send_cancelled");
                 if (ctl != null) ctl.SetSendResult(false, "未发送：视觉generation已取消");
+                ResponseProgressTracker.Cancel(
+                    burst.SellerNick, burst.BuyerNick,
+                    "图片撤回保护视觉发送期间generation已失效", burst.ShopKey);
                 return;
             }
             var sendCancelled = !sendOk && qn.Rpa != null && qn.Rpa.LastSendWasCancelled;
@@ -664,6 +669,9 @@ namespace Bot.ChromeNs
             catch (OperationCanceledException)
             {
                 if (lifecycleLease.IsCurrent) lifecycleLease.MarkFailed("vision_cache_miss_fallback_cancelled");
+                ResponseProgressTracker.Cancel(
+                    burst.SellerNick, burst.BuyerNick,
+                    "图片缓存兜底发送期间generation已失效", burst.ShopKey);
                 return;
             }
             var sendCancelled = !sent && qn.Rpa != null && qn.Rpa.LastSendWasCancelled;
