@@ -97,3 +97,52 @@ def test_send_gate_rebinds_to_current_authoritative_qn_for_same_shop_before_firs
     assert pre_send_handoff < first_physical_send
     assert "owner.SendTextWithRetryAsync(" in send
     assert "同ShopKey权威会话转交" in send
+
+
+def test_premerge_waits_for_authoritative_same_shop_before_running_fixed_rules():
+    source = read("src/Bot/ChromeNs/BuyerMessageBurstCoordinator.cs")
+    method = source.split("private static async Task<CanonicalPreMergeOutcome> HandleScopedAsync", 1)[1].split(
+        "private static bool HasNewerSubstantiveConversationTurn", 1
+    )[0]
+    resolve = method.index("ShopContextLocator.FindConnectedQnByShopKey(item.ShopKey)")
+    wait = method.index("while (connected == null && deadline.ElapsedMilliseconds < 5000)")
+    lookup = method.index("ShopContextLocator.FindConnectedQnByShopKey(item.ShopKey)", wait)
+    gate = method.index("var qn = connected;", lookup)
+    assert resolve < wait < lookup < gate < method.index("ManualRechargeAssistantService.TryHandleAsync")
+    assert "cancellationToken.ThrowIfCancellationRequested()" in method[wait:gate]
+    assert "Task.Delay(150, cancellationToken)" in method[wait:lookup]
+    assert "QN.CurQN" not in method
+
+
+def test_policy_suppression_does_not_mark_first_reply_delivered_or_fall_through_to_ai():
+    source = read("src/Bot/ChromeNs/BuyerMessageBurstCoordinator.cs")
+    first = source.split("var firstReserved =", 1)[1].split("if (allowLocalShortReply)", 1)[0]
+    assert first.index("firstOutcome == CanonicalPreMergeOutcome.Consumed") < first.index(
+        "FirstInquiryFixedReplyService.MarkDelivered"
+    ) < first.index("FirstInquiryFixedReplyService.ReleaseReservation") < first.index(
+        "if (firstOutcome == CanonicalPreMergeOutcome.Suppressed) return firstOutcome;"
+    )
+    send = source.split("private static async Task<CanonicalPreMergeOutcome> SendFixedAsync", 1)[1].split(
+        "private static bool TryResolveOffHours", 1
+    )[0]
+    before_send = send.split("cancellationToken.ThrowIfCancellationRequested();", 1)[0]
+    assert "ShopReceptionPolicy.BlockOutgoing" in before_send
+    assert "return CanonicalPreMergeOutcome.Suppressed" in before_send
+    assert "CanonicalPreMergeOutcome.Consumed" not in before_send
+    guard = send.split("Func<bool> preSendGuard = () =>", 1)[1].split("var ok = await", 1)[0]
+    assert "ShopReceptionPolicy.BlockOutgoing" in guard
+    assert "policySuppressed = true" in guard
+    assert "if (!ok && policySuppressed)" in send
+    assert "canonical_pre_merge_policy_suppressed" in source
+
+
+def test_delayed_fixed_reply_does_not_discard_valid_shop_when_old_cdp_disappears():
+    source = read("src/Bot/ChromeNs/BuyerMessageBurstCoordinator.cs")
+    send = source.split("private static async Task<CanonicalPreMergeOutcome> SendFixedAsync", 1)[1].split(
+        "private static bool TryResolveOffHours", 1
+    )[0]
+    delay = send.split("if (boundedDelay > 0)", 1)[1].split("Func<bool> preSendGuard", 1)[0]
+    assert "qn.CDP" not in delay
+    assert "verifiedShop.ShopKey, item.ShopKey" in delay
+    assert "Params.Robot.GetIsAutoReply()" in delay
+    assert "await qn.SendTextWithRetryAsync(" in send
