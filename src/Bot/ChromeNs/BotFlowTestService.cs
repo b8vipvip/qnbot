@@ -136,11 +136,28 @@ namespace Bot.ChromeNs
             if (ctl != null) ctl.SetProcessing("测试中：正在按真实规则生成答案...");
 
             var ai = Stopwatch.StartNew();
-            var generated = await Task.Run(() => MyOpenAI.GetAnswer(
-                candidate.Seller,
-                candidate.Buyer,
-                candidate.Question,
-                true));
+            string generated;
+            try
+            {
+                using (ShopSettingsScope.Enter(shop))
+                {
+                    generated = await Task.Run(() => MyOpenAI.GetAnswer(
+                        candidate.Seller,
+                        candidate.Buyer,
+                        candidate.Question,
+                        true));
+                }
+            }
+            catch (Exception ex)
+            {
+                ai.Stop();
+                var error = "AI答案生成异常：" + ex.Message;
+                if (ctl != null) ctl.SetSendResult(false, "测试失败：答案生成阶段");
+                ResponseProgressTracker.Fail(
+                    candidate.Seller, candidate.Buyer,
+                    "Bot真实流程测试答案生成异常：" + ex.Message, shopKey);
+                return Failure(error, total, candidate, ai.ElapsedMilliseconds);
+            }
             ai.Stop();
             if (string.IsNullOrWhiteSpace(generated) || generated.StartsWith("错误：", StringComparison.Ordinal))
             {
@@ -177,13 +194,28 @@ namespace Bot.ChromeNs
             if (ctl != null) ctl.SetSendPending("测试中：正在定位买家、写入输入框并真实发送...");
 
             var send = Stopwatch.StartNew();
-            var sent = await qn.SendTextWithRetryAsync(candidate.Buyer, outgoing, 1);
+            var sent = false;
+            Exception sendException = null;
+            using (ShopSettingsScope.Enter(shop))
+            {
+                try
+                {
+                    sent = await qn.SendTextWithRetryAsync(candidate.Buyer, outgoing, 1);
+                }
+                catch (Exception ex)
+                {
+                    sendException = ex;
+                }
+            }
             send.Stop();
             total.Stop();
-            var sendCancelled = !sent && qn.Rpa != null && qn.Rpa.LastSendWasCancelled;
-            var sendFailureReason = qn.Rpa == null
-                ? "发送器不可用，未能确认实际送达状态"
-                : qn.Rpa.GetSendFailureReason();
+            var sendCancelled = !sent && (sendException is OperationCanceledException
+                || (qn.Rpa != null && qn.Rpa.LastSendWasCancelled));
+            var sendFailureReason = sendException != null
+                ? sendException.Message
+                : qn.Rpa == null
+                    ? "发送器不可用，未能确认实际送达状态"
+                    : qn.Rpa.GetSendFailureReason();
             var detail = sent
                 ? "测试成功：真实消息已发送，请在千牛中手动撤回这条【Bot测试】消息。"
                 : sendCancelled
