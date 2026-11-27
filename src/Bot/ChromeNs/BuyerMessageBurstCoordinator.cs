@@ -42,6 +42,12 @@ namespace Bot.ChromeNs
         public string ModelQuestion { get; private set; }
         public int Version { get; private set; }
         public long SessionGeneration { get; private set; }
+        public bool InputOverflow { get; private set; }
+        public string InputOverflowReason { get; private set; }
+
+        private const int MaxBurstMessageCount = 40;
+        private const int MaxBurstQuestionCharacters = 16000;
+        private const int OverflowPreviewCharacters = 1200;
 
         public BuyerMessageBurstItem LatestVisionItem
         {
@@ -85,7 +91,12 @@ namespace Bot.ChromeNs
                 throw new InvalidOperationException("一个买家消息聚合批次缺少唯一ShopKey，已拒绝跨店合并。");
             ShopKey = shopKeys[0];
             SessionGeneration = Items.Count < 1 ? 0 : Items.Max(x => x.SessionGeneration);
-            CombinedQuestion = BuildCombinedQuestion(Items);
+            bool inputOverflow;
+            CombinedQuestion = BuildCombinedQuestion(Items, out inputOverflow);
+            InputOverflow = inputOverflow;
+            InputOverflowReason = inputOverflow
+                ? "本轮买家连续消息超过安全处理上限（最多40条或16000字符），为避免因静默截断造成答非所问，已停止本轮自动回复。请拆分发送或转人工处理。"
+                : string.Empty;
             var continuation = Items
                 .Select(x => (x.SemanticContinuationContext ?? string.Empty).Trim())
                 .LastOrDefault(x => !string.IsNullOrWhiteSpace(x));
@@ -105,11 +116,25 @@ namespace Bot.ChromeNs
 
         public static string BuildCombinedQuestion(IEnumerable<BuyerMessageBurstItem> items)
         {
-            var parts = new List<string>();
-            foreach (var item in (items ?? new BuyerMessageBurstItem[0])
+            bool ignored;
+            return BuildCombinedQuestion(items, out ignored);
+        }
+
+        private static string BuildCombinedQuestion(
+            IEnumerable<BuyerMessageBurstItem> items,
+            out bool inputOverflow)
+        {
+            inputOverflow = false;
+            var orderedItems = (items ?? new BuyerMessageBurstItem[0])
                 .Where(x => x != null)
                 .OrderBy(x => x.SortValue <= 0 ? x.ReceivedAt.Ticks : x.SortValue)
-                .ThenBy(x => x.ReceivedAt))
+                .ThenBy(x => x.ReceivedAt)
+                .ToList();
+            if (orderedItems.Count > MaxBurstMessageCount) inputOverflow = true;
+
+            var parts = new List<string>();
+            var accumulatedCharacters = 0;
+            foreach (var item in orderedItems)
             {
                 var text = NormalizeDisplay(item.DisplayText);
                 if (string.IsNullOrWhiteSpace(text)) continue;
@@ -123,7 +148,13 @@ namespace Bot.ChromeNs
                         && normalized.Length > previousNormalized.Length
                         && normalized.StartsWith(previousNormalized, StringComparison.Ordinal))
                     {
+                        accumulatedCharacters += text.Length - previous.Length;
                         parts[parts.Count - 1] = text;
+                        if (accumulatedCharacters > MaxBurstQuestionCharacters)
+                        {
+                            inputOverflow = true;
+                            break;
+                        }
                         continue;
                     }
                     if (normalized.Length <= 8
@@ -133,12 +164,26 @@ namespace Bot.ChromeNs
                         continue;
                     }
                 }
+
+                accumulatedCharacters += text.Length + (parts.Count == 0 ? 0 : 1);
                 parts.Add(text);
+                if (parts.Count > MaxBurstMessageCount
+                    || accumulatedCharacters > MaxBurstQuestionCharacters)
+                {
+                    inputOverflow = true;
+                    break;
+                }
             }
 
-            if (parts.Count > 10) parts = parts.Skip(parts.Count - 10).ToList();
             var combined = string.Join("\n", parts);
-            return combined.Length <= 1600 ? combined : combined.Substring(combined.Length - 1600);
+            if (!inputOverflow) return combined;
+
+            // Keep a short preview for diagnostics only. Callers must check InputOverflow
+            // and fail closed before any text/vision provider sees this preview.
+            var preview = combined.Length <= OverflowPreviewCharacters
+                ? combined
+                : combined.Substring(0, OverflowPreviewCharacters);
+            return preview + "\n[本轮消息超过安全上限，完整内容未发送给AI]";
         }
 
         private static string NormalizeDisplay(string value)
