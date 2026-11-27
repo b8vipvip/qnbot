@@ -184,9 +184,7 @@ namespace Bot.ChromeNs
                         ReplyDeduplicationService.RememberDelivered(seller, buyer, reply, shop.ShopKey);
                         KnowledgeLearningService.RegisterAnswerSource(
                             seller, buyer, question, reply, "人工回复-企业微信应用");
-                        KnowledgeLearningService.QueueLearn(
-                            question, reply, "人工回复-企业微信应用", seller, buyer);
-                        Log.Info("本店企业微信人工回复已发送并进入知识学习队列。shop="
+                        Log.Info("本店企业微信人工回复已发送；后续由 Knowledge V2 完整会话学习统一处理。shop="
                             + shop.ShopKey + ", ticket=" + ticketId + ", seller=" + seller + ", buyer=" + buyer);
                     }
                 }
