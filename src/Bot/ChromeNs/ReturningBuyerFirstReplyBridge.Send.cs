@@ -10,6 +10,7 @@ namespace Bot.ChromeNs
     {
         private static async Task SendAsync(QN qn, string shopKey, string seller, string buyer, string question, DateTime detectedAt, string key)
         {
+            var sendConfirmed = false;
             try
             {
                 var shop = ShopContextLocator.ResolveRuntimeBySeller(qn);
@@ -62,6 +63,7 @@ namespace Bot.ChromeNs
                     KnowledgeLearningService.RegisterAnswerSource(seller, buyer, question, answer, "首条咨询固定回复-10分钟回访");
                     var ok = await qn.SendTextWithRetryAsync(
                         buyer, answer, 1, CancellationToken.None, preSendGuard).ConfigureAwait(false);
+                    sendConfirmed = ok;
                     if (ok)
                     {
                         DateTime ignored;
@@ -81,7 +83,15 @@ namespace Bot.ChromeNs
             }
             catch (Exception ex)
             {
-                if (qn != null && qn.Rpa != null && qn.Rpa.LastSendWasIndeterminate)
+                if (sendConfirmed)
+                {
+                    // The physical send already returned success; a later bookkeeping/logging
+                    // exception must not reopen this message's reservation and allow a duplicate.
+                    DateTime ignored;
+                    IndeterminateReservations.TryRemove(key, out ignored);
+                    Reservations[key] = DateTime.Now;
+                }
+                else if (qn != null && qn.Rpa != null && qn.Rpa.LastSendWasIndeterminate)
                     RetainIndeterminateReservation(key);
                 else
                     Release(key);
