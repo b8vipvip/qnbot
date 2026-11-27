@@ -14,6 +14,10 @@ namespace Bot.ChromeNs
 
         public string LastSendFailureReason { get; private set; } = string.Empty;
         internal bool LastSendWasCancelled { get; private set; }
+        // A physical send action may have been accepted even when the final transport probe
+        // timed out. Such an attempt is not a retryable failure: wait for the delivery watchdog
+        // or seller echo instead of writing the same text a second time.
+        internal bool LastSendWasIndeterminate { get; private set; }
 
         // A burst of send/recovery paths can all request a forced UIA refresh at once. Scanning
         // the full Qianniu HWND tree concurrently is expensive and the production log showed a
@@ -27,6 +31,7 @@ namespace Bot.ChromeNs
         {
             LastSendFailureReason = string.Empty;
             LastSendWasCancelled = false;
+            LastSendWasIndeterminate = false;
         }
 
         internal void SetSendFailure(string stage, string detail)
@@ -40,6 +45,7 @@ namespace Bot.ChromeNs
             // QN.SendTextWithRetryAsync to send the already-invalid greeting again. Preserve the
             // existing retry contract by marking only explicit stale-answer reasons as cancelled.
             LastSendWasCancelled = IsNonRetryableStaleAnswer(stage, detail);
+            LastSendWasIndeterminate = false;
             LastSendFailureReason = string.IsNullOrWhiteSpace(detail) ? stage : stage + "：" + detail;
             BotConnectionDiagnostics.RecordSendAttempt(false, LastSendFailureReason);
             Log.Info("发送阶段失败: " + LastSendFailureReason);
@@ -62,10 +68,22 @@ namespace Bot.ChromeNs
                 || combined.IndexOf("旧答案不会发送", StringComparison.Ordinal) >= 0;
         }
 
+        internal void SetSendIndeterminate(string stage, string detail)
+        {
+            SetSendFailure(stage, detail);
+            if (!LastSendWasCancelled)
+            {
+                LastSendWasIndeterminate = true;
+                Log.Info("发送结果无法确定，禁止自动重试；等待同店卖家回显/提交证据核验: "
+                    + LastSendFailureReason);
+            }
+        }
+
         internal void SetSendCancellation(string stage, string detail)
         {
             SetSendFailure(stage, detail);
             LastSendWasCancelled = true;
+            LastSendWasIndeterminate = false;
         }
 
         internal void InvalidateChatControls()
