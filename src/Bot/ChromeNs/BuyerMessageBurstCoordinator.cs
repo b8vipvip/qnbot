@@ -535,7 +535,7 @@ namespace Bot.ChromeNs
                     var firstFailureReason = qn.Rpa == null
                         ? "首条咨询固定回复发送失败"
                         : qn.Rpa.GetSendFailureReason();
-                    var sendIsIndeterminate = qn.Rpa != null && qn.Rpa.LastSendWasIndeterminate;
+                    var sendIsIndeterminate = firstOutcome == CanonicalPreMergeOutcome.Indeterminate;
                     if (sendIsIndeterminate)
                     {
                         // Keep the in-flight reservation until the delivery watchdog confirms
@@ -677,6 +677,7 @@ namespace Bot.ChromeNs
             var detectedAt = item.ReceivedAt == DateTime.MinValue ? DateTime.Now : item.ReceivedAt;
             var sendCancelled = false;
             var sendSucceeded = false;
+            var physicalSendAttempted = false;
             var policySuppressed = false;
             var sendFailureReason = string.Empty;
             var ctl = ResponseProgressTracker.BeginAnswer(
@@ -754,6 +755,7 @@ namespace Bot.ChromeNs
                             + ", reason=" + relevanceReason);
                     return shouldSend;
                 };
+                physicalSendAttempted = true;
                 var ok = await qn.SendTextWithRetryAsync(
                     item.BuyerNick, answer, 3, cancellationToken, preSendGuard).ConfigureAwait(false);
                 sendSucceeded = ok;
@@ -800,7 +802,9 @@ namespace Bot.ChromeNs
                 if (ctl != null) ctl.SetSendResult(false, "发送失败：" + ex.Message);
                 Log.ErrorWithMaxCount(source + "前置发送异常: seller=" + item.SellerNick
                     + ", buyer=" + item.BuyerNick + ", error=" + ex.Message, 20);
-                return CanonicalPreMergeOutcome.Failed;
+                return physicalSendAttempted && qn.Rpa != null && qn.Rpa.LastSendWasIndeterminate
+                    ? CanonicalPreMergeOutcome.Indeterminate
+                    : CanonicalPreMergeOutcome.Failed;
             }
             finally
             {
