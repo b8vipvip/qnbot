@@ -483,3 +483,52 @@ def test_legacy_qn_text_and_vision_fallback_paths_keep_last_mile_shop_scoped_gua
     assert "lease.MarkSending(\"legacy_text_send_started\")" in text_path
     assert "RememberDelivered(burst.SellerNick,burst.BuyerNick,answer,burst.ShopKey)" in "".join(qn.split())
 
+
+
+def test_send_echo_confirmation_reads_replacement_qn_for_the_exact_shopkey():
+    qn = read("src/Bot/ChromeNs/QN.cs")
+    method = qn[qn.index("public bool HasRecentSellerEcho("):qn.index("internal DateTime LastSellerEchoTimeForShop")]
+    assert "ShopSettingsScope.Current" in method
+    assert "FindAuthoritativeShopSendOwner(shopKey)" in method
+    assert "owner.HasRecentSellerEchoLocal(buyerNick, text, since, shopKey)" in method
+    assert "HasRecentSellerEchoLocal(buyerNick, text, since, shopKey)" in method
+    assert "echo.ShopKey, expectedShopKey, StringComparison.Ordinal" in method
+    assert "QN.CurQN" not in method
+
+
+def test_ambiguous_physical_send_is_non_retryable_and_keeps_delivery_watchdog():
+    reliable = read("src/Bot/ChromeNs/QNRpa.ReliableSend.cs")
+    native = read("src/Bot/ChromeNs/QNRpa.NativeSend.cs")
+    platform = read("src/Bot/ChromeNs/QNRpa.PlatformSendGuard.cs")
+    qn = read("src/Bot/ChromeNs/QN.cs")
+
+    assert "LastSendWasIndeterminate" in reliable
+    assert "internal void SetSendIndeterminate(" in reliable
+    assert "LastSendWasIndeterminate = false" in reliable
+    assert "LastSendWasIndeterminate = true" in reliable
+    assert "SetSendIndeterminate(\"CDP页面发送后会话复核\"" in native
+    assert "SetSendIndeterminate(\"CDP页面发送按钮后确认\"" in native
+    assert "SetSendIndeterminate(\"HWND安全消息后确认\"" in native
+    assert "SetSendIndeterminate(\"安全UIA调用后确认\"" in native
+
+    verify = platform[
+        platform.index("private async Task<bool> WaitForTextSubmissionAcceptedAsync"):
+        platform.index("private void ArmLateServiceAttitudeContinuationWatch")
+    ]
+    assert "SetSendIndeterminate(\"提交后店铺身份确认\"" in verify
+    assert "SetSendIndeterminate(\"提交后会话确认\"" in verify
+    assert "SendDeliveryWatchdog.CancelPending" not in verify
+
+    send = qn[
+        qn.index("public async Task<bool> SendTextWithRetryAsync"):
+        qn.index("private async Task<bool> WaitForSellerEchoGraceAsync")
+    ]
+    initial = send.index("var ok = await SendTextAsync(buyer, text, preSendGuard);")
+    initial_indeterminate = send.index("if (!ok && rpa.LastSendWasIndeterminate)", initial)
+    retry_loop = send.index("for (var i = 0; !ok && i < retry; i++)", initial)
+    retry_send = send.index("ok = await SendTextAsync(buyer, text, preSendGuard);", retry_loop)
+    retry_indeterminate = send.index("if (!ok && rpa.LastSendWasIndeterminate)", retry_send)
+    assert initial < initial_indeterminate < retry_loop
+    assert retry_send < retry_indeterminate
+    assert "WaitForSellerEchoGraceAsync(buyer, text, sendStartedAt, 2800, cancellationToken)" in send
+    assert "保留SendDeliveryWatchdog等待提交/回显核验" in send

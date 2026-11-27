@@ -275,12 +275,19 @@ namespace Bot.ChromeNs
                             }
                             if (!await VerifyShopIdentityBeforeSendAsync(shopKey).ConfigureAwait(false))
                             {
-                                SetSendFailure("提交后店铺身份确认", "CDP登录身份已变化，未将提交证据归属到其他店铺");
-                                SendDeliveryWatchdog.CancelPending(
-                                    SellerNick, buyer, text, GetSendFailureReason(), shopKey);
+                                // The physical send action has already happened and the composer
+                                // is stably empty. A later CDP identity change cannot prove that the
+                                // message was not submitted, so keep the delivery watchdog alive
+                                // and forbid the outer retry loop from writing it again.
+                                SetSendIndeterminate("提交后店铺身份确认", "发送动作后CDP登录身份发生变化；提交结果不确定，保留回显监控并禁止重试");
                                 return false;
                             }
-                            if (!await VerifyCurrentBuyerWithoutNavigationAsync(buyer, method + "提交后会话确认").ConfigureAwait(false)) return false;
+                            if (!await VerifyCurrentBuyerWithoutNavigationAsync(buyer, method + "提交后会话确认").ConfigureAwait(false))
+                            {
+                                if (!LastSendWasCancelled)
+                                    SetSendIndeterminate("提交后会话确认", "发送动作后目标会话复核失败；提交结果不确定，保留回显监控并禁止重试");
+                                return false;
+                            }
                             ResetSendFailure();
                             var submissionEvidence = method + "发送动作后本次Bot精确草稿稳定清空，且目标买家复核通过";
                             SendDeliveryWatchdog.MarkSubmissionAccepted(

@@ -92,7 +92,8 @@ def test_dom_send_is_pinned_to_the_verified_authoritative_shop_session():
     assert send.index("VerifyShopIdentityBeforeSendAsync(shopKey)") < send.index("TryTriggerSendViaCdpDomAsync")
     assert "TryTriggerSendViaCdpDomAsync(" in send
     assert "buyer, shopKey, sourceClient, preSendGuard).ConfigureAwait(false)" in send
-    assert "禁止其他发送回退以避免重复发送" in send
+    assert "SetSendIndeterminate(\"CDP页面发送后会话复核\"" in send
+    assert "禁止重试" in send
 
     authority = native[
         native.index("private bool IsExpectedShopSessionCurrent"):
@@ -109,3 +110,12 @@ def test_dom_send_is_pinned_to_the_verified_authoritative_shop_session():
     ]
     assert "sourceClient.EvaluateExpressionAsync" in dom
     assert "_qn.CDP.EvaluateExpressionAsync" not in dom
+
+
+def test_native_send_treats_missing_draft_after_physical_action_as_indeterminate():
+    native = read("src/Bot/ChromeNs/QNRpa.NativeSend.cs")
+    reliable = read("src/Bot/ChromeNs/QNRpa.ReliableSend.cs")
+    assert "LastSendWasIndeterminate" in reliable
+    assert "发送动作后草稿已不存在" in native
+    assert "禁止重试" in native
+    assert "SetSendIndeterminate" in native
