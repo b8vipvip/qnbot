@@ -446,10 +446,12 @@ namespace Bot.ChromeNs
             // A human may have opened the missed conversation before the watchdog notices it,
             // which marks unread data as read. In that case inspect only a tightly bounded recent
             // history window; unknown-time records fail closed and are never replayed.
+            // This is a missed-inbound recovery path. The normal burst coordinator
+            // accepts 40 source messages; do not let a 20-row history read drop its head.
             var history = await cdp.Invoke<JObject>("im.singlemsg.GetRemoteHisMsg", new
             {
                 cid = new { ccode = ccode, type = 1 },
-                count = 20,
+                count = 100,
                 gohistory = 1,
                 msgid = "-1",
                 msgtime = "-1"
