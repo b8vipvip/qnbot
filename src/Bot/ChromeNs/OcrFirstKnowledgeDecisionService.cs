@@ -363,6 +363,8 @@ namespace Bot.ChromeNs
                     + task.BuyerNick);
             }
 
+            var approvedV2KnowledgeEvidence = KnowledgeEngineV2RuntimeBridge.BuildContextPromptAddon(decision);
+
             // A saved image knowledge description is an operator-confirmed image-class
             // hint. It may authorize only an already-approved Knowledge V2 answer; the
             // description itself is never sent as a reply.
@@ -372,7 +374,7 @@ namespace Bot.ChromeNs
                 var contextAddon = CombineContext(
                     imageKnowledgeMatch == null ? string.Empty : imageKnowledgeMatch.ContextText,
                     visualMatch == null ? string.Empty : visualMatch.ContextText,
-                    KnowledgeEngineV2RuntimeBridge.BuildContextPromptAddon(decision),
+                    approvedV2KnowledgeEvidence,
                     commerceAuthority == null ? string.Empty
                         : CommerceContextService.BuildPromptAddon(commerceAuthority.CommerceContext),
                     ConditionalBusinessAdviceService.BuildPromptAddon(conditionalAdviceEvidence, false));
@@ -388,6 +390,7 @@ namespace Bot.ChromeNs
                 {
                     Success = false,
                     KnowledgeV2ContextPromptAddon = contextAddon,
+                    ApprovedV2KnowledgeEvidence = approvedV2KnowledgeEvidence,
                     VisualQuestion = string.IsNullOrWhiteSpace(task.CombinedQuestion) ? "[图片OCR]" : task.CombinedQuestion,
                     VisualSummary = imageKnowledgeMatch != null
                         ? imageKnowledgeMatch.Description
@@ -429,6 +432,8 @@ namespace Bot.ChromeNs
             return new VisionRequestResult
             {
                 Success = true,
+                IsKnowledgeV2DirectAnswer = true,
+                ApprovedV2KnowledgeEvidence = approvedV2KnowledgeEvidence,
                 Answer = answer,
                 Error = string.Empty,
                 EndpointName = "server-ocr+knowledge-v2",
