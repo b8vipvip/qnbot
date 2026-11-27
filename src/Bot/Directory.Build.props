@@ -150,11 +150,7 @@
     <Compile Include="$(MSBuildThisFileDirectory)Knowledge\BusinessPolicyProfileUi.cs" />
   </ItemGroup>
 
-  <ItemGroup Condition="Exists('$(MSBuildThisFileDirectory)Knowledge\BulkListManagementUi.cs')">
-    <Compile Include="$(MSBuildThisFileDirectory)Knowledge\BulkListManagementUi.cs" />
-  </ItemGroup>
-
-  <ItemGroup Condition="Exists('$(MSBuildThisFileDirectory)ChromeNs\BulkListManagementUiBridge.cs')">
+<ItemGroup Condition="Exists('$(MSBuildThisFileDirectory)ChromeNs\BulkListManagementUiBridge.cs')">
     <Compile Include="$(MSBuildThisFileDirectory)ChromeNs\BulkListManagementUiBridge.cs" />
   </ItemGroup>
 
