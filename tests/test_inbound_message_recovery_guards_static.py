@@ -232,3 +232,15 @@ def test_order_attention_worker_checks_bot_switch_for_the_order_shop():
     bot = method.index("botEnabledForShop = Params.Robot.CanUseRobotReal;")
     assert resolve < scope < bot
     assert "if (!botEnabledForShop) return Denied(\"Bot当前未启用\");" in method
+
+
+def test_order_event_hub_fallback_reads_bot_switch_under_validated_shop_scope():
+    source = read("src/Bot/ChromeNs/BotActivityCoordinator.cs")
+    start = source.index("var eventTime = snapshot.EventTime")
+    end = source.index("AutoReplyRuleConfig cfg;", start)
+    method = source[start:end]
+
+    scope = method.index("using (ShopSettingsScope.Enter(runtimeShop, false))")
+    bot = method.index("botEnabledForShop = Params.Robot.CanUseRobotReal;")
+    assert scope < bot
+    assert "if (!botEnabledForShop)" in method
