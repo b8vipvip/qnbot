@@ -1613,22 +1613,6 @@ namespace Bot.Knowledge
             return Regex.Matches(transcript ?? string.Empty, "【历史会话问答】").Count;
         }
 
-        private static void MarkImportedSource(KnowledgeImportResult result, string source)
-        {
-            if (result == null || result.AddedItems == null || result.AddedItems.Count < 1) return;
-            var ids = new HashSet<string>(result.AddedItems.Select(x => x.Id ?? string.Empty));
-            var list = BotFeatureStore.GetKnowledgeBase();
-            var changed = false;
-            foreach (var item in list)
-            {
-                if (item == null || !ids.Contains(item.Id ?? string.Empty)) continue;
-                item.SourceType = source;
-                item.AiGenerated = true;
-                changed = true;
-            }
-            if (changed) BotFeatureStore.SaveKnowledgeBase(list);
-        }
-
         private static string Safe(string value)
         {
             value = (value ?? string.Empty).Replace("\r", " ").Replace("\n", " ").Trim();
