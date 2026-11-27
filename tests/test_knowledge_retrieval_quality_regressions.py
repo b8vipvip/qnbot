@@ -111,18 +111,19 @@ def test_ocr_evidence_enriches_knowledge_recall_without_rewriting_buyer_query_or
     assert "BuildTimelineText" not in ocr
 
 
-def test_legacy_ai_generated_learning_is_candidate_and_never_a_legacy_production_answer():
+def test_legacy_ai_generated_learning_is_imported_as_a_v2_candidate():
+    bridge = read("src/Bot/ChromeNs/KnowledgeEngineV2LearningBridge.cs")
     semantics = read("src/Bot/Knowledge/KnowledgeEngineV2.Semantics.cs")
-    authority = read("src/Bot/ChromeNs/KnowledgeEngineV2LearningBridge.cs")
-    repository = read("src/Bot/Knowledge/KnowledgeEngineV2.Repository.cs")
+    from_legacy = semantics[
+        semantics.index("public static KnowledgeV2Record FromLegacy"):
+        semantics.index("public static KnowledgeV2Query Parse")
+    ]
 
-    assert "自动学习|会话学习|人工回复学习|学习候选|pending|candidate|AI生成" in semantics
-    assert "IsUnapprovedLegacyLearningEntry" in authority
-    assert "IsTrustedProductionSource(entry.SourceType)" in authority
-    assert "EnsureLegacyNonProductionMirrorsDisabled" in repository
-    assert "legacy_nonproduction_mirror_version" in repository
-    assert "BotFeatureStore.SaveKnowledgeBase(legacy)" in repository
-
+    assert "if (entry.AiGenerated) return true;" in bridge
+    assert "IsUnapprovedLegacyLearningEntry(entry)" in from_legacy
+    assert 'if (isUnapprovedLearning) type = "learning_candidate";' in from_legacy
+    assert 'Status = isUnapprovedLearning ? "candidate" : "active"' in from_legacy
+    assert "KnowledgeV2AuthorityPolicy.IsProductionApproved" in bridge
 
 def test_candidate_mirror_sync_compares_effective_legacy_enabled_state():
     authority = read("src/Bot/ChromeNs/KnowledgeEngineV2LearningBridge.cs")
@@ -172,31 +173,36 @@ def test_v2_context_handoff_excludes_conflict_candidate_and_high_risk_records():
     assert 'match.Record.RiskLevel, "high"' in helper
 
 
-def test_ai_general_route_does_not_pass_weak_smart_reply_candidates():
-    smart = read("src/Bot/ChromeNs/SmartReplyRouterService.cs")
-    prompt = smart[
-        smart.index("public static string BuildPromptAddon"):
-        smart.index("private static string BuildContextDigest")
+def test_ai_general_route_does_not_retrieve_weak_or_unapproved_legacy_candidates():
+    router = read("src/Bot/ChromeNs/SmartReplyRouterService.cs")
+    state = read("src/Bot/ChromeNs/ConversationStateService.cs")
+    build = router[
+        router.index("public static Task<SmartReplyPlan> BuildPlanAsync"):
+        router.index("public static bool CanUseOfflineKnowledgeFallback")
     ]
-    assert "plan.Route == SmartReplyRouteKind.AiGeneral" in prompt
-    assert prompt.index("plan.Route == SmartReplyRouteKind.AiGeneral") < prompt.index("【智能知识路由】")
 
+    assert "Route = SmartReplyRouteKind.AiGeneral" in build
+    assert "Candidates = new List<SmartKnowledgeCandidate>()" in build
+    assert "ConversationStateService.Build(" in build
+    assert "KnowledgeEngineV2Service.GetRecords(seller)" in state
+    assert "KnowledgeV2AuthorityPolicy.IsProductionApproved(x)" in state
+    assert "BotFeatureStore.GetKnowledgeBase()" not in router
 
-def test_legacy_candidate_filter_applies_to_all_fallback_retrieval_paths():
-    repository = read("src/Bot/Knowledge/KnowledgeEngineV2.Repository.cs")
-    smart = read("src/Bot/ChromeNs/SmartReplyRouterService.cs")
-    local = read("src/Bot/ChromeNs/KnowledgeLearningService.cs")
-    embedding = read("src/Bot/ChromeNs/SemanticEmbeddingService.cs")
-    ensure = repository[
-        repository.index("private static void EnsureMigrated"):
-        repository.index("private static void EnsureLegacyNonProductionMirrorsDisabled")
+def test_all_runtime_retrieval_and_fallback_paths_are_v2_only():
+    files = [
+        "src/Bot/ChromeNs/SmartReplyRouterService.cs",
+        "src/Bot/ChromeNs/ReplyDeduplicationService.cs",
+        "src/Bot/ChromeNs/KnowledgeEngineV2RuntimeBridge.cs",
+        "src/Bot/ChromeNs/ConversationStateService.cs",
+        "src/Bot/ChromeNs/BuyerStreamingReplyPipeline.cs",
     ]
-    assert "EnsureLegacyNonProductionMirrorsDisabled(shop, state);" in ensure
-    assert "KnowledgeV2AuthorityPolicy.IsUnapprovedLegacyLearningEntry(x)" in smart
-    assert "KnowledgeV2AuthorityPolicy.IsUnapprovedLegacyLearningEntry(x)" in local
-    assert "KnowledgeV2AuthorityPolicy.IsUnapprovedLegacyLearningEntry(entry)" in embedding
-
-
+    for path in files:
+        source = read(path)
+        assert "BotFeatureStore.GetKnowledgeBase()" not in source
+        assert "KnowledgeLearningService.TryFindLocalAnswer" not in source
+        assert "KnowledgeMemoryEngine" not in source
+    assert not (ROOT / "src/Bot/ChromeNs/KnowledgeMemoryEngine.cs").exists()
+    assert not (ROOT / "src/Bot/ChromeNs/KnowledgeContextualReplyService.cs").exists()
 
 def test_ocr_non_direct_v2_context_reaches_multimodal_and_ocr_text_fallback():
     ocr = read("src/Bot/ChromeNs/OcrFirstKnowledgeDecisionService.cs")
@@ -257,49 +263,44 @@ def test_verified_learning_accepts_short_standalone_procedures_but_blocks_volati
 
 
 
-def test_v2_startup_unwraps_already_installed_memory_v1_handler():
-    memory = read("src/Bot/ChromeNs/KnowledgeMemoryEngine.cs")
+def test_v2_startup_has_no_memory_v1_wrapper_or_reflection_patch():
     runtime = read("src/Bot/ChromeNs/KnowledgeEngineV2RuntimeBridge.cs")
-    disable = memory[
-        memory.index("public static void DisableForV2"):
-        memory.index("private static void PatchExisting")
-    ]
-    assert "timer.Dispose()" in disable
-    assert 'GetNestedType("MemoryHandlerWrapper"' in disable
-    assert 'GetField("_inner"' in disable
-    assert "handlerField.SetValue(coordinator, inner);" in disable
-    assert "lock (PatchSync)" in disable
-    assert "lock (PatchSync)" in memory
-    assert "Volatile.Read(ref _disabledForV2)" in memory
-    assert "if (Volatile.Read(ref _disabledForV2) != 0)" in memory
-    assert "await inner(lease);" in memory
-    assert "lock (PatchSync)" in memory
-    assert "KnowledgeMemoryRuntimeBridge.DisableForV2();" in runtime
+    app = read("src/Bot/App.xaml.cs")
+    pipeline = read("src/Bot/ChromeNs/BuyerStreamingReplyPipeline.cs")
 
+    assert not (ROOT / "src/Bot/ChromeNs/KnowledgeMemoryEngine.cs").exists()
+    assert not (ROOT / "src/Bot/Knowledge/KnowledgeMemoryEngineUi.cs").exists()
+    assert "KnowledgeMemoryRuntimeBridge" not in runtime
+    assert "KnowledgeMemoryEngine" not in app
+    assert "MemoryHandlerWrapper" not in pipeline
+    assert "V2HandlerWrapper" not in runtime
 
-
-def test_unapproved_legacy_learning_does_not_pollute_conversation_entities_or_v1_memory():
+def test_unapproved_legacy_learning_does_not_pollute_v2_conversation_entities():
     state = read("src/Bot/ChromeNs/ConversationStateService.cs")
-    memory = read("src/Bot/ChromeNs/KnowledgeMemoryEngine.cs")
+    bridge = read("src/Bot/ChromeNs/KnowledgeEngineV2LearningBridge.cs")
 
-    assert "KnowledgeV2AuthorityPolicy.IsUnapprovedLegacyLearningEntry(x)" in state
-    assert "KnowledgeV2AuthorityPolicy.IsUnapprovedLegacyLearningEntry(x)" in memory
-    assert "var signature = ComputeSignature(knowledge);" in memory
-
-
+    entity = state[
+        state.index("private static List<string> ExtractKnownEntities"):
+        state.index("private static IEnumerable<string> CandidateEntityTerms")
+    ]
+    assert "KnowledgeEngineV2Service.GetRecords(seller)" in entity
+    assert 'string.Equals(x.Status, "active", StringComparison.OrdinalIgnoreCase)' in entity
+    assert "KnowledgeV2AuthorityPolicy.IsProductionApproved(x)" in entity
+    assert "BotFeatureStore.GetKnowledgeBase()" not in entity
+    assert "KnowledgeMemoryEngine" not in state
+    assert "public static bool IsProductionApproved(KnowledgeV2Record record)" in bridge
 
 def test_existing_v2_learning_candidates_are_normalized_without_disabling_v2_editor_state():
     repository = read("src/Bot/Knowledge/KnowledgeEngineV2.Repository.cs")
     helper = repository[
-        repository.index("private static void EnsureLegacyNonProductionMirrorsDisabled"):
+        repository.index("private static void EnsureV2CandidateStatesNormalized"):
         repository.index("private static KnowledgeV2Record CloneAndNormalize")
     ]
-    assert "legacyCandidatesToNormalize" in helper
+
+    assert "candidateRecords" in helper or "candidatesToNormalize" in helper or "recordsToNormalize" in helper
+    assert "KnowledgeV2AuthorityPolicy.IsCandidate(record)" in helper
     assert 'record.Status = "candidate";' in helper
     assert "state.Db.SaveRecordsInTransaction(" in helper
-    assert "legacy_nonproduction_mirror_version" in helper
-
-
 
 def test_legacy_ai_generated_flag_is_authoritative_even_when_source_metadata_is_missing():
     bridge = read("src/Bot/ChromeNs/KnowledgeEngineV2LearningBridge.cs")
@@ -347,13 +348,18 @@ def test_existing_v2_records_keep_ai_generated_source_provenance_as_candidates()
 def test_old_ai_source_records_are_normalized_to_candidate_status_without_disabling_them():
     repository = read("src/Bot/Knowledge/KnowledgeEngineV2.Repository.cs")
     helper = repository[
-        repository.index("private static void EnsureLegacyNonProductionMirrorsDisabled"):
+        repository.index("private static void EnsureV2CandidateStatesNormalized"):
         repository.index("private static KnowledgeV2Record CloneAndNormalize")
     ]
+    bridge = read("src/Bot/ChromeNs/KnowledgeEngineV2LearningBridge.cs")
+
     assert "KnowledgeV2AuthorityPolicy.IsCandidate(record)" in helper
     assert '!string.Equals(record.Type, "learning_candidate"' in helper
     assert 'record.Type = "learning_candidate";' in helper
     assert 'record.Status = "candidate";' in helper
+    assert "if (!record.Enabled" not in helper
+    assert "record.Enabled = false" not in helper
+    assert "public static bool IsCandidate(KnowledgeV2Record record)" in bridge
 
 def test_current_image_product_id_is_not_dropped_by_the_ten_entity_retrieval_bound():
     service = read("src/Bot/Knowledge/KnowledgeEngineV2.Service.Public.cs")
@@ -371,21 +377,21 @@ def test_current_image_product_id_is_not_dropped_by_the_ten_entity_retrieval_bou
     assert ".Concat(queryEntities)" in internal
     assert ".Take(10)" in internal
 
-def test_knowledge_v2_and_legacy_memory_direct_sends_recheck_shop_scoped_relevance_at_last_mile():
-    v2 = read("src/Bot/ChromeNs/KnowledgeEngineV2RuntimeBridge.cs")
-    memory = read("src/Bot/ChromeNs/KnowledgeMemoryEngine.cs")
+def test_v2_direct_send_rechecks_shop_scoped_relevance_at_last_mile():
+    runtime = read("src/Bot/ChromeNs/KnowledgeEngineV2RuntimeBridge.cs")
+    method = runtime[
+        runtime.index("internal static async Task<KnowledgeV2RuntimeResult> TryHandleWithContextAsync"):
+        runtime.index("internal static string BuildContextPromptAddon")
+    ]
 
-    for source, method_name, send_anchor in [
-        (v2, "Knowledge Engine V2", "burst.BuyerNick, answer, 1, lease.CancellationToken, preSendGuard"),
-        (memory, "Knowledge Memory", "burst.BuyerNick, answer, 1, lease.CancellationToken, preSendGuard"),
-    ]:
-        assert "out relevanceReason, false, burst.ShopKey" in source
-        assert "Func<bool> preSendGuard = () =>" in source
-        assert "lease.CancellationToken.IsCancellationRequested" in source
-        assert "Params.Robot.CanUseRobotReal" in source
-        assert "Params.Robot.GetIsAutoReply()" in source
-        assert "out latestRelevanceReason, false, burst.ShopKey" in source
-        assert send_anchor in source
+    assert "burst.ShopKey" in method
+    assert "Func<bool> preSendGuard = () =>" in method
+    assert "lease.CancellationToken.IsCancellationRequested" in method
+    assert "Params.Robot.CanUseRobotReal" in method
+    assert "Params.Robot.GetIsAutoReply()" in method
+    assert "ParallelReplyRelevanceGate.ShouldSend(" in method
+    assert "SendTextWithRetryAsync(" in method
+    assert "KnowledgeMemoryEngine" not in runtime
 
 def test_recent_turns_can_resolve_exact_shop_scope_without_treating_shop_key_as_question_text():
     context = read("src/Bot/ChromeNs/ConversationContextStore.cs")
@@ -420,59 +426,48 @@ def test_relevance_order_and_recharge_queries_use_explicit_shop_scoped_timelines
 
 
 
-def test_legacy_fuzzy_local_answer_cannot_bypass_enabled_knowledge_v2_authority():
-    legacy = read("src/Bot/ChromeNs/KnowledgeLearningService.cs")
-    method = legacy[
-        legacy.index("public static bool TryFindLocalAnswer"):
-        legacy.index("private static bool IsShortContextReply")
-    ]
+def test_legacy_fuzzy_local_answer_cannot_bypass_the_v2_runtime():
+    learning = read("src/Bot/ChromeNs/KnowledgeLearningService.cs")
     pipeline = read("src/Bot/ChromeNs/BuyerStreamingReplyPipeline.cs")
+
+    assert "TryFindLocalAnswer" not in learning
     runtime_call = pipeline.index("KnowledgeEngineV2RuntimeBridge.TryHandleWithContextAsync(qn, lease)")
     ai_call = pipeline.index("StreamingBuyerAnswerService.GetAnswerAsync(")
-
-    assert "KnowledgeEngineV2Service.IsEnabled(seller)" in method
-    assert method.index("KnowledgeEngineV2Service.IsEnabled(seller)") < method.index("BotFeatureStore.GetKnowledgeBase()")
-    assert "拒绝legacy本地直答" in method
     assert runtime_call < ai_call
     assert "knowledgeV2Result.ContextPromptAddon" in pipeline
+    assert "knowledgeV2Result.OfflineFallbackDecision" in pipeline
+    assert "BotFeatureStore.GetKnowledgeBase()" not in learning
 
-
-def test_legacy_local_answer_fails_closed_if_v2_authority_state_cannot_be_resolved():
-    legacy = read("src/Bot/ChromeNs/KnowledgeLearningService.cs")
-    method = legacy[
-        legacy.index("public static bool TryFindLocalAnswer"):
-        legacy.index("private static bool IsShortContextReply")
+def test_removed_legacy_local_answer_has_no_unscoped_fallback():
+    learning = read("src/Bot/ChromeNs/KnowledgeLearningService.cs")
+    runtime = read("src/Bot/ChromeNs/KnowledgeEngineV2RuntimeBridge.cs")
+    method = runtime[
+        runtime.index("internal static async Task<KnowledgeV2RuntimeResult> TryHandleWithContextAsync"):
+        runtime.index("internal static string BuildContextPromptAddon")
     ]
 
-    assert "catch (Exception ex)" in method
-    assert "无法确认Knowledge V2权威状态，拒绝legacy本地直答" in method
-    assert method.index("return false;") < method.index("var policy = BotFeatureStore.GetMessagePolicy();")
+    assert "TryFindLocalAnswer" not in learning
+    assert "shopScope == null" in method
+    assert "shopScope.ShopKey, burst.ShopKey, StringComparison.Ordinal" in method
+    assert "return KnowledgeV2RuntimeResult.Continue();" in method
+    assert "BotFeatureStore.GetKnowledgeBase()" not in runtime
 
-
-
-def test_smart_reply_router_suppresses_legacy_retrieval_when_v2_is_authoritative():
+def test_smart_reply_router_uses_v2_conversation_state_without_legacy_retrieval():
     smart = read("src/Bot/ChromeNs/SmartReplyRouterService.cs")
     state = read("src/Bot/ChromeNs/ConversationStateService.cs")
     build = smart[
-        smart.index("public static async Task<SmartReplyPlan> BuildPlanAsync"):
+        smart.index("public static Task<SmartReplyPlan> BuildPlanAsync"):
         smart.index("public static bool CanUseOfflineKnowledgeFallback")
     ]
-    authority = smart[
-        smart.index("private static bool CanUseLegacyKnowledgeAuthority"):
-        smart.index("private static List<SmartKnowledgeCandidate> RetrieveCandidates")
-    ]
 
-    assert "CanUseLegacyKnowledgeAuthority(seller)" in build
     assert "ConversationStateService.Build(" in build
-    assert "turns, allowLegacyKnowledge)" in build
-    assert "allowLegacyKnowledge" in build
-    assert "new List<SmartKnowledgeCandidate>()" in build
-    assert "allowLegacyKnowledge && !exactIndependent" in build
-    assert "KnowledgeEngineV2Service.IsEnabled(seller)" in authority
-    assert "return false;" in authority
-    assert "bool includeLegacyKnowledgeEntities = true" in state
-    assert "includeLegacyKnowledgeEntities ? ExtractKnownEntities(contextText)" in state
-
+    assert "ContextualQueryRewriteService.Resolve(" in build
+    assert "Candidates = new List<SmartKnowledgeCandidate>()" in build
+    assert "CanUseLegacyKnowledgeAuthority" not in smart
+    assert "RetrieveCandidates" not in smart
+    assert "KnowledgeEngineV2Service.GetRecords(seller)" in state
+    assert "KnowledgeV2AuthorityPolicy.IsProductionApproved(x)" in state
+    assert "BotFeatureStore.GetKnowledgeBase()" not in smart
 
 def test_v2_runtime_yields_to_silence_and_manual_rules_before_local_knowledge():
     runtime = read("src/Bot/ChromeNs/KnowledgeEngineV2RuntimeBridge.cs")
@@ -487,40 +482,33 @@ def test_v2_runtime_yields_to_silence_and_manual_rules_before_local_knowledge():
     assert "return KnowledgeV2RuntimeResult.Continue();" in method
 
 
-def test_legacy_ai_failure_fallback_cannot_bypass_v2_authority_or_use_unapproved_records():
-    source = read("src/Bot/ChromeNs/ReplyDeduplicationService.cs")
+def test_ai_failure_fallback_uses_only_a_freshly_revalidated_v2_record():
+    source = read("src/Bot/ChromeNs/BuyerStreamingReplyPipeline.cs")
     fallback = source[
-        source.index("private static bool TryResolveCore"):
-        source.index("private static bool IsAuthenticatedControlPlaneUpstreamFailure")
-    ]
-    resolver = source[
-        source.index("private static KnowledgeBaseEntry ResolveKnowledge"):
-        source.index("private static string RegenerateInvalidAnswer")
+        source.index("private static string TryResolveV2OfflineFallback"):
+        source.index("private static bool IsRetryableStreamError")
     ]
 
-    assert "KnowledgeEngineV2Service.IsEnabled(seller)" in fallback
-    assert fallback.index("KnowledgeEngineV2Service.IsEnabled(seller)") < fallback.index("BotFeatureStore.GetKnowledgeBase()")
-    assert "KnowledgeV2AuthorityPolicy.IsUnapprovedLegacyLearningEntry(x)" in fallback
-    assert "ShopReceptionPolicy.IsQuarantined" in fallback
-    assert "KnowledgeEngineV2Service.IsEnabled(seller)" in resolver
-    assert resolver.index("KnowledgeEngineV2Service.IsEnabled(seller)") < resolver.index("BotFeatureStore.GetKnowledgeBase()")
-
+    assert "KnowledgeEngineV2Service.Resolve(seller, buyer, question)" in fallback
+    assert "KnowledgeV2AuthorityPolicy.IsProductionApproved" in fallback
+    assert "KnowledgeEngineV2Repository.LoadAll(seller)" in fallback
+    assert "latestMatch.Record.Id, priorMatch.Record.Id, StringComparison.Ordinal" in fallback
+    assert "ConversationContextStore.IsWithdrawnAnswer(seller, buyer, answer)" in fallback
+    assert "ShopReceptionPolicy.IsQuarantined" not in fallback
+    assert "BotFeatureStore.GetKnowledgeBase()" not in fallback
 
 def test_approved_v2_context_reaches_pre_send_validation_and_one_time_regeneration():
     pipeline = read("src/Bot/ChromeNs/BuyerStreamingReplyPipeline.cs")
     dedup = read("src/Bot/ChromeNs/ReplyDeduplicationService.cs")
     validator = read("src/Bot/ChromeNs/PreSendAnswerValidator.cs")
 
-    assert "knowledgeV2Result == null ? string.Empty : knowledgeV2Result.ContextPromptAddon" in pipeline
+    assert "knowledgeV2Result == null ? null : knowledgeV2Result.ContextPromptAddon" in pipeline
     assert "string approvedV2ContextEvidence = null" in dedup
     assert "PreSendAnswerValidator.Validate(" in dedup
     assert "approvedV2ContextEvidence" in dedup
     assert "RegenerateInvalidAnswer(" in dedup
-    assert "BuildAuthoritativeEvidence(knowledge, state, approvedV2ContextEvidence)" in validator
-    assert "HasKnowledgeContradiction(answer, knowledge, approvedV2ContextEvidence)" in validator
-    assert "KnowledgeEngineV2Service.IsEnabled(seller)" in validator
-
-
+    assert "BuildAuthoritativeEvidence(state, approvedV2ContextEvidence)" in validator
+    assert "HasKnowledgeContradiction(answer, approvedV2ContextEvidence)" in validator
 
 def test_image_v2_approved_evidence_reaches_pre_send_validation_and_direct_answers_keep_fastpath():
     ocr = read("src/Bot/ChromeNs/OcrFirstKnowledgeDecisionService.cs")
@@ -589,40 +577,41 @@ def test_v2_direct_reply_runs_transcript_sanitizer_and_store_output_policy_befor
 
 
 
-def test_legacy_knowledge_prompt_injection_is_disabled_when_v2_is_authoritative():
+def test_prompt_addon_contains_style_and_safety_only_not_legacy_knowledge():
     options = read("src/Bot/Options/CtlRobotOptions.xaml.cs")
-    streaming = read("src/Bot/ChromeNs/BuyerStreamingReplyPipeline.cs")
-    legacy = read("src/Bot/ChromeNs/MyOpenAI.cs")
+    method = options[
+        options.index("public static string BuildPromptAddon(string question)"):
+        options.index("public static string ApplyOutputPolicy")
+    ]
 
-    assert "BuildPromptAddon(string question, bool includeKnowledgeBase)" in options
-    assert "if (includeKnowledgeBase && policy.EnableKnowledgeBase)" in options
-    assert "allowLegacyKnowledgePrompt = !KnowledgeEngineV2Service.IsEnabled(seller)" in streaming
+    assert "知识检索由 Knowledge V2 独立负责" in method
+    assert "不读取旧知识库" in method
+    assert "GetKnowledgeBase" not in method
+    assert "knowledgeV2Result == null ? string.Empty : knowledgeV2Result.ContextPromptAddon" in read(
+        "src/Bot/ChromeNs/BuyerStreamingReplyPipeline.cs"
+    )
+
+def test_streaming_and_legacy_openai_prompt_paths_do_not_inject_v1_knowledge():
+    streaming = read("src/Bot/ChromeNs/BuyerStreamingReplyPipeline.cs")
+    openai = read("src/Bot/ChromeNs/MyOpenAI.cs")
+    options = read("src/Bot/Options/CtlRobotOptions.xaml.cs")
+
     assert "BuildPromptAddon(" in streaming
-    assert "contextForRules.ToString(), allowLegacyKnowledgePrompt" in streaming
-    assert "allowLegacyKnowledgePrompt = !KnowledgeEngineV2Service.IsEnabled(seller)" in legacy
-    assert "contextForKnowledge.ToString(), allowLegacyKnowledgePrompt" in legacy
+    assert "BuildPromptAddon(" in openai
+    assert "知识检索由 Knowledge V2 独立负责" in options
+    assert "不读取旧知识库" in options
+    assert "BotFeatureStore.GetKnowledgeBase()" not in streaming
+    assert "BotFeatureStore.GetKnowledgeBase()" not in openai
 
-
-
-def test_legacy_knowledge_prompt_gate_requires_matching_shop_scope():
-    streaming = read("src/Bot/ChromeNs/BuyerStreamingReplyPipeline.cs")
-    legacy = read("src/Bot/ChromeNs/MyOpenAI.cs")
-
-    for source in (streaming, legacy):
-        assert "var currentShopScope = ShopSettingsScope.Current" in source
-        assert "currentShopScope.SellerNick, seller, StringComparison.Ordinal" in source
-        assert "allowLegacyKnowledgePrompt = !KnowledgeEngineV2Service.IsEnabled(seller)" in source
-
-
-
-def test_default_legacy_prompt_addon_fails_closed_without_v2_shop_authority():
+def test_default_prompt_addon_fails_closed_without_legacy_knowledge_store():
     options = read("src/Bot/Options/CtlRobotOptions.xaml.cs")
     default_overload = options[
         options.index("public static string BuildPromptAddon(string question)"):
-        options.index("public static string BuildPromptAddon(string question, bool includeKnowledgeBase)")
+        options.index("public static void ApplyOutputPolicy") if "public static void ApplyOutputPolicy" in options
+        else options.index("public static string ApplyOutputPolicy")
     ]
 
-    assert "ShopSettingsScope.Current" in default_overload
-    assert "KnowledgeEngineV2Service.IsEnabled(currentScope.SellerNick)" in default_overload
-    assert "includeLegacyKnowledge = false" in default_overload
-    assert "BuildPromptAddon(question, includeLegacyKnowledge)" in default_overload
+    assert "店铺回复策略" in default_overload
+    assert "不读取旧知识库" in default_overload
+    assert "GetKnowledgeBase" not in default_overload
+
