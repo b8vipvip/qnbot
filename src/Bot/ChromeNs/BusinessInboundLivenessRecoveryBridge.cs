@@ -282,19 +282,23 @@ try {
         {
             var buyerSort = IncomingMessageSafety.GetSortValue(buyerMessage);
             if (buyerSort <= 0) return false;
-            var nextBuyerSort = (buyerCandidates ?? new List<QNChatMessage>())
-                .Where(x => x != null)
-                .Select(IncomingMessageSafety.GetSortValue)
-                .Where(x => x > buyerSort)
-                .DefaultIfEmpty(long.MaxValue)
-                .Min();
 
+            // Remote history is for one verified ccode. A later seller turn closes all earlier
+            // unanswered buyer messages in the same burst, not just the last buyer fragment.
+            // Otherwise a reply to "多少钱？可以优惠吗？" would acknowledge only the second
+            // fragment and replay the first one after a restart.
             foreach (var message in allMessages ?? new List<QNChatMessage>())
             {
                 if (message == null || !IsSellerMessage(message) || message.toid == null) continue;
+                var sellerText = GetMessageText(message);
+                if (ConversationContextStore.IsWithdrawalNotice(message, sellerText)
+                    || ConversationContextStore.IsPlatformSystemTip(message, sellerText))
+                    continue;
                 var sellerSort = IncomingMessageSafety.GetSortValue(message);
-                if (sellerSort <= buyerSort || sellerSort >= nextBuyerSort) continue;
-                if (AreBuyerAliasesEquivalentInShop(seller, message.toid.nick, buyer))
+                if (sellerSort <= buyerSort) continue;
+                var recipient = (message.toid.nick ?? string.Empty).Trim();
+                if (recipient.Length == 0
+                    || AreBuyerAliasesEquivalentInShop(seller, recipient, buyer))
                     return true;
             }
             return false;
