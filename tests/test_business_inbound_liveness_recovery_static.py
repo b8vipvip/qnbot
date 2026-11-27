@@ -182,7 +182,7 @@ def test_post_switch_background_history_fetch_also_covers_full_buyer_burst():
     recovery = (ROOT / "src" / "Bot" / "ChromeNs" / "QN.MessageRecovery.cs").read_text(encoding="utf-8-sig")
     method = recovery.split("private async Task<bool> RecoverMissedBuyerMessagesAsync(", 1)[1]
     assert "count = 100" in method
-    assert "30-row post-switch fetch can truncate" in method
+    assert "post-switch fetch can truncate" in method
     coordinator = (ROOT / "src" / "Bot" / "ChromeNs" / "BuyerMessageBurstCoordinator.cs").read_text(encoding="utf-8-sig")
     assert "MaxBurstMessageCount = 40" in coordinator
 
