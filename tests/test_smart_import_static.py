@@ -38,7 +38,7 @@ def test_batching_rules_are_encoded_and_reused_by_v2_import():
 def test_incremental_idempotent_save_and_hashes_use_v2_repository_only():
     assert "KnowledgeAiService.ContentHash" in V2
     assert "var existing = KnowledgeEngineV2Repository.LoadAll(seller)" in V2
-    assert "existingHashes" in V2
+    assert "var seen = new HashSet<string>" in V2
     assert "KnowledgeEngineV2Repository.Save(seller, record)" in V2
     assert "KnowledgeEngineV2Service.Warm(seller)" in V2
     assert "BotFeatureStore.SaveKnowledgeBase" not in V2
