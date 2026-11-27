@@ -781,12 +781,22 @@ namespace Bot.ChromeNs
         internal async Task ProcessRichOrderSnapshotAsync(OrderSnapshot snapshot, string parseReason)
         {
             if (snapshot == null || string.IsNullOrWhiteSpace(snapshot.OrderId)) return;
-            if (!Params.Robot.CanUseRobotReal) return;
 
-            var shop = ShopContextLocator.ResolveRuntimeBySeller(this);
-            if (!string.IsNullOrWhiteSpace(snapshot.ShopKey)
-                && !string.Equals(snapshot.ShopKey, shop.ShopKey, StringComparison.Ordinal)) return;
+            ShopContext shop;
+            try { shop = ShopContextLocator.ResolveRuntimeBySeller(this); }
+            catch (Exception ex)
+            {
+                Log.Info("完整订单字段事件无法确认来源ShopKey，已阻止自动回复: " + ex.Message);
+                return;
+            }
+            if (shop == null || string.IsNullOrWhiteSpace(shop.ShopKey)
+                || (!string.IsNullOrWhiteSpace(snapshot.ShopKey)
+                    && !string.Equals(snapshot.ShopKey, shop.ShopKey, StringComparison.Ordinal))) return;
             snapshot.ShopKey = shop.ShopKey;
+            bool botEnabledForShop;
+            using (ShopSettingsScope.Enter(shop, false))
+                botEnabledForShop = Params.Robot.CanUseRobotReal;
+            if (!botEnabledForShop) return;
 
             if (snapshot.EventTime < _messageSafetyStartedAt.AddSeconds(-8))
             {
