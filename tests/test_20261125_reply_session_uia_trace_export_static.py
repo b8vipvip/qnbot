@@ -60,22 +60,23 @@ def test_authoritative_cdp_reconnect_refreshes_uia_and_invalid_hwnd_clears_stale
     assert "UIA输入框已识别但发送按钮未识别" in rpa
 
 
-def test_failed_first_greeting_does_not_swallow_short_reply_or_image_vision():
+def test_manual_and_local_short_rules_precede_first_inquiry_and_image_fallback_is_preserved():
     coordinator = read("src/Bot/ChromeNs/BuyerMessageBurstCoordinator.cs")
-    short_replies = read("src/Bot/ChromeNs/DeterministicAutoReplyService.cs")
-    local_start = short_replies.index("internal static class LocalShortReplyService")
-    local_end = short_replies.index("namespace Bot.Knowledge", local_start)
-    local = short_replies[local_start:local_end]
-
-    assert "在么|在吗" in local
-    assert "var firstDelivered = false;" in coordinator
-    assert "firstDelivered = true;" in coordinator
-    assert "failedBeforeSend" in coordinator
-    assert 'string.Equals(question, "[图片]"' in coordinator
-    assert "已释放首条资格并继续当前消息的后续规则/视觉理解" in coordinator
-    assert "LocalShortReplyService.TryResolve(" in coordinator
-    assert "if (firstDelivered)" in coordinator
-    assert "return firstOutcome;" in coordinator
+    canonical = coordinator[
+        coordinator.index("internal static class CanonicalPreMergeDecisionService"):
+        coordinator.index("internal sealed class BuyerMessageBurstCoordinator")
+    ]
+    manual = canonical.index("var manualDecision = BotFeatureStore.EvaluateAutoReplyRule(question)")
+    local = canonical.index("LocalShortReplyService.TryResolve(")
+    first = canonical.index("FirstInquiryFixedReplyService.TryResolve(")
+    assert manual < local < first
+    assert "manualRuleMatched" in canonical
+    assert "FirstInquiryFixedReplyService.ReleaseReservation(" in canonical[manual:local]
+    assert "firstReserved" in canonical[first:]
+    assert "failedBeforeSend" in canonical[first:]
+    assert 'string.Equals(question, "[图片]"' in canonical[first:]
+    assert "已释放首条资格并继续当前消息的后续视觉理解/AI" in canonical[first:]
+    assert "if (firstOutcome == CanonicalPreMergeOutcome.Suppressed) return firstOutcome;" in canonical[first:]
 
 
 def test_send_gate_rebinds_to_current_authoritative_qn_for_same_shop_before_first_physical_send():
