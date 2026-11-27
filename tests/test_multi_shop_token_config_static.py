@@ -219,7 +219,7 @@ def test_recovered_buyer_messages_reenter_authoritative_shop_scope():
     assert "shop = ShopContextLocator.ResolveRuntimeBySeller(this);" in method
     assert "shopKey = shop == null ? string.Empty : (shop.ShopKey ?? string.Empty).Trim();" in method
     assert "VisionMessageDecision.Decide(" in method
-    assert "decision,\n                shopKey" in method
+    assert "decision,\n                        shopKey" in method
     assert "ResponseProgressTracker.ObserveQuestion(sellerNick, buyerNick, displayQuestion, detectedAt, shopKey)" in method
     assert "ShopKey = shopKey" in method
     assert "if (string.IsNullOrWhiteSpace(shopKey))" in method
