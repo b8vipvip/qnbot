@@ -52,20 +52,23 @@ namespace Bot.Knowledge
         public static KnowledgeV2Settings GetSettingsView(string seller)
         {
             var settings = GetSettings(seller);
-            return new KnowledgeV2Settings { Enabled = settings.Enabled, Mode = settings.Mode, DirectThreshold = settings.DirectThreshold, MinConfidence = settings.MinConfidence };
+            return new KnowledgeV2Settings { Enabled = true, Mode = settings.Mode, DirectThreshold = settings.DirectThreshold, MinConfidence = settings.MinConfidence };
         }
 
         public static void SetSettings(string seller, bool enabled, string mode, double threshold, double minConfidence)
         {
             var shop = ResolveShopRequired(seller);
             var store = new ShopScopedSettingsStore(shop, Paths);
-            store.SetString(KnowledgeEngineV2Constants.SettingsEnabled, enabled ? "1" : "0");
+            // Knowledge V2 is the only supported knowledge engine. The old enable
+            // switch is retained in the package shape for compatibility, but cannot
+            // disable the authoritative V2 repository or reopen a legacy fallback.
+            store.SetString(KnowledgeEngineV2Constants.SettingsEnabled, "1");
             store.SetString(KnowledgeEngineV2Constants.SettingsMode, KnowledgeEngineV2Constants.ModeProduction);
             store.SetString(KnowledgeEngineV2Constants.SettingsDirectThreshold, Math.Max(0.70, Math.Min(0.96, threshold)).ToString("0.000", System.Globalization.CultureInfo.InvariantCulture));
             store.SetString(KnowledgeEngineV2Constants.SettingsMinConfidence, Math.Max(0.50, Math.Min(0.95, minConfidence)).ToString("0.000", System.Globalization.CultureInfo.InvariantCulture));
             SettingsCache[shop.ShopKey] = new RuntimeSettings
             {
-                Enabled = enabled,
+                Enabled = true,
                 Mode = KnowledgeEngineV2Constants.ModeProduction,
                 DirectThreshold = Math.Max(0.70, Math.Min(0.96, threshold)),
                 MinConfidence = Math.Max(0.50, Math.Min(0.95, minConfidence)),
@@ -492,13 +495,6 @@ namespace Bot.Knowledge
         }
 
         public static void Warm(string seller) { GetSnapshot(seller); }
-
-        public static void RebuildFromLegacy(string seller)
-        {
-            KnowledgeEngineV2Repository.ResetFromLegacy(seller);
-            Invalidate(seller);
-            Warm(seller);
-        }
 
         public static void PromoteCandidate(string seller, string id)
         {
