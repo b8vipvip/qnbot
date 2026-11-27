@@ -139,3 +139,28 @@ def test_late_delivery_confirmation_commits_first_inquiry_dedupe_after_indetermi
     )[0]
     assert 'string.Equals(ui.Source, "首条咨询固定回复", StringComparison.Ordinal)' in method
     assert "FirstInquiryFixedReplyService.MarkDelivered(seller, buyer, shopKey)" in method
+
+
+def test_indeterminate_premerge_send_is_terminal_failed_and_offhours_deduped():
+    coordinator = read("src/Bot/ChromeNs/BuyerMessageBurstCoordinator.cs")
+    premerge = coordinator.split("private async Task ProcessPreMergeAsync", 1)[1].split(
+        "private bool HasPendingBuyerMessages", 1
+    )[0]
+    assert "if (outcome == CanonicalPreMergeOutcome.Indeterminate)" in premerge
+    assert "BuyerSessionAgentState.Failed" in premerge
+    assert "canonical_pre_merge_send_indeterminate" in premerge
+
+    canonical = canonical_block()
+    assert "else if (outcome == CanonicalPreMergeOutcome.Indeterminate)" in canonical
+    assert "OffHoursDeliveredUntil[buyerKey] = DateTime.Now.AddMinutes(OffHoursRepeatMinutes)" in canonical
+
+
+def test_canonical_fixed_send_returns_indeterminate_only_after_a_physical_send_attempt():
+    coordinator = read("src/Bot/ChromeNs/BuyerMessageBurstCoordinator.cs")
+    method = coordinator.split("private static async Task<CanonicalPreMergeOutcome> SendFixedAsync", 1)[1].split(
+        "private static bool TryResolveOffHours", 1
+    )[0]
+    assert "var physicalSendAttempted = false;" in method
+    assert "physicalSendAttempted = true;" in method
+    assert "physicalSendAttempted && qn.Rpa != null && qn.Rpa.LastSendWasIndeterminate" in method
+    assert "CanonicalPreMergeOutcome.Indeterminate" in method
