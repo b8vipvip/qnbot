@@ -448,7 +448,7 @@ namespace Bot.ChromeNs
                 }
             }
 
-            string firstReply;
+            var firstReply = string.Empty;
             var firstReserved = !manualRuleMatched && FirstInquiryFixedReplyService.TryResolve(
                 item.SellerNick, item.BuyerNick, question, out firstReply, item.ShopKey);
             if (firstReserved)
