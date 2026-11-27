@@ -192,7 +192,8 @@ namespace Bot.Knowledge
                 sb.Append("整理完成：联系人 ").Append(scan.ScannedContacts).Append("/").Append(scan.ContactCount);
                 sb.Append("，有效聊天消息 ").Append(scan.MessageCount);
                 sb.Append("，有效问答轮次 ").Append(scan.PairCount);
-                sb.Append("，V2写入 ").Append(promoted.Added);
+                sb.Append("，V2发布 ").Append(promoted.Published);
+                sb.Append("，V2候选 ").Append(promoted.Candidates);
                 sb.Append("，V2重复跳过 ").Append(promoted.DuplicateSkipped);
                 if (scan.FailedContacts > 0) sb.Append("，读取失败 ").Append(scan.FailedContacts);
                 _summary.Text = sb.ToString();
