@@ -486,7 +486,7 @@ namespace Bot.ChromeNs
             return extensions.Any(clean.EndsWith);
         }
 
-        private static bool TryGetMessageTime(QNChatMessage message, out DateTime localTime)
+        internal static bool TryGetMessageTime(QNChatMessage message, out DateTime localTime)
         {
             localTime = DateTime.MinValue;
             if (message == null) return false;
