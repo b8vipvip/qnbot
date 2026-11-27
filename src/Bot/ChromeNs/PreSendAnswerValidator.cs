@@ -67,7 +67,6 @@ namespace Bot.ChromeNs
             string buyer,
             string question,
             string answer,
-            KnowledgeBaseEntry knowledge,
             bool secondAttempt,
             string approvedV2ContextEvidence = null)
         {
@@ -85,7 +84,7 @@ namespace Bot.ChromeNs
 
             var compactAnswer = Compact(answer);
             var state = BuildState(seller, buyer, question);
-            var authoritativeEvidence = BuildAuthoritativeEvidence(knowledge, state, approvedV2ContextEvidence);
+            var authoritativeEvidence = BuildAuthoritativeEvidence(state, approvedV2ContextEvidence);
 
             if (MachinePhrases.Any(x => compactAnswer.Contains(Compact(x))))
             {
@@ -137,7 +136,7 @@ namespace Bot.ChromeNs
                 result.Issues.Add("声称已经核实或完成具体订单/售后状态，但没有可靠依据：" + string.Join("、", unsupportedStatus));
             }
 
-            if (HasKnowledgeContradiction(answer, knowledge, approvedV2ContextEvidence))
+            if (HasKnowledgeContradiction(answer, approvedV2ContextEvidence))
             {
                 result.Issues.Add("生成答案与高可信知识或事实约束的支持/不支持结论相反");
             }
@@ -172,48 +171,23 @@ namespace Bot.ChromeNs
             return result;
         }
 
-        public static string BuildEvidenceText(KnowledgeBaseEntry knowledge)
+        public static string BuildEvidenceText(string approvedV2ContextEvidence)
         {
             var sb = new StringBuilder();
             var store = StorePromptProfileService.GetStandardPrompt();
             if (!string.IsNullOrWhiteSpace(store))
-            {
                 sb.Append("【店铺固定事实】\n").Append(Safe(store, 5000)).Append("\n");
-            }
-            if (knowledge != null)
-            {
-                sb.Append("【最相关知识】\n问题：")
-                    .Append(Safe(knowledge.Title, 500))
-                    .Append("\n答案：")
-                    .Append(Safe(knowledge.Answer, 1600))
-                    .Append("\n");
-                var policy = KnowledgePolicyProfileService.GetProfile(knowledge);
-                if (policy != null)
-                {
-                    if (!string.IsNullOrWhiteSpace(policy.ApplyWhen))
-                        sb.Append("适用条件：").Append(Safe(policy.ApplyWhen, 800)).Append("\n");
-                    if (!string.IsNullOrWhiteSpace(policy.DoNotApplyWhen))
-                        sb.Append("禁止适用条件：").Append(Safe(policy.DoNotApplyWhen, 800)).Append("\n");
-                    if (!string.IsNullOrWhiteSpace(policy.RequiredContext))
-                        sb.Append("必要上下文：").Append(Safe(policy.RequiredContext, 800)).Append("\n");
-                    sb.Append("回答模式：").Append(KnowledgeAnswerModes.Display(policy.AnswerMode)).Append("\n");
-                }
-            }
+            if (!string.IsNullOrWhiteSpace(approvedV2ContextEvidence))
+                sb.Append("【Knowledge V2已批准上下文证据】\n")
+                    .Append(Safe(approvedV2ContextEvidence, 5000)).Append("\n");
             return sb.ToString().Trim();
         }
 
         private static string BuildAuthoritativeEvidence(
-            KnowledgeBaseEntry knowledge,
             ConversationStateSnapshot state,
             string approvedV2ContextEvidence)
         {
-            var sb = new StringBuilder(BuildEvidenceText(knowledge));
-            if (!string.IsNullOrWhiteSpace(approvedV2ContextEvidence))
-            {
-                sb.Append("\n【Knowledge V2已批准上下文证据】\n")
-                    .Append(Safe(approvedV2ContextEvidence, 5000))
-                    .Append("\n");
-            }
+            var sb = new StringBuilder(BuildEvidenceText(approvedV2ContextEvidence));
             var commerce = state == null ? null : state.CommerceContext;
             if (commerce != null && commerce.HasStructuredOrder)
             {
@@ -302,24 +276,8 @@ namespace Bot.ChromeNs
 
         private static bool HasKnowledgeContradiction(
             string answer,
-            KnowledgeBaseEntry knowledge,
             string approvedV2ContextEvidence)
         {
-            if (knowledge != null && !string.IsNullOrWhiteSpace(knowledge.Answer))
-            {
-                var policy = KnowledgePolicyProfileService.GetProfile(knowledge);
-                var trusted = policy != null
-                    && (KnowledgeAnswerModes.Normalize(policy.AnswerMode) == KnowledgeAnswerModes.Constraint
-                        || policy.Confidence >= 0.80
-                        || policy.ReliabilityScore >= 0.72);
-                if (trusted)
-                {
-                    var expected = DetectPolarity(knowledge.Answer);
-                    var actual = DetectPolarity(answer);
-                    if (expected != 0 && actual != 0 && expected != actual) return true;
-                }
-            }
-
             // V2 context is already restricted to approved, normal-risk records and ordered
             // by relevance. Use the top selected answer as the factual polarity boundary.
             var v2Answer = Regex.Match(
