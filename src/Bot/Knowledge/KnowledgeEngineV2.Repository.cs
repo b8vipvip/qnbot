@@ -37,7 +37,7 @@ namespace Bot.Knowledge
         {
             var shop = ResolveShopRequired(seller);
             var state = GetState(shop);
-            EnsureMigrated(shop, state);
+            EnsureSchemaInitialized(state);
             lock (state.Sync)
             {
                 return state.Db.ReadRecords<KnowledgeV2RecordRow>(null)
@@ -52,7 +52,7 @@ namespace Bot.Knowledge
             if (record == null) return;
             var shop = ResolveShopRequired(seller);
             var state = GetState(shop);
-            EnsureMigrated(shop, state);
+            EnsureSchemaInitialized(state);
             NormalizeForSave(record);
             lock (state.Sync) state.Db.SaveOneRecord(ToRow(record));
             KnowledgeEngineV2Service.ApplyRecordUpdate(seller, record);
@@ -199,7 +199,7 @@ namespace Bot.Knowledge
                 NormalizeForSave(record);
                 var shop = ResolveShopRequired(seller);
                 var state = GetState(shop);
-                EnsureMigrated(shop, state);
+                EnsureSchemaInitialized(state);
                 var revision = new KnowledgeV2ManualEditRevisionRow
                 {
                     Id = Guid.NewGuid().ToString("N"),
@@ -297,7 +297,7 @@ namespace Bot.Knowledge
             {
                 var shop = ResolveShopRequired(seller);
                 var state = GetState(shop);
-                EnsureMigrated(shop, state);
+                EnsureSchemaInitialized(state);
                 KnowledgeV2Record current = null;
                 KnowledgeV2Record preserved = null;
                 var preservedCreated = false;
@@ -514,7 +514,7 @@ namespace Bot.Knowledge
             }
 
             var state = GetState(shop);
-            EnsureMigrated(shop, state);
+            EnsureSchemaInitialized(state);
             var sourceId = BuildHumanEvidenceSourceId(
                 shop.ShopKey, sessionId, questionMessageId, string.Join(",", normalizedAnswerMessageIds));
             var now = DateTime.Now;
@@ -867,7 +867,7 @@ namespace Bot.Knowledge
             }
             var shop = ResolveShopRequired(seller);
             var state = GetState(shop);
-            EnsureMigrated(shop, state);
+            EnsureSchemaInitialized(state);
             KnowledgeV2Record applied = null;
             lock (state.Sync)
             {
@@ -950,7 +950,7 @@ namespace Bot.Knowledge
             result = string.Empty;
             var shop = ResolveShopRequired(seller);
             var state = GetState(shop);
-            EnsureMigrated(shop, state);
+            EnsureSchemaInitialized(state);
             KnowledgeV2Record restore = null, current = null;
             bool delete = false;
             lock (state.Sync)
@@ -1041,7 +1041,7 @@ namespace Bot.Knowledge
             }
             var shop = ResolveShopRequired(seller);
             var state = GetState(shop);
-            EnsureMigrated(shop, state);
+            EnsureSchemaInitialized(state);
             KnowledgeV2Record corrected = null;
             KnowledgeV2Record before = null;
             lock (state.Sync)
@@ -1175,7 +1175,7 @@ namespace Bot.Knowledge
 
             var shop = ResolveShopRequired(seller);
             var state = GetState(shop);
-            EnsureMigrated(shop, state);
+            EnsureSchemaInitialized(state);
             KnowledgeV2Record corrected = null;
             KnowledgeV2Record before = null;
             lock (state.Sync)
@@ -1278,7 +1278,7 @@ namespace Bot.Knowledge
             if (knowledgeId.Length == 0) { result = "请选择要回滚的知识。"; return false; }
             var shop = ResolveShopRequired(seller);
             var state = GetState(shop);
-            EnsureMigrated(shop, state);
+            EnsureSchemaInitialized(state);
             KnowledgeV2Record restored = null;
             KnowledgeV2Record before = null;
             lock (state.Sync)
@@ -1335,7 +1335,7 @@ namespace Bot.Knowledge
             if (string.IsNullOrWhiteSpace(id)) return false;
             var shop = ResolveShopRequired(seller);
             var state = GetState(shop);
-            EnsureMigrated(shop, state);
+            EnsureSchemaInitialized(state);
             lock (state.Sync)
             {
                 var row = state.Db.ReadOneRecord<KnowledgeV2RecordRow>(x => x.Id == id);
@@ -1369,7 +1369,7 @@ namespace Bot.Knowledge
         {
             var shop = ResolveShopRequired(seller);
             var state = GetState(shop);
-            EnsureMigrated(shop, state);
+            EnsureSchemaInitialized(state);
             var normalized = (records ?? Enumerable.Empty<KnowledgeV2Record>())
                 .Where(x => x != null)
                 .Select(CloneAndNormalize)
@@ -1438,7 +1438,7 @@ namespace Bot.Knowledge
         {
             var shop=ResolveShopRequired(seller);
             var state=GetState(shop);
-            EnsureMigrated(shop,state);
+            EnsureSchemaInitialized(state);
             var normalized=(records??Enumerable.Empty<KnowledgeV2Record>())
                 .Where(x=>x!=null)
                 .Select(CloneAndNormalize)
@@ -1495,46 +1495,29 @@ namespace Bot.Knowledge
             });
         }
 
-        private static void EnsureMigrated(ShopContext shop, RepositoryState state)
+        private static void EnsureSchemaInitialized(RepositoryState state)
         {
+            if (state == null) throw new ArgumentNullException("state");
             lock (state.Sync)
             {
                 var schema = state.Db.ReadOneRecord<KnowledgeV2MetaRow>(x => x.Key == "schema_version");
-                var count = state.Db.ReadRecords<KnowledgeV2RecordRow>(null).Count;
-                if (schema != null && schema.Value == KnowledgeEngineV2Constants.SchemaVersion.ToString())
+                if (schema != null)
                 {
-                    EnsureV2CandidateStatesNormalized(state);
-                    return;
+                    int currentVersion;
+                    if (!int.TryParse(schema.Value, out currentVersion) || currentVersion < 1)
+                        throw new InvalidOperationException("Knowledge V2 schema_version 损坏，已停止写入以避免覆盖未知数据。");
+                    if (currentVersion > KnowledgeEngineV2Constants.SchemaVersion)
+                        throw new InvalidOperationException("当前客户端不支持更高版本的 Knowledge V2 数据库，请先升级客户端。");
+                    if (currentVersion == KnowledgeEngineV2Constants.SchemaVersion)
+                    {
+                        EnsureV2CandidateStatesNormalized(state);
+                        return;
+                    }
                 }
 
-                if (count == 0)
-                {
-                    List<KnowledgeBaseEntry> legacy;
-                    string migrationError;
-                    using (ShopSettingsScope.Enter(shop))
-                    {
-                        if (!BotFeatureStore.TryGetKnowledgeBaseForMigration(out legacy, out migrationError))
-                            throw new InvalidOperationException(
-                                "Knowledge V2旧知识迁移源不可读取，已保留迁移标记并等待修复后重试：" + migrationError);
-                    }
-                    legacy = legacy ?? new List<KnowledgeBaseEntry>();
-                    var migrated = new List<KnowledgeV2RecordRow>();
-                    foreach (var entry in legacy.Where(x => x != null && !string.IsNullOrWhiteSpace(x.Answer)))
-                    {
-                        KnowledgePolicyProfile profile = null;
-                        try
-                        {
-                            using (ShopSettingsScope.Enter(shop)) profile = KnowledgePolicyProfileService.GetProfile(entry);
-                        }
-                        catch { }
-                        var record = KnowledgeEngineV2Semantics.FromLegacy(entry, profile);
-                        if (record != null) migrated.Add(ToRow(record));
-                    }
-                    if (migrated.Count > 0)
-                        state.Db.SaveRecordsInTransaction(migrated.Select(x => (object)x).ToList());
-                    Log.Info("Knowledge Center V2完成旧知识迁移: shop=" + shop.ShopKey + ", records=" + migrated.Count);
-                }
-
+                // Knowledge Engine V2 is the only knowledge store. A new or older V2
+                // database is initialized/upgraded in place; no KnowledgeBaseJson,
+                // legacy DTO, V1 migration, mirror or fallback is read here.
                 state.Db.SaveOneRecord(new KnowledgeV2MetaRow
                 {
                     Key = "schema_version",
