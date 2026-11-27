@@ -164,3 +164,42 @@ def test_canonical_fixed_send_returns_indeterminate_only_after_a_physical_send_a
     assert "physicalSendAttempted = true;" in method
     assert "physicalSendAttempted && qn.Rpa != null && qn.Rpa.LastSendWasIndeterminate" in method
     assert "CanonicalPreMergeOutcome.Indeterminate" in method
+
+def test_canonical_fixed_reply_progress_fails_when_send_is_not_confirmed():
+    coordinator = read("src/Bot/ChromeNs/BuyerMessageBurstCoordinator.cs")
+    method = coordinator.split("private static async Task<CanonicalPreMergeOutcome> SendFixedAsync", 1)[1].split(
+        "private static bool TryResolveOffHours", 1
+    )[0]
+    assert "var sendSucceeded = false;" in method
+    assert "var physicalSendAttempted = false;" in method
+    assert "sendSucceeded = ok;" in method
+    assert "else if (sendSucceeded)" in method
+    assert "ResponseProgressTracker.Complete(" in method
+    assert "ResponseProgressTracker.Fail(" in method
+    assert "答案已生成，但实际发送未确认：" in method
+
+
+def test_legacy_deterministic_fixed_reply_progress_fails_when_send_is_not_confirmed():
+    deterministic = read("src/Bot/ChromeNs/DeterministicAutoReplyService.cs")
+    method = deterministic.split("private static async Task<bool> SendFixedAsync", 1)[1].split(
+        "public static async Task<bool> TryHandleAsync", 1
+    )[0]
+    assert "var sendSucceeded = false;" in method
+    assert "var sendCancelled = false;" in method
+    assert "sendSucceeded = ok;" in method
+    assert "else if (sendSucceeded)" in method
+    assert "ResponseProgressTracker.Complete(" in method
+    assert "ResponseProgressTracker.Fail(" in method
+
+
+def test_legacy_text_path_commits_first_inquiry_only_after_send_success_and_holds_uncertain_reservation():
+    qn = read("src/Bot/ChromeNs/QN.cs")
+    method = qn.split("private async Task ProcessTextBurstAsync", 1)[1].split(
+        "private async Task ProcessVisionBurstAsync", 1
+    )[0]
+    assert "var sendIsIndeterminate = !sendOk && rpa != null && rpa.LastSendWasIndeterminate;" in method
+    assert "if (usedFirstInquiryFixedReply)" in method
+    assert "FirstInquiryFixedReplyService.MarkDelivered(" in method
+    assert "if (sendIsIndeterminate)" in method
+    assert "保留首条资格占位等待回显核验" in method
+    assert "FirstInquiryFixedReplyService.ReleaseReservation(" in method
