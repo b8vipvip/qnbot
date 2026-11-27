@@ -527,7 +527,6 @@ namespace Bot.Knowledge
     {
         private readonly Window _owner;
         private readonly string _seller;
-        private CheckBox _enabled;
         private ComboBox _mode;
         private TextBox _threshold;
         private TextBox _confidence;
@@ -548,7 +547,6 @@ namespace Bot.Knowledge
             {
                 var settings = KnowledgeEngineV2Service.GetSettingsView(_seller);
                 var stats = KnowledgeEngineV2Service.GetStats(_seller);
-                _enabled.IsChecked = settings.Enabled;
                 _mode.Text = KnowledgeEngineV2Constants.ModeProduction;
                 _threshold.Text = settings.DirectThreshold.ToString("0.00");
                 _confidence.Text = settings.MinConfidence.ToString("0.00");
@@ -565,13 +563,17 @@ namespace Bot.Knowledge
             panel.Children.Add(new TextBlock { Text = "Knowledge Engine V2 设置", FontSize = 20, FontWeight = FontWeights.SemiBold });
             panel.Children.Add(new TextBlock
             {
-                Text = "影子观察模式已移除。已批准的知识可立即参与生产直答，仍保留高风险、冲突和订单流程保护。", 
+                Text = "Knowledge V2 是唯一知识库和唯一检索引擎，始终启用。未命中可靠知识时交由 AI 结合当前对话处理；高风险、冲突和订单流程保护始终生效。", 
                 TextWrapping = TextWrapping.Wrap,
                 Foreground = Brushes.DimGray,
                 Margin = new Thickness(0, 5, 0, 14)
             });
-            _enabled = new CheckBox { Content = "启用 Knowledge Engine V2", Margin = new Thickness(0, 0, 0, 10) };
-            panel.Children.Add(_enabled);
+            panel.Children.Add(new TextBlock
+            {
+                Text = "运行状态：始终启用（不可关闭）",
+                FontWeight = FontWeights.SemiBold,
+                Margin = new Thickness(0, 0, 0, 10)
+            });
             _mode = new ComboBox { Visibility = Visibility.Collapsed };
             _mode.Items.Add(KnowledgeEngineV2Constants.ModeProduction);
             _mode.SelectedIndex = 0;
@@ -615,7 +617,7 @@ namespace Bot.Knowledge
             }
             try
             {
-                KnowledgeEngineV2Service.SetSettings(_seller, _enabled.IsChecked == true, KnowledgeEngineV2Constants.ModeProduction, threshold, confidence);
+                KnowledgeEngineV2Service.SetSettings(_seller, true, KnowledgeEngineV2Constants.ModeProduction, threshold, confidence);
                 RefreshView();
                 _stats.Text = "设置已保存。" + _stats.Text;
             }
