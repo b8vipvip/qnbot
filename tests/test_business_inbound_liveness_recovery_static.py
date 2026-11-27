@@ -185,3 +185,17 @@ def test_post_switch_background_history_fetch_also_covers_full_buyer_burst():
     assert "30-row post-switch fetch can truncate" in method
     coordinator = (ROOT / "src" / "Bot" / "ChromeNs" / "BuyerMessageBurstCoordinator.cs").read_text(encoding="utf-8-sig")
     assert "MaxBurstMessageCount = 40" in coordinator
+
+
+def test_all_inbound_recovery_and_order_echo_history_reads_cover_a_full_buyer_burst():
+    first = (ROOT / "src" / "Bot" / "ChromeNs" / "FirstInquiryStreamingGuard.cs").read_text(encoding="utf-8-sig")
+    bulk = (ROOT / "src" / "Bot" / "ChromeNs" / "BulkListManagementUiBridge.cs").read_text(encoding="utf-8-sig")
+    delivery = (ROOT / "src" / "Bot" / "ChromeNs" / "QN.DeliveryVerification.cs").read_text(encoding="utf-8-sig")
+    first_probe = first.split("private async Task<bool> TryRecoverFirstInquiryFromNotificationAsync", 1)[1]
+    bulk_probe = bulk.split("private static async Task<bool> RecoverConversationAsync", 1)[1]
+    delivery_probe = delivery.split("internal async Task<RemoteSellerEchoVerification> VerifySellerEchoInRemoteHistoryAsync", 1)[1]
+    assert "count = 100" in first_probe
+    assert "count = 100" in bulk_probe
+    assert "count = 100" in delivery_probe
+    coordinator = (ROOT / "src" / "Bot" / "ChromeNs" / "BuyerMessageBurstCoordinator.cs").read_text(encoding="utf-8-sig")
+    assert "MaxBurstMessageCount = 40" in coordinator
