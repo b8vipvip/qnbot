@@ -9,6 +9,7 @@ using System.Threading;
 using System.Threading.Tasks;
 using Bot.ChromeNs;
 using Bot.Options;
+using Bot.ShopScope;
 using BotLib;
 using Newtonsoft.Json.Linq;
 
@@ -135,10 +136,12 @@ namespace Bot.Knowledge
                 VideoSkipped = data.Videos.Count
             };
 
+            var currentShop = ShopSettingsScope.Current;
+            var existingV2 = currentShop == null || !currentShop.HasStableSellerId
+                ? new List<KnowledgeV2Record>()
+                : KnowledgeEngineV2Repository.LoadAll(currentShop.SellerNick);
             var existingCategories = new HashSet<string>(
-                BotFeatureStore.GetKnowledgeBase()
-                    .Select(x => x.Category ?? string.Empty)
-                    .Where(x => x.Length > 0),
+                existingV2.Select(x => x.Type ?? string.Empty).Where(x => x.Length > 0),
                 StringComparer.OrdinalIgnoreCase);
             var importedCategories = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
 
@@ -617,29 +620,33 @@ namespace Bot.Knowledge
         private KnowledgeImportResult SaveDeduped(List<KnowledgeBaseEntry> generated)
         {
             generated = generated ?? new List<KnowledgeBaseEntry>();
-            var existing = BotFeatureStore.GetKnowledgeBase();
+            var shop = ShopSettingsScope.Current;
+            if (shop == null || !shop.HasStableSellerId || string.IsNullOrWhiteSpace(shop.SellerNick))
+                throw new InvalidOperationException("历史/智能导入必须在精确 ShopKey 作用域内执行。");
+
+            var existing = KnowledgeEngineV2Repository.LoadAll(shop.SellerNick)
+                ?? new List<KnowledgeV2Record>();
             var oldCategories = new HashSet<string>(
-                existing.Select(x => x.Category ?? string.Empty).Where(x => x.Length > 0),
+                existing.Select(x => x.Type ?? string.Empty).Where(x => x.Length > 0),
                 StringComparer.OrdinalIgnoreCase);
-            var seen = new HashSet<string>(existing.Select(x => ContentHash(x.Title, x.Answer)));
+            var seen = new HashSet<string>(existing.Select(x => ContentHash(x.Title, x.Answer)), StringComparer.Ordinal);
             var added = new List<KnowledgeBaseEntry>();
             var duplicateCount = 0;
 
             foreach (var item in generated)
             {
+                if (item == null) continue;
                 var key = ContentHash(item.Title, item.Answer);
-                if (string.IsNullOrWhiteSpace(NormalizeQuestion(item.Title)) || seen.Contains(key))
+                if (string.IsNullOrWhiteSpace(NormalizeQuestion(item.Title)) || !seen.Add(key))
                 {
                     duplicateCount++;
                     continue;
                 }
-                seen.Add(key);
                 added.Add(item);
             }
 
-            existing.AddRange(added);
-            BotFeatureStore.SaveKnowledgeBase(existing);
-
+            // Analysis only: the caller must explicitly promote these DTOs through
+            // KnowledgeV2HistoryImportService. This method never writes a second store.
             return new KnowledgeImportResult
             {
                 AiGenerated = generated.Count,
