@@ -65,9 +65,9 @@ namespace Bot.Knowledge
                         continue;
                     }
 
-                    var parsed = KnowledgeV2Semantics.Parse(title, null);
+                    var parsed = KnowledgeEngineV2Semantics.Parse(title, null);
                     var text = title + " " + answer;
-                    var risk = KnowledgeV2Semantics.IsHighRisk(text);
+                    var risk = KnowledgeEngineV2Semantics.IsHighRisk(text);
                     var aliases = (entry.Keywords ?? string.Empty)
                         .Split(new[] { ',', '，', ';', '；', '\n', '\r' }, StringSplitOptions.RemoveEmptyEntries)
                         .Select(x => (x ?? string.Empty).Trim())
@@ -80,13 +80,13 @@ namespace Bot.Knowledge
                     var record = new KnowledgeV2Record
                     {
                         Id = Guid.NewGuid().ToString("N"),
-                        Type = KnowledgeV2Semantics.NormalizeType(entry.Category),
+                        Type = KnowledgeEngineV2Semantics.NormalizeType(entry.Category),
                         Title = title,
-                        Intent = KnowledgeV2Semantics.NormalizeIntent(parsed.Intent),
+                        Intent = KnowledgeEngineV2Semantics.NormalizeIntent(parsed.Intent),
                         Subject = string.IsNullOrWhiteSpace(parsed.Subject)
-                            ? KnowledgeV2Semantics.ResolveSubject(title, parsed.Entities)
+                            ? KnowledgeEngineV2Semantics.ResolveSubject(title, parsed.Entities)
                             : parsed.Subject,
-                        Predicate = KnowledgeV2Semantics.NormalizePredicate(parsed.Predicate),
+                        Predicate = KnowledgeEngineV2Semantics.NormalizePredicate(parsed.Predicate),
                         Entities = parsed.Entities == null ? new List<string>() : parsed.Entities.ToList(),
                         Aliases = Clean(aliases),
                         Answer = answer,
@@ -107,7 +107,7 @@ namespace Bot.Knowledge
                         LastVerifiedAt = DateTime.Now
                     };
 
-                    KnowledgeV2Repository.Save(seller, record);
+                    KnowledgeEngineV2Repository.Save(seller, record);
                     result.AddedItems.Add(record);
                     result.Added++;
                 }
