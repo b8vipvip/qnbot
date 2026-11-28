@@ -687,7 +687,7 @@ namespace Bot.Knowledge
             var value = token == null ? string.Empty : Convert.ToString(token);
             return string.IsNullOrWhiteSpace(value)
                 ? new List<string>()
-                : value.Split(new[] { ',', '，', ';', '；', '|', '\\r', '\\n' }, StringSplitOptions.RemoveEmptyEntries)
+                : value.Split(new[] { ',', '，', ';', '；', '|', '\r', '\n' }, StringSplitOptions.RemoveEmptyEntries)
                     .Select(x => x.Trim()).Where(x => x.Length > 0)
                     .Distinct(StringComparer.OrdinalIgnoreCase).Take(40).ToList();
         }
