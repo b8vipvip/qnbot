@@ -1,6 +1,7 @@
 using Bot.ChromeNs;
 using Bot.ShopScope;
 using BotLib.Db.Sqlite;
+using Newtonsoft.Json.Linq;
 using System;
 using System.Collections.Concurrent;
 using System.Collections.Generic;
@@ -21,6 +22,22 @@ namespace Bot.Knowledge
         public string Question { get; set; }
         public string Answer { get; set; }
         public string Evidence { get; set; }
+        public long CreatedAtTicks { get; set; }
+        public long CloudUtcTicks { get; set; }
+    }
+
+    internal sealed class KnowledgeV2FeedbackCursorRow
+    {
+        [PrimaryKey]
+        public string Id { get; set; }
+        public string Epoch { get; set; }
+        public long Cursor { get; set; }
+    }
+
+    internal sealed class KnowledgeV2FeedbackAckRow
+    {
+        [PrimaryKey]
+        public string Id { get; set; }
         public long CreatedAtTicks { get; set; }
     }
 
@@ -328,7 +345,8 @@ namespace Bot.Knowledge
                 Question = Truncate(question, 800),
                 Answer = Truncate(answer, 1400),
                 Evidence = Truncate(evidence, 500),
-                CreatedAtTicks = DateTime.Now.Ticks
+                CreatedAtTicks = DateTime.Now.Ticks,
+                CloudUtcTicks = DateTime.UtcNow.Ticks
             };
             // Serialize writes with cold-cache construction and publication.
             lock (state.Sync)
@@ -347,6 +365,7 @@ namespace Bot.Knowledge
                     lock (state.Sync)
                     {
                         state.Db.Execute("delete from KnowledgeV2FeedbackEventRow where CreatedAtTicks < ?", cutoff);
+                        state.Db.Execute("delete from KnowledgeV2FeedbackAckRow where CreatedAtTicks < ?", cutoff);
                         AggregateCache ignored;
                         AggregateCaches.TryRemove(shop.ShopKey, out ignored);
                     }
@@ -411,7 +430,7 @@ namespace Bot.Knowledge
                 return new StoreState
                 {
                     Path = path,
-                    Db = new SQLiteHelper(path, new List<Type> { typeof(KnowledgeV2FeedbackEventRow) })
+                    Db = new SQLiteHelper(path, new List<Type> { typeof(KnowledgeV2FeedbackEventRow), typeof(KnowledgeV2FeedbackCursorRow), typeof(KnowledgeV2FeedbackAckRow) })
                 };
             });
         }
@@ -458,6 +477,113 @@ namespace Bot.Knowledge
                 && messageTime >= pending.SentAt
                 && messageTime <= DateTime.Now.AddSeconds(5)
                 && messageTime - pending.SentAt <= TimeSpan.FromMinutes(3);
+        }
+
+        private static string FeedbackAckKey(string scope, string epoch, string id)
+        {
+            return scope.Length + ":" + scope + ":" + epoch + ":" + id;
+        }
+
+        private static long FeedbackUtcTicks(KnowledgeV2FeedbackEventRow row)
+        {
+            return row.CloudUtcTicks > 0 ? row.CloudUtcTicks
+                : DateTime.SpecifyKind(new DateTime(row.CreatedAtTicks), DateTimeKind.Local).ToUniversalTime().Ticks;
+        }
+
+        internal static JObject BuildCloudFeedbackRequest(string seller, string scope)
+        {
+            var state = GetState(ResolveShopRequired(seller));
+            lock (state.Sync)
+            {
+                var cursor = state.Db.ReadOneRecord<KnowledgeV2FeedbackCursorRow>(x => x.Id == scope);
+                var epoch = cursor == null ? string.Empty : cursor.Epoch ?? string.Empty;
+                var acks = new HashSet<string>(state.Db.ReadRecords<KnowledgeV2FeedbackAckRow>(null).Select(x => x.Id), StringComparer.Ordinal);
+                var cutoff = DateTime.Now.AddDays(-180).Ticks;
+                var outgoing = state.Db.ReadRecords<KnowledgeV2FeedbackEventRow>(null)
+                    .Where(x => x != null && x.CreatedAtTicks >= cutoff
+                        && !acks.Contains(FeedbackAckKey(scope, epoch, x.Id)))
+                    .OrderBy(x => x.CreatedAtTicks).ThenBy(x => x.Id, StringComparer.Ordinal).Take(200)
+                    .Select(x => new JObject
+                    {
+                        ["Id"] = x.Id, ["KnowledgeId"] = x.KnowledgeId,
+                        ["EventType"] = x.EventType, ["UtcTicks"] = FeedbackUtcTicks(x)
+                    }).ToList();
+                return new JObject { ["epoch"] = epoch, ["cursor"] = cursor == null ? 0L : cursor.Cursor,
+                    ["events"] = new JArray(outgoing) };
+            }
+        }
+
+        internal static bool ApplyCloudFeedbackResponse(string seller, string scope, JObject request, JObject response)
+        {
+            var shop = ResolveShopRequired(seller);
+            var epoch = (string)response["epoch"];
+            var cursor = response["cursor"];
+            var page = response["events"] as JArray;
+            var acks = response["ack_ids"] as JArray;
+            var hasMore = response["has_more"];
+            Guid epochId;
+            if (!Guid.TryParseExact(epoch, "N", out epochId) || epochId == Guid.Empty
+                || cursor == null || cursor.Type != JTokenType.Integer || cursor.Value<long>() < 0
+                || page == null || page.Count > 200 || acks == null || hasMore == null || hasMore.Type != JTokenType.Boolean
+                || (epoch == (string)request["epoch"] && cursor.Value<long>() < request["cursor"].Value<long>()))
+                throw new InvalidDataException("反馈同步响应无效，未更新游标。");
+            var submitted = ((JArray)request["events"]).Select(x => (string)x["Id"]).ToList();
+            if (acks.Any(x => x.Type != JTokenType.String)
+                || acks.Count != submitted.Count || !new HashSet<string>(submitted, StringComparer.Ordinal).SetEquals(acks.Values<string>()))
+                throw new InvalidDataException("反馈同步确认未覆盖完整提交批次。");
+            var incoming = new List<KnowledgeV2FeedbackEventRow>();
+            var seen = new HashSet<string>(StringComparer.Ordinal);
+            var types = new HashSet<string>(new[] { "sent", "send_failed", "accepted", "correction", "withdrawal", "buyer_negative" }, StringComparer.Ordinal);
+            foreach (var item in page)
+            {
+                var id = (string)item["Id"];
+                var kid = (string)item["KnowledgeId"];
+                var type = (string)item["EventType"];
+                var ticks = item["UtcTicks"];
+                Guid eventId;
+                if (!Guid.TryParseExact(id, "N", out eventId) || eventId == Guid.Empty || !seen.Add(id)
+                    || string.IsNullOrWhiteSpace(kid) || kid.Length > 200 || !types.Contains(type)
+                    || ticks == null || ticks.Type != JTokenType.Integer || ticks.Value<long>() <= 0
+                    || ticks.Value<long>() > DateTime.UtcNow.AddMinutes(5).Ticks)
+                    throw new InvalidDataException("反馈同步事件无效。");
+                var utc = ticks.Value<long>();
+                incoming.Add(new KnowledgeV2FeedbackEventRow
+                {
+                    Id = id, KnowledgeId = kid, EventType = type, Seller = shop.SellerNick,
+                    Buyer = string.Empty, Question = string.Empty, Answer = string.Empty,
+                    Evidence = "cloud_synced_statistic", CloudUtcTicks = utc,
+                    CreatedAtTicks = new DateTime(utc, DateTimeKind.Utc).ToLocalTime().Ticks
+                });
+            }
+            var state = GetState(shop);
+            lock (state.Sync)
+            {
+                var prior = state.Db.ReadOneRecord<KnowledgeV2FeedbackCursorRow>(x => x.Id == scope);
+                if ((prior == null ? string.Empty : prior.Epoch ?? string.Empty) != (string)request["epoch"]
+                    || (prior == null ? 0L : prior.Cursor) != request["cursor"].Value<long>())
+                    throw new InvalidOperationException("反馈同步游标已变化，拒绝迟到响应。");
+                var existing = state.Db.ReadRecords<KnowledgeV2FeedbackEventRow>(null).ToDictionary(x => x.Id, StringComparer.Ordinal);
+                var writes = new List<object>();
+                foreach (var row in incoming)
+                {
+                    KnowledgeV2FeedbackEventRow old;
+                    if (existing.TryGetValue(row.Id, out old))
+                    {
+                        if (old.KnowledgeId != row.KnowledgeId || old.EventType != row.EventType || FeedbackUtcTicks(old) != row.CloudUtcTicks)
+                            throw new InvalidDataException("云端反馈与本地同ID事件冲突。");
+                    }
+                    else writes.Add(row);
+                    writes.Add(new KnowledgeV2FeedbackAckRow { Id = FeedbackAckKey(scope, epoch, row.Id), CreatedAtTicks = row.CreatedAtTicks });
+                }
+                foreach (var id in submitted.Where(x => !seen.Contains(x)))
+                    writes.Add(new KnowledgeV2FeedbackAckRow { Id = FeedbackAckKey(scope, epoch, id), CreatedAtTicks = DateTime.Now.Ticks });
+                writes.Add(new KnowledgeV2FeedbackCursorRow { Id = scope, Epoch = epoch, Cursor = cursor.Value<long>() });
+                // Event rows, acknowledgement and cursor are durable in the SAME SQLite transaction.
+                state.Db.SaveRecordsInTransaction(writes);
+                AggregateCache ignored;
+                AggregateCaches.TryRemove(shop.ShopKey, out ignored);
+            }
+            return hasMore.Value<bool>() || submitted.Count == 200;
         }
 
         internal static List<KnowledgeV2FeedbackEventRow> ExportEvents(string seller)

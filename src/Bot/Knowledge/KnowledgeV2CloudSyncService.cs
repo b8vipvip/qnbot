@@ -75,6 +75,7 @@ namespace Bot.Knowledge
             public string LastLocalFingerprintPrefix = string.Empty;
             public string LastCloudFingerprintPrefix = string.Empty;
             public bool LastConverged;
+            public string FeedbackStatus = "not_started";
         }
         private static readonly ShopScopedPathProvider Paths = new ShopScopedPathProvider();
         private static readonly ShopProfileStore Profiles = new ShopProfileStore(Paths);
@@ -212,6 +213,19 @@ namespace Bot.Knowledge
                 {
                     lock(state.SyncRoot) state.LastStatus="credentials_missing";
                     return;
+                }
+
+                // Statistics sync is independent of knowledge revision conflicts. A failed
+                // feedback request does not prevent the knowledge snapshot from syncing.
+                try
+                {
+                    await SyncFeedbackOnce(shop, url, token).ConfigureAwait(false);
+                    lock (state.SyncRoot) state.FeedbackStatus = "synced";
+                }
+                catch (Exception ex)
+                {
+                    lock (state.SyncRoot) state.FeedbackStatus = "failed";
+                    Log.ErrorWithMaxCount("Knowledge V2 反馈同步失败：" + Safe(ex.Message, 180), 10);
                 }
 
                 var local=KnowledgeEngineV2Repository.LoadAll(shop.DisplayName);
@@ -434,6 +448,38 @@ namespace Bot.Knowledge
                             state.LastSuccessUtc=DateTime.UtcNow;
                             state.LastStatus=state.LastConverged?"synced":"local_changed_during_sync";
                         }
+                    }
+                }
+            }
+        }
+
+        private static async Task SyncFeedbackOnce(ShopContext shop, string url, string token)
+        {
+            var scope = url.TrimEnd('/').ToLowerInvariant() + "|" + shop.ShopKey;
+            using (var handler = new HttpClientHandler { UseProxy = true, Proxy = WebRequest.DefaultWebProxy })
+            using (var http = new HttpClient(handler))
+            {
+                http.Timeout = TimeSpan.FromSeconds(15);
+                // Bound each timer pass; durable cursor/acks resume subsequent pages.
+                for (var i = 0; i < 4; i++)
+                {
+                    var payload = KnowledgeEngineV2FeedbackService.BuildCloudFeedbackRequest(shop.DisplayName, scope);
+                    using (var response = await ShopRuntimeCredentialAuthority.SendWithUnauthorizedRecoveryAsync(
+                        shop, token, async requestToken =>
+                        {
+                            using (var request = new HttpRequestMessage(HttpMethod.Post, url.TrimEnd('/') + "/api/runtime/v1/bot-web/knowledge-v2-feedback-sync"))
+                            {
+                                request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", requestToken);
+                                request.Headers.TryAddWithoutValidation("X-Shop-Key", shop.ShopKey);
+                                request.Content = new StringContent(payload.ToString(Formatting.None), Encoding.UTF8, "application/json");
+                                return await http.SendAsync(request).ConfigureAwait(false);
+                            }
+                        }))
+                    {
+                        if (!response.IsSuccessStatusCode)
+                            throw new InvalidOperationException("反馈同步 HTTP " + (int)response.StatusCode);
+                        var body = JObject.Parse(await response.Content.ReadAsStringAsync().ConfigureAwait(false));
+                        if (!KnowledgeEngineV2FeedbackService.ApplyCloudFeedbackResponse(shop.DisplayName, scope, payload, body)) break;
                     }
                 }
             }
@@ -820,6 +866,7 @@ namespace Bot.Knowledge
                             {
                                 ["shopRef"]=state.ShopRef??string.Empty,
                                 ["cloudRevision"]=state.Revision,
+                                 ["feedbackStatus"]=state.FeedbackStatus,
                                 ["localRecordCount"]=state.LastLocalRecordCount,
                                 ["cloudRecordCount"]=state.LastCloudRecordCount,
                                 ["localFingerprintPrefix"]=state.LastLocalFingerprintPrefix??string.Empty,

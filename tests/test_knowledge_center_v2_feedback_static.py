@@ -146,3 +146,16 @@ def test_manual_correction_does_not_ignore_opposite_or_numeric_answers_at_high_s
     assert "KnowledgeEngineV2Service.AnswerFactsCompatible(botAnswer, manualAnswer)" in source
     assert "double.IsNaN(confidence) || double.IsInfinity(confidence)" in source
     assert "confidence < 0.95 || confidence > 1.0" in source
+
+def test_feedback_sync_commits_cursor_and_ack_with_event_rows():
+    feedback = read("src/Bot/Knowledge/KnowledgeEngineV2FeedbackService.cs")
+    cloud = read("src/Bot/Knowledge/KnowledgeV2CloudSyncService.cs")
+    assert "FeedbackAckKey(scope, epoch, x.Id)" in feedback
+    assert "Take(200)" in feedback
+    assert "SetEquals(acks.Values<string>())" in feedback
+    assert "writes.Add(new KnowledgeV2FeedbackCursorRow" in feedback
+    assert "state.Db.SaveRecordsInTransaction(writes)" in feedback
+    assert "CloudUtcTicks = utc" in feedback
+    assert "Buyer = string.Empty, Question = string.Empty, Answer = string.Empty" in feedback
+    assert "/api/runtime/v1/bot-web/knowledge-v2-feedback-sync" in cloud
+    assert "state.FeedbackStatus" in cloud

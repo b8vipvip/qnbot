@@ -120,7 +120,8 @@ def runtime_feedback_sync(payload: KnowledgeV2FeedbackInput, request: Request, x
     with _cp.db() as conn:
         conn.execute("BEGIN IMMEDIATE")
         shop_key = _feedback_binding(conn, client_id, x_shop_key.strip())
-        epoch = conn.execute("SELECT epoch FROM bot_knowledge_v2_feedback_epoch WHERE id=1").fetchone()["epoch"]
+        server_epoch = conn.execute("SELECT epoch FROM bot_knowledge_v2_feedback_epoch WHERE id=1").fetchone()["epoch"]
+        epoch = uuid.uuid5(uuid.UUID(hex=server_epoch), f"{client_id}:{shop_key}").hex
         cursor = payload.cursor if payload.epoch == epoch else 0
         conn.execute("DELETE FROM bot_knowledge_v2_feedback WHERE client_id=? AND shop_key=? AND utc_ticks<?", (client_id,shop_key,cutoff))
         for eid,kid,typ,ticks in events:
