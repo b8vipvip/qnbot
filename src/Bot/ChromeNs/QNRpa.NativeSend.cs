@@ -122,6 +122,7 @@ namespace Bot.ChromeNs
 
             var domTriggered = await TryTriggerSendViaCdpDomAsync(
                 buyer, shopKey, sourceClient, preSendGuard).ConfigureAwait(false);
+            if (!domTriggered && (LastSendWasCancelled || LastSendWasIndeterminate)) return false;
             if (domTriggered)
             {
                 if (await WaitForTextSubmissionAcceptedAsync(
@@ -166,7 +167,7 @@ namespace Bot.ChromeNs
                 () => TryPostSafeMainSendMouseMessage(preSendGuard),
                 "发送按钮HWND安全消息",
                 UiActionTimeoutMs).ConfigureAwait(false);
-            if (!hwndPosted && LastSendWasIndeterminate) return false;
+            if (!hwndPosted && (LastSendWasIndeterminate || LastSendWasCancelled)) return false;
             if (hwndPosted)
             {
                 if (await WaitForTextSubmissionAcceptedAsync(
@@ -200,11 +201,10 @@ namespace Bot.ChromeNs
                 return false;
             }
             var safeUiaInvoked = await RunUiActionAsync(
-                () => IsPreSendGuardSatisfied(preSendGuard, "安全UIA发送")
-                    && TryInvokeCachedSendButtonNow(),
+                () => TryInvokeCachedSendButtonNow(preSendGuard),
                 "发送按钮左侧UIA安全调用（原生前置）",
                 UiActionTimeoutMs).ConfigureAwait(false);
-            if (!safeUiaInvoked && LastSendWasIndeterminate) return false;
+            if (!safeUiaInvoked && (LastSendWasIndeterminate || LastSendWasCancelled)) return false;
             if (safeUiaInvoked)
             {
                 if (await WaitForTextSubmissionAcceptedAsync(
@@ -276,7 +276,8 @@ namespace Bot.ChromeNs
             string buyer, string shopKey, CDPClient sourceClient, Func<bool> preSendGuard)
         {
             if (!IsExpectedShopSessionCurrent(sourceClient, shopKey)) return false;
-            if (!IsPreSendGuardSatisfied(preSendGuard, "CDP页面发送")) return false;
+            var fence = CreatePhysicalSendFence(preSendGuard, "CDP页面发送");
+            if (fence == null) return false;
             const string expression = @"(function(){
   try {
     var norm=function(v){return String(v||'').replace(/\s+/g,' ').trim();};
@@ -305,9 +306,12 @@ namespace Bot.ChromeNs
 
             try
             {
-                var response = await sourceClient.EvaluateExpressionAsync(
-                    expression,
-                    "发送当前草稿-CDP页面安全按钮").ConfigureAwait(false);
+                var response = await sourceClient.EvaluatePinnedSendExpressionAsync(
+                    expression, "发送当前草稿-CDP页面安全按钮", dispatch =>
+                    {
+                        if (!IsExpectedShopSessionCurrent(sourceClient, shopKey)) return false;
+                        return fence(dispatch);
+                    }).ConfigureAwait(false);
                 response = response ?? string.Empty;
                 if (response.IndexOf("__QNBOT_DOM_SEND__:clicked:", StringComparison.Ordinal) >= 0)
                 {
@@ -315,12 +319,22 @@ namespace Bot.ChromeNs
                         + ", buyer=" + buyer + ", response=" + ShortNative(response, 220));
                     return true;
                 }
+                if (response == "__QNBOT_SEND_FENCE_REJECTED__")
+                {
+                    SetSendCancellation("CDP发送版本复核", "知识或会话已变更，禁止发送和自动重试");
+                    return false;
+                }
+                if (response.IndexOf("__QNBOT_DOM_SEND__:not_found", StringComparison.Ordinal) < 0)
+                {
+                    SetSendIndeterminate("CDP页面发送结果不确定", "未取得明确未点击证据，禁止回退或重复发送");
+                    return false;
+                }
                 Log.Info("CDP页面未发现可验证的独立发送按钮，继续HWND/UIA安全链路: seller="
                     + SellerNick + ", buyer=" + buyer + ", response=" + ShortNative(response, 180));
             }
             catch (Exception ex)
             {
-                Log.Info("CDP页面发送探测失败，继续安全回退: " + ex.Message);
+                SetSendIndeterminate("CDP页面发送异常", "发送状态无法确认，禁止回退：" + ex.Message);
             }
             return false;
         }
@@ -423,14 +437,19 @@ namespace Bot.ChromeNs
                 return false;
             }
             var lParam = new IntPtr((clientPoint.Y << 16) | (clientPoint.X & 0xffff));
-            if (!IsPreSendGuardSatisfied(preSendGuard, "HWND安全发送")) return false;
-            Marshal.GetLastWin32Error();
-            var moved = PostMessage(target, WmMouseMove, IntPtr.Zero, lParam);
-            var down = PostMessage(target, WmLButtonDown, new IntPtr(MkLButton), lParam);
-            var up = PostMessage(target, WmLButtonUp, IntPtr.Zero, lParam);
-            var error = Marshal.GetLastWin32Error();
+            bool moved = false, down = false, up = false;
+            int error = 0;
+            if (!DispatchPhysicalSend(preSendGuard, "HWND安全发送", () =>
+            {
+                moved = PostMessage(target, WmMouseMove, IntPtr.Zero, lParam);
+                down = PostMessage(target, WmLButtonDown, new IntPtr(MkLButton), lParam);
+                up = PostMessage(target, WmLButtonUp, IntPtr.Zero, lParam);
+                error = Marshal.GetLastWin32Error();
+            })) return false;
             if (!down || !up)
             {
+                if (down || up)
+                    SetSendIndeterminate("HWND部分投递", "发送鼠标动作部分已投递，禁止回退重复发送");
                 Log.Info("HWND安全发送被Windows拒绝/失败: seller=" + SellerNick
                     + ", target=" + target + ", moved=" + moved + ", down=" + down + ", up=" + up
                     + ", win32=" + error + ", integrity=" + DescribeInputIntegrity(desk.ProcessId));
