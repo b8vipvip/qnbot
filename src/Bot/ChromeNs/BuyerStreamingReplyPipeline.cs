@@ -167,6 +167,7 @@ namespace Bot.ChromeNs
 
             string answer;
             var offlineFallbackUsed = false;
+            var requiresFinalFactValidation = false;
             try
             {
                 if (workflowDecision != null && workflowDecision.RequiresSend)
@@ -193,7 +194,8 @@ namespace Bot.ChromeNs
                         burst.ShopKey,
                         knowledgeV2Result == null ? null : knowledgeV2Result.ContextPromptAddon,
                         knowledgeV2Result == null ? null : knowledgeV2Result.OfflineFallbackDecision,
-                        () => offlineFallbackUsed = true);
+                        () => offlineFallbackUsed = true,
+                        () => requiresFinalFactValidation = true);
                     // Legacy synchronous fallbacks may run inside Task.Run and cannot always be force-stopped
                     // after they begin. Race the whole answer task only against the canonical generation
                     // budget. Provider/control-plane timeouts remain upstream concerns and must not be
@@ -311,7 +313,11 @@ namespace Bot.ChromeNs
                         answer, lease.CancellationToken, false,
                         knowledgeV2Result == null ? string.Empty : knowledgeV2Result.ContextPromptAddon);
                 answer = deduplication.Answer;
-                if (deduplication.Regenerated) offlineFallbackUsed = false;
+                if (deduplication.Regenerated)
+                {
+                    offlineFallbackUsed = false;
+                    if (workflowDecision == null) requiresFinalFactValidation = true;
+                }
             }
             catch (OperationCanceledException)
             {
@@ -548,8 +554,37 @@ namespace Bot.ChromeNs
                     burst.SellerNick, burst.BuyerNick, burst.CombinedQuestion, burst.ShopKey,
                     knowledgeV2Result == null ? null : knowledgeV2Result.OfflineFallbackDecision, answer))
                     return false;
-                return workflowDecision == null || !workflowDecision.RequiresSend
-                    || ReceptionWorkflowRuntimeService.IsDecisionCurrent(workflowDecision);
+                try
+                {
+                    // The sender may have waited for an exclusive UI resource.
+                    // Re-read the exact shop's business policy and current facts
+                    // before each irreversible send attempt, without another AI call.
+                    string latestBusinessBlock;
+                    if (ShopReceptionPolicy.BlockOutgoing(
+                        burst.SellerNick, burst.BuyerNick, burst.CombinedQuestion, answer,
+                        out latestBusinessBlock, burst.ShopKey, workflowDecision != null))
+                    {
+                        Log.Info("文本回复最终业务门禁阻止发送: " + latestBusinessBlock);
+                        return false;
+                    }
+                    if (requiresFinalFactValidation)
+                    {
+                        string safeText, outputReason;
+                        if (!BuyerReplyOutputGuard.TryNormalizeForBuyer(answer, out safeText, out outputReason))
+                            return false;
+                        var validation = PreSendAnswerValidator.Validate(
+                            burst.SellerNick, burst.BuyerNick, burst.CombinedQuestion, answer, true,
+                            knowledgeV2Result == null ? null : knowledgeV2Result.ContextPromptAddon);
+                        if (validation.Action != AnswerValidationAction.Pass) return false;
+                    }
+                    return workflowDecision == null || !workflowDecision.RequiresSend
+                        || ReceptionWorkflowRuntimeService.IsDecisionCurrent(workflowDecision);
+                }
+                catch (Exception ex)
+                {
+                    Log.Info("文本回复最终事实门禁无法确认，已阻止发送: " + ex.GetType().Name);
+                    return false;
+                }
             };
 
             bool sendOk;
@@ -967,7 +1002,8 @@ namespace Bot.ChromeNs
             string shopKey = null,
             string knowledgeV2ContextAddon = null,
             KnowledgeV2Decision offlineFallbackDecision = null,
-            Action onOfflineFallbackUsed = null)
+            Action onOfflineFallbackUsed = null,
+            Action onAiGenerated = null)
         {
             token.ThrowIfCancellationRequested();
 
@@ -1049,6 +1085,7 @@ namespace Bot.ChromeNs
                 {
                     handoff = BotFeatureStore.ApplyOutputPolicy(handoff);
                     KnowledgeLearningService.RegisterAnswerSource(seller, buyer, question, handoff, "转人工回复");
+                    if (onAiGenerated != null) onAiGenerated();
                     return handoff;
                 }
                 return BotFeatureStore.ApplyOutputPolicy(manualDecision.ReplyText);
@@ -1197,6 +1234,7 @@ namespace Bot.ChromeNs
                 ? "AI生成"
                 : "AI生成（Knowledge V2上下文）";
             KnowledgeLearningService.RegisterAnswerSource(seller, buyer, question, answer, source);
+            if (onAiGenerated != null) onAiGenerated();
             return answer;
         }
 
