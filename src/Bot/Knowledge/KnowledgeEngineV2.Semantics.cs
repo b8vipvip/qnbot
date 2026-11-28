@@ -499,9 +499,19 @@ namespace Bot.Knowledge
                 var prefix = source.Substring(0, occurrence.Index);
                 if (Regex.IsMatch(prefix, @"(?:并非|不是|没有|未曾|尚未|不具备|不含|不支持|不使用|不需要|未|无|非|没|不)(?:[\u4e00-\u9fffA-Za-z0-9]{0,3})$", RegexOptions.IgnoreCase))
                     return false;
+                // Suffix negation and uncertainty are also evidence of absence,
+                // not proof of a positive condition. Restrict to the same clause.
+                var suffix = source.Substring(occurrence.Index + occurrence.Length);
+                if (Regex.IsMatch(suffix, @"^(?:还|尚|仍|现在|目前)?(?:没有|尚未|未开通|未购买|未安装|未启用|未绑定|未激活|未完成|未满足|不具备|不存在|已取消|已失效|已过期)", RegexOptions.IgnoreCase))
+                    return false;
+                if (Regex.IsMatch(prefix, @"(?:是否|有没有|能否|假如|假设|如果|不确定|不知道|想确认)(?:[\u4e00-\u9fffA-Za-z0-9]{0,3})$", RegexOptions.IgnoreCase))
+                    return false;
                 // A numeric condition must not match a suffix of a larger number.
                 if (char.IsDigit(expected[0]) && occurrence.Index > 0
                     && (char.IsDigit(source[occurrence.Index - 1]) || source[occurrence.Index - 1] == '.'))
+                    return false;
+                if (char.IsDigit(expected[expected.Length - 1]) && suffix.Length > 0
+                    && (char.IsDigit(suffix[0]) || suffix[0] == '.'))
                     return false;
             }
             return true;
