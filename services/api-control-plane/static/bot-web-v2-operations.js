@@ -52,7 +52,7 @@ function resetV2Operations(){
   v2Ops.epoch++;clearTimeout(v2Ops.timer);v2Ops.id=null;v2Ops.task=null;v2Ops.busy=false;v2Ops.checkpoint=null;v2Ops.checkpointDevice=null;
   v2BulkIds.clear();v2BulkRevision=null;state.knowledgeV2LoadToken++;state.knowledgeV2=[];state.knowledgeV2Revision=0;state.knowledgeV2Feedback=null;
   $("v2OpsResult").replaceChildren();$("v2OpsTaskList").replaceChildren();$("v2OpsDevice").replaceChildren(new Option("请选择 Windows 设备",""));
-  v2OpsHint("请选择设备。");updateV2OpsControls();
+  v2OpsHint("请选择设备。");$("v2OpsFeedbackProof").textContent="等待双设备反馈同步核验";updateV2OpsControls();
 }
 function updateV2OpsControls(){
   const busy=v2Ops.busy||v2OpsActive(v2Ops.task?.status);
@@ -106,7 +106,7 @@ function renderV2OperationResult(task){
   if(task.action==="history_status"||task.action==="history_scan"||task.action==="history_resume"){
     const cp=data.checkpoint;
     v2Ops.checkpoint=cp?.Id||data.checkpoint_id||null;v2Ops.checkpointDevice=device;v2Ops.learnKnowledge=cp?.LearnKnowledge??data.learn_knowledge??false;
-    list.replaceChildren(v2OpsCard("历史扫描状态",cp?["断点："+cp.Id,"已完成联系人："+cp.Completed+"/"+cp.Total,"状态："+cp.State,"学习模式："+(cp.LearnKnowledge?"扫描并学习":"仅归档"),"有效消息："+cp.ObservedTurns,"已分析问答："+cp.AnalyzedHumanPairs,"已发布："+cp.PublishedKnowledge]:[data.coverage_warning||"本机暂无可恢复断点","归档买家消息："+(data.messages??0),"全部有效消息："+(data.observed_turns??0),"已分析问答："+(data.analyzed_pairs??0),"模型返回证据轮次："+(data.model_referenced_pairs??0),"发布："+(data.published??0)+" · 候选："+(data.candidates??0),"成功联系人："+(data.contacts??0)+" / "+(data.total_contacts??0),"失败："+(data.failed??0),"全量覆盖证明："+(data.coverage_verified?"已验证":"未验证")]));
+    list.replaceChildren(v2OpsCard("历史扫描状态",cp?["断点："+cp.Id,"已完成联系人："+cp.Completed+"/"+cp.Total,"状态："+cp.State,"学习模式："+(cp.LearnKnowledge?"扫描并学习":"仅归档"),"有效消息："+cp.ObservedTurns,"已分析问答："+cp.AnalyzedHumanPairs,"已发布："+cp.PublishedKnowledge]:[data.coverage_warning||"本机暂无可恢复断点","归档买家消息："+(data.messages??0),"全部有效消息："+(data.observed_turns??0),"已分析问答："+(data.analyzed_pairs??0),"模型返回证据轮次："+(data.model_referenced_pairs??0),"断点已完成联系人："+(data.previously_completed_contacts??0),"发布："+(data.published??0)+" · 候选："+(data.candidates??0),"成功联系人："+(data.contacts??0)+" / "+(data.total_contacts??0),"失败："+(data.failed??0),"全量覆盖证明："+(data.coverage_verified?"已验证":"未验证")]));
   }else if(task.action==="revision_list"){
     list.replaceChildren(...items.map(x=>v2OpsCard(x.KnowledgeTitle||x.KnowledgeId,["原答案："+x.OriginalAnswer,"建议："+x.ProposedAnswer,"证据："+x.EvidenceCount+" 条 / 买家："+x.DistinctBuyerCount+" · "+x.Status],x.Status==="pending"?[
       ["应用",()=>{if(confirm("确认应用此修订？"))startV2Operation("revision_apply",{candidate_id:x.Id},true,device)}],

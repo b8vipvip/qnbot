@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import hashlib
+import base64
 import math
 import time
 import uuid
@@ -133,9 +134,11 @@ def _feedback_binding(conn, client_id, requested=None):
     return bound
 
 def _feedback_digest(conn,client_id,shop_key,cutoff):
-    rows=conn.execute("""SELECT event_id,seq FROM bot_knowledge_v2_feedback
+    rows=conn.execute("""SELECT event_id,seq,knowledge_id,event_type,utc_ticks FROM bot_knowledge_v2_feedback
         WHERE client_id=? AND shop_key=? AND utc_ticks>=? ORDER BY event_id""",(client_id,shop_key,cutoff)).fetchall()
-    digest=hashlib.sha256("\n".join(row["event_id"] for row in rows).encode("utf-8")).hexdigest()
+    canonical=["\n".join((row["event_id"],base64.b64encode(row["knowledge_id"].encode("utf-8")).decode("ascii"),
+        row["event_type"],str(row["utc_ticks"]))) for row in rows]
+    digest=hashlib.sha256("\n".join(canonical).encode("utf-8")).hexdigest()
     return len(rows),digest,max((int(row["seq"]) for row in rows),default=0)
 
 def _validate_feedback(events, now):

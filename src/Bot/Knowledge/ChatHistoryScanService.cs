@@ -119,6 +119,7 @@ namespace Bot.Knowledge
             public DateTime Time;
             public string MessageKey;
             public bool HasNativeMessageId;
+            public string NativeEvidenceKey;
             public bool IsBotReply;
         }
 
@@ -1628,6 +1629,10 @@ namespace Bot.Knowledge
                 MessageKey = IncomingMessageSafety.BuildMessageKey(message, text),
                 HasNativeMessageId = (message.mcode != null && !string.IsNullOrWhiteSpace(message.mcode.messageId))
                     || (message.ext != null && message.ext.ww_msgid != 0),
+                NativeEvidenceKey = message.mcode != null && !string.IsNullOrWhiteSpace(message.mcode.messageId)
+                    ? "mcode:" + (message.mcode.clientId ?? string.Empty) + ":" + message.mcode.messageId
+                    : message.ext != null && message.ext.ww_msgid != 0
+                        ? "ww:" + message.ext.ww_msgid.ToString(System.Globalization.CultureInfo.InvariantCulture) : string.Empty,
                 IsBotReply = string.Equals(role, "seller", StringComparison.Ordinal)
                     && IsBotMarkedSellerReply(text)
             };
@@ -1771,10 +1776,10 @@ namespace Bot.Knowledge
                 {
                     var question = NormalizeText(string.Join(" ", buyers.Select(x => x.Text)));
                     var answer = NormalizeText(string.Join(" ", sellers.Select(x => x.Text)));
-                    var questionIds = buyers.Where(x => x.HasNativeMessageId).Select(x => (x.MessageKey ?? string.Empty).Trim())
+                    var questionIds = buyers.Where(x => x.HasNativeMessageId).Select(x => (x.NativeEvidenceKey ?? string.Empty).Trim())
                         .Where(x => x.Length > 0 && !x.StartsWith("scan-turn:", StringComparison.Ordinal))
                         .Distinct(StringComparer.Ordinal).ToList();
-                    var answerIds = sellers.Where(x => x.HasNativeMessageId).Select(x => (x.MessageKey ?? string.Empty).Trim())
+                    var answerIds = sellers.Where(x => x.HasNativeMessageId).Select(x => (x.NativeEvidenceKey ?? string.Empty).Trim())
                         .Where(x => x.Length > 0 && !x.StartsWith("scan-turn:", StringComparison.Ordinal))
                         .Distinct(StringComparer.Ordinal).ToList();
                     var contextIds = string.IsNullOrWhiteSpace(previousSellerMessageId)
@@ -1854,7 +1859,7 @@ namespace Bot.Knowledge
                     buyers.Clear();
                     sellers.Clear();
                     previousSeller = turn.Text;
-                    previousSellerMessageId = (turn.MessageKey ?? string.Empty).Trim();
+                    previousSellerMessageId = (turn.NativeEvidenceKey ?? string.Empty).Trim();
                     previousSellerTime = turn.Time;
                     botAnsweredPendingQuestion = false;
                 }
@@ -1868,7 +1873,7 @@ namespace Bot.Knowledge
                     // A human seller message before the buyer's short answer is context,
                     // not an answer. Bot echoes are deliberately excluded above.
                     previousSeller = turn.Text;
-                    previousSellerMessageId = (turn.MessageKey ?? string.Empty).Trim();
+                    previousSellerMessageId = (turn.NativeEvidenceKey ?? string.Empty).Trim();
                     previousSellerTime = turn.Time;
                 }
             }

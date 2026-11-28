@@ -126,7 +126,7 @@ def test_web_v2_edits_use_compare_and_swap_to_prevent_stale_device_overwrites():
     assert "expected_revision:state.knowledgeV2EditRevision" in js
     assert "err.status===409" in js
     assert "await loadKnowledgeV2(false)" in js
-    assert 'bot-web-v2.js?v=14' in html
+    assert 'bot-web-v2.js?v=15' in html
 
 
 class _V2CasFakeControlPlane:
@@ -656,7 +656,7 @@ def test_remote_operation_claims_once_across_two_devices_and_rejects_unclaimed_r
 
 @pytest.mark.skipif(importlib.util.find_spec("fastapi") is None, reason="server dependencies are not installed")
 def test_feedback_convergence_requires_two_registered_persisted_device_receipts(tmp_path):
-    import hashlib,uuid
+    import hashlib,uuid,base64
     from datetime import datetime,timezone
     m=_load_v2_cas_module(tmp_path)
     m._cp.iso_now=lambda:datetime.now(timezone.utc).isoformat()
@@ -666,12 +666,13 @@ def test_feedback_convergence_requires_two_registered_persisted_device_receipts(
         for device in ("a"*32,"b"*32):
             conn.execute("INSERT INTO bot_knowledge_v2_devices VALUES(1,'shop-a',?,?)",(device,m._cp.iso_now()))
     event={"Id":uuid.uuid4().hex,"KnowledgeId":"a","EventType":"sent","UtcTicks":m._feedback_now_ticks()}
-    initial=m.runtime_feedback_sync(m.KnowledgeV2FeedbackInput(events=[event],device_id="a"*32,local_event_count=1,local_event_digest=hashlib.sha256(event["Id"].encode()).hexdigest()),None,"shop-a")
+    canonical="\n".join((event["Id"],base64.b64encode(event["KnowledgeId"].encode()).decode(),event["EventType"],str(event["UtcTicks"])))
+    digest=hashlib.sha256(canonical.encode()).hexdigest()
+    initial=m.runtime_feedback_sync(m.KnowledgeV2FeedbackInput(events=[event],device_id="a"*32,local_event_count=1,local_event_digest=digest),None,"shop-a")
     assert not m.web_v2_devices({"id":1})["two_device_nonempty_convergence"]
     def prove(device,digest):
         return m.runtime_feedback_sync(m.KnowledgeV2FeedbackInput(epoch=initial["epoch"],cursor=initial["cursor"],device_id=device,
             local_event_count=1,local_event_digest=digest),None,"shop-a")
-    digest=hashlib.sha256(event["Id"].encode()).hexdigest()
     prove("a"*32,digest);prove("b"*32,"0"*64)
     assert m.web_v2_devices({"id":1})["verified_devices"]==1
     prove("b"*32,digest)

@@ -512,14 +512,19 @@ namespace Bot.Knowledge
                         ["EventType"] = x.EventType, ["UtcTicks"] = FeedbackUtcTicks(x)
                     }).ToList();
                 var utcCutoff = DateTime.UtcNow.AddDays(-180).Ticks;
-                var retainedIds = local.Where(x => x != null && FeedbackUtcTicks(x) >= utcCutoff)
-                    .Select(x => x.Id).OrderBy(x => x, StringComparer.Ordinal).ToList();
+                var retained = local.Where(x => x != null && FeedbackUtcTicks(x) >= utcCutoff)
+                    .OrderBy(x => x.Id, StringComparer.Ordinal).ToList();
+                var canonical = retained.Select(x => string.Join("\n", new[]
+                {
+                    x.Id, Convert.ToBase64String(Encoding.UTF8.GetBytes(x.KnowledgeId ?? string.Empty)),
+                    x.EventType, FeedbackUtcTicks(x).ToString(System.Globalization.CultureInfo.InvariantCulture)
+                }));
                 string digest;
                 using (var sha = SHA256.Create())
-                    digest = BitConverter.ToString(sha.ComputeHash(Encoding.UTF8.GetBytes(string.Join("\n", retainedIds))))
+                    digest = BitConverter.ToString(sha.ComputeHash(Encoding.UTF8.GetBytes(string.Join("\n", canonical))))
                         .Replace("-", string.Empty).ToLowerInvariant();
                 return new JObject { ["epoch"] = epoch, ["cursor"] = cursor == null ? 0L : cursor.Cursor,
-                    ["events"] = new JArray(outgoing), ["local_event_count"] = retainedIds.Count,
+                    ["events"] = new JArray(outgoing), ["local_event_count"] = retained.Count,
                     ["local_event_digest"] = digest };
             }
         }

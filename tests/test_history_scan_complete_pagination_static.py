@@ -88,3 +88,10 @@ def test_history_learning_commits_each_contact_before_checkpoint_and_never_reuse
     assert "buyers.Where(x => x.HasNativeMessageId)" in scan
     assert "sellers.Where(x => x.HasNativeMessageId)" in scan
     assert "options.LearnKnowledge = true" in window and "ScanBuyerMessagesAsync" in window
+
+def test_historical_evidence_does_not_store_fallback_message_keys():
+    scan=read("src/Bot/Knowledge/ChatHistoryScanService.cs")
+    assert "NativeEvidenceKey = message.mcode" in scan
+    assert "buyers.Where(x => x.HasNativeMessageId).Select(x => (x.NativeEvidenceKey" in scan
+    assert "sellers.Where(x => x.HasNativeMessageId).Select(x => (x.NativeEvidenceKey" in scan
+    assert "previousSellerMessageId = (turn.NativeEvidenceKey" in scan

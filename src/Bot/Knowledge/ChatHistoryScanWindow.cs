@@ -175,8 +175,10 @@ namespace Bot.Knowledge
                 return;
             }
             options.LearnKnowledge = true;
-            using (ShopSettingsScope.Enter(shop))
+            try
             {
+                using (ShopSettingsScope.Enter(shop))
+                {
                 var prior = BuyerHistoryScanCheckpointStore.Latest(shop.SellerNick, true);
                 if (prior != null && prior.State != "completed")
                 {
@@ -190,6 +192,12 @@ namespace Bot.Knowledge
                         options.StartTime = prior.StartTime; options.EndTime = prior.EndTime;
                     }
                 }
+            }
+            }
+            catch (Exception ex)
+            {
+                MessageBox.Show(_owner, "读取历史学习断点失败：" + ex.Message);
+                return;
             }
             _running = true;
             _cts = new CancellationTokenSource();
