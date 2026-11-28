@@ -107,3 +107,30 @@ def test_revision_sync_merges_only_immutable_history_and_checkpoint_atomically()
     assert "ReplaceRecordsInTransaction(" not in apply
     cloud = read("src/Bot/Knowledge/KnowledgeV2CloudSyncService.cs")
     assert '"/api/runtime/v1/bot-web/knowledge-v2-revision-sync"' in cloud
+
+
+def test_rule_version_and_snapshot_generation_are_rechecked_on_send():
+    visual = read("src/Bot/ChromeNs/VisualUnderstandingRuleService.cs")
+    assert "best == null || tied" in visual
+    assert "RuleFingerprint = RuleFingerprint(best)" in visual
+    assert "return TryMatch(shopKey, seller, ocrText, out current)" in visual
+    vision = read("src/Bot/ChromeNs/VisionRequestService.cs")
+    assert "VisualUnderstandingRuleService.IsMatchCurrent(" in vision
+    assert "result.MatchedVisualRuleOcrText" in vision
+    assert "result.MatchedVisualRuleFingerprint = localDecision.MatchedVisualRuleFingerprint" in vision
+    repo = read("src/Bot/Knowledge/KnowledgeEngineV2.Service.Public.cs")
+    assert "decision.SnapshotGeneration = snapshot.Generation" in repo
+    bridge = read("src/Bot/ChromeNs/KnowledgeEngineV2RuntimeBridge.cs")
+    assert bridge.count("IsDecisionSnapshotCurrent(seller,") >= 3
+
+
+def test_real_windows_sqlite_crash_injection_is_ci_gated():
+    workflow = read(".github/workflows/windows-build.yml")
+    assert "test-knowledge-v2-sqlite-recovery.ps1" in workflow
+    script = read("tests/windows/test-knowledge-v2-sqlite-recovery.ps1")
+    assert "5001" in script and "ReadTable($rowType)" in script
+    assert "RunInTransaction" in script and "SaveRecordsInTransaction" in script
+    assert "Stop-Process -Id $PID -Force" in script
+    assert "before-marker" in script and "after-marker" in script
+    assert "receipt.Value -eq 'rollback'" in script
+    assert "reload_rebuild_recall_p95_ms" in script
