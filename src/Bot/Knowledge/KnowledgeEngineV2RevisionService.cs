@@ -34,6 +34,13 @@ namespace Bot.Knowledge
         public long AppliedAtTicks { get; set; }
     }
 
+    internal sealed class KnowledgeV2CandidateMutationReceiptRow
+    {
+        [PrimaryKey] public string Key { get; set; }
+        public string CandidateId { get; set; }
+        public string Action { get; set; }
+    }
+
     internal sealed class KnowledgeV2RevisionEvidence
     {
         public string Buyer { get; set; }
@@ -297,15 +304,15 @@ namespace Bot.Knowledge
                 .ToList();
         }
 
-        public static bool ApplyCandidate(string seller, string candidateId, out string error)
+        public static bool ApplyCandidate(string seller, string candidateId, out string error, string operationReceipt = null)
         {
             var shop = ResolveShopRequired(seller);
             using (ShopSettingsScope.Enter(shop))
             lock (OperationLocks.GetOrAdd(shop.ShopKey, _ => new object()))
-                return ApplyCandidateCore(seller, candidateId, out error);
+                return ApplyCandidateCore(seller, candidateId, out error, operationReceipt);
         }
 
-        private static bool ApplyCandidateCore(string seller, string candidateId, out string error)
+        private static bool ApplyCandidateCore(string seller, string candidateId, out string error, string operationReceipt)
         {
             error = string.Empty;
             seller = Clean(seller);
@@ -351,7 +358,7 @@ namespace Bot.Knowledge
             // A stale short answer must not keep serving the exact fact being corrected.
             record.ShortAnswer = record.Answer;
             record.LastVerifiedAt = DateTime.Now;
-            if (!KnowledgeEngineV2Repository.TrySaveEditorRecord(seller, record, currentFingerprint, "revision-candidate:" + row.Id))
+            if (!KnowledgeEngineV2Repository.TrySaveEditorRecord(seller, record, currentFingerprint, "revision-candidate:" + row.Id, operationReceipt))
             {
                 MarkStatus(seller, row, "stale", "应用期间原知识被修改，未覆盖。", false);
                 error = "知识已发生并发变化，修订未应用。";
@@ -370,36 +377,36 @@ namespace Bot.Knowledge
             return true;
         }
 
-        internal static bool HasCommittedCandidateOutcome(string seller, string candidateId, string action, string reason)
+        internal static bool HasCommittedCandidateOutcome(string seller, string candidateId, string action, string reason, string operationReceipt)
         {
-            if (string.IsNullOrWhiteSpace(candidateId)) return false;
+            if (string.IsNullOrWhiteSpace(candidateId) || string.IsNullOrWhiteSpace(operationReceipt)) return false;
             var shop = ResolveShopRequired(seller);
             using (ShopSettingsScope.Enter(shop))
             lock (OperationLocks.GetOrAdd(shop.ShopKey, _ => new object()))
             {
-                RecoverCommittedCandidates(seller);
-                var row = FindRow(seller, candidateId);
-                if (row == null) return false;
+                // A different command or an earlier local action is not proof of
+                // this claim. Applying uses the knowledge DB's atomic receipt.
                 if (action == "revision_apply")
-                    return row.Status == "applied"
-                        && KnowledgeEngineV2Repository.GetCommittedRevisionCandidateReceipts(seller)
-                            .ContainsKey(row.Id + "\n" + row.KnowledgeId);
-                if (action == "revision_reject")
-                    return row.Status == "rejected" && row.ResolutionNote ==
-                        (string.IsNullOrWhiteSpace(reason) ? "人工复核驳回。" : reason.Trim());
-                return false;
+                    return KnowledgeEngineV2Repository.HasRemoteMutationReceipt(seller, operationReceipt, action);
+                if (action != "revision_reject") return false;
+                var state = GetState(shop);
+                lock (state.Sync)
+                {
+                    var receipt = state.Db.ReadOneRecord<KnowledgeV2CandidateMutationReceiptRow>(x => x.Key == operationReceipt);
+                    return receipt != null && receipt.CandidateId == candidateId && receipt.Action == action;
+                }
             }
         }
 
-        public static bool RejectCandidate(string seller, string candidateId, string reason, out string error)
+        public static bool RejectCandidate(string seller, string candidateId, string reason, out string error, string operationReceipt = null)
         {
             var shop = ResolveShopRequired(seller);
             using (ShopSettingsScope.Enter(shop))
             lock (OperationLocks.GetOrAdd(shop.ShopKey, _ => new object()))
-                return RejectCandidateCore(seller, candidateId, reason, out error);
+                return RejectCandidateCore(seller, candidateId, reason, out error, operationReceipt);
         }
 
-        private static bool RejectCandidateCore(string seller, string candidateId, string reason, out string error)
+        private static bool RejectCandidateCore(string seller, string candidateId, string reason, out string error, string operationReceipt)
         {
             error = string.Empty;
             seller = Clean(seller);
@@ -417,7 +424,23 @@ namespace Bot.Knowledge
             }
             var beforeState = "status=" + Clean(row.Status) + ";updated_at_ticks=" + row.UpdatedAtTicks;
             var note = string.IsNullOrWhiteSpace(reason) ? "人工复核驳回。" : reason.Trim();
-            MarkStatus(seller, row, "rejected", note, false);
+            if (string.IsNullOrEmpty(operationReceipt))
+                MarkStatus(seller, row, "rejected", note, false);
+            else
+            {
+                if (!System.Text.RegularExpressions.Regex.IsMatch(operationReceipt, @"^[0-9a-f]{64}$"))
+                    throw new InvalidOperationException("远程修订凭证无效");
+                row.Status = "rejected";
+                row.ResolutionNote = note;
+                row.UpdatedAtTicks = DateTime.Now.Ticks;
+                var state = GetState(ResolveShopRequired(seller));
+                lock (state.Sync)
+                    state.Db.SaveRecordsInTransaction(new List<object>
+                    {
+                        row, new KnowledgeV2CandidateMutationReceiptRow
+                        { Key = operationReceipt, CandidateId = row.Id, Action = "revision_reject" }
+                    });
+            }
             string auditError;
             KnowledgeEngineV2GovernanceAuditService.TryAppendAction(seller,
                 "reject_revision", "revision", row.KnowledgeId, row.Id, row.KnowledgeTitle,
@@ -619,7 +642,7 @@ namespace Bot.Knowledge
                 return new StoreState
                 {
                     Path = path,
-                    Db = new SQLiteHelper(path, new List<Type> { typeof(KnowledgeV2RevisionCandidateRow) })
+                    Db = new SQLiteHelper(path, new List<Type> { typeof(KnowledgeV2RevisionCandidateRow), typeof(KnowledgeV2CandidateMutationReceiptRow) })
                 };
             });
         }
