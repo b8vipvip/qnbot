@@ -27,6 +27,9 @@ namespace Bot.ChromeNs
         public string VisualSummary { get; set; }
         public string VisualTags { get; set; }
         public string MatchedVisualKnowledgeId { get; set; }
+        public string MatchedVisualRuleId { get; set; }
+        public string MatchedVisualRuleFingerprint { get; set; }
+        public string MatchedVisualRuleOcrText { get; set; }
         public double VisualKnowledgeScore { get; set; }
         public string MatchedImageKnowledgeId { get; set; }
         public string MatchedImageKnowledgeFingerprint { get; set; }
@@ -381,6 +384,9 @@ namespace Bot.ChromeNs
                     LocalOcrLatencyMs = ocr.ElapsedMs,
                     LocalOcrEngine = ocr.Engine,
                     ContextKnowledgeDecision = localDecision == null ? null : localDecision.ContextKnowledgeDecision,
+                    MatchedVisualRuleId = localDecision == null ? string.Empty : localDecision.MatchedVisualRuleId,
+                    MatchedVisualRuleFingerprint = localDecision == null ? string.Empty : localDecision.MatchedVisualRuleFingerprint,
+                    MatchedVisualRuleOcrText = localDecision == null ? string.Empty : localDecision.MatchedVisualRuleOcrText,
                     ApprovedV2KnowledgeEvidence = localDecision == null
                         ? string.Empty : localDecision.ApprovedV2KnowledgeEvidence ?? string.Empty
                 };
@@ -492,6 +498,10 @@ namespace Bot.ChromeNs
                         && !VisualImageKnowledgeService.IsMatchCurrent(burst.ShopKey, burst.SellerNick,
                             result.MatchedImageKnowledgeId, result.MatchedImageKnowledgeFingerprint))
                         return false;
+                    if (!string.IsNullOrWhiteSpace(result.MatchedVisualRuleId)
+                        && !VisualUnderstandingRuleService.IsMatchCurrent(burst.ShopKey, burst.SellerNick,
+                            result.MatchedVisualRuleOcrText, result.MatchedVisualRuleId, result.MatchedVisualRuleFingerprint))
+                        return false;
                     if (trustedOcrKnowledge)
                         return KnowledgeEngineV2RuntimeBridge.IsSelectedKnowledgeCurrent(
                             burst.SellerNick, burst.ShopKey, result.SelectedKnowledgeDecision);
@@ -529,6 +539,9 @@ namespace Bot.ChromeNs
             result.KnowledgeV2ContextPromptAddon = localDecision.KnowledgeV2ContextPromptAddon ?? string.Empty;
             result.ApprovedV2KnowledgeEvidence = localDecision.ApprovedV2KnowledgeEvidence ?? string.Empty;
             result.ContextKnowledgeDecision = localDecision.ContextKnowledgeDecision;
+            result.MatchedVisualRuleId = localDecision.MatchedVisualRuleId;
+            result.MatchedVisualRuleFingerprint = localDecision.MatchedVisualRuleFingerprint;
+            result.MatchedVisualRuleOcrText = localDecision.MatchedVisualRuleOcrText;
             if (string.IsNullOrWhiteSpace(localDecision.MatchedImageKnowledgeId)) return;
 
             result.MatchedImageKnowledgeId = localDecision.MatchedImageKnowledgeId;
