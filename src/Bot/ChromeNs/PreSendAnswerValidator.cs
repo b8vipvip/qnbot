@@ -433,6 +433,8 @@ namespace Bot.ChromeNs
                 {
                     // Questions/uncertainty are not new factual assertions,
                     // but the existing global number validator still applies.
+                    if (!KnowledgeEngineV2Semantics.HasAffirmativeTerm(clause, number.Value))
+                        return true;
                     var kind = NumericKind(clause, number.Value);
                     Func<string, string, bool> matches = (source, conditions) => FactClauses(source).Any(candidate =>
                         ContainsNumericEvidence(candidate, number.Value)
@@ -464,8 +466,8 @@ namespace Bot.ChromeNs
                 if (directions.Count == 0) continue;
                 var scope = ExplicitProducts(clause);
                 if (scope.Count == 0) scope = requested.Count > 0 ? requested : mentioned;
-                var features = KnowledgeEngineV2Semantics.ExtractEntities(clause)
-                    .Where(x => !KnowledgeEngineV2Semantics.IsProductEntity(x)).ToList();
+                var features = CapabilityFeatures(clause);
+                if (features.Count == 0) features = CapabilityFeatures(question);
                 if (directions.Count != 1 || scope.Count == 0
                     || (requested.Count > 0 && scope.Any(id => !requested.Contains(id, StringComparer.OrdinalIgnoreCase)))
                     || !scope.All(id => blocks.Any(block =>
@@ -474,13 +476,30 @@ namespace Bot.ChromeNs
                         {
                             var polarity = ProductAssertionPolarities(approved).Distinct().ToList();
                             return polarity.Count == 1 && polarity[0] == directions[0]
-                                && features.All(feature => KnowledgeEngineV2Semantics.HasAffirmativeTerm(
-                                    block.Question + " " + approved + " " + block.Conditions, feature))
+                                && CapabilityFeaturesMatch(features, approved, block.Question)
                                 && QualifiersCompatible(clause, approved + " " + block.Conditions, question);
                         }))))
                     return true;
             }
             return false;
+        }
+
+        private static List<string> CapabilityFeatures(string value)
+        {
+            return KnowledgeEngineV2Semantics.ExtractEntities(value)
+                .Where(x => !KnowledgeEngineV2Semantics.IsProductEntity(x))
+                .Select(x => string.Equals(x, "TV", StringComparison.OrdinalIgnoreCase) ? "电视" : x)
+                .Distinct(StringComparer.OrdinalIgnoreCase).ToList();
+        }
+
+        private static bool CapabilityFeaturesMatch(List<string> requested, string approvedAnswer, string approvedQuestion)
+        {
+            if (requested.Count == 0) return true;
+            // Prefer the actual answer's objects. A title asking about A
+            // cannot authorize A when the saved answer explicitly discusses B.
+            var declared = CapabilityFeatures(approvedAnswer);
+            if (declared.Count == 0) declared = CapabilityFeatures(approvedQuestion);
+            return requested.All(x => declared.Contains(x, StringComparer.OrdinalIgnoreCase));
         }
 
         private static IEnumerable<int> ProductAssertionPolarities(string answer)
