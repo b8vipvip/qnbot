@@ -112,7 +112,8 @@ function renderV2OperationResult(task){
       ["应用",()=>{if(confirm("确认应用此修订？"))startV2Operation("revision_apply",{candidate_id:x.Id},true,device)}],
       ["驳回",()=>{if(confirm("确认驳回此修订？"))startV2Operation("revision_reject",{candidate_id:x.Id,reason:"Web人工驳回"},true,device)}]]:[])));
   }else if(task.action==="conflict_list"){
-    list.replaceChildren(...items.flatMap(x=>(x.Records||[]).map(y=>v2OpsCard(x.Subject+" / "+x.Predicate,[y.Title,y.Answer],[
+    list.replaceChildren(...items.flatMap(x=>(x.Records||[]).map(y=>v2OpsCard(x.Subject+" / "+x.Predicate,
+      [x.ResolutionMode||"同范围冲突",y.Title,y.Answer,"商品范围："+(y.ProductIds||[]).join("、"),"适用条件："+(y.Conditions||[]).join("、"),"必要上下文："+(y.RequiredContext||[]).join("、"),"排除条件："+(y.Exclusions||[]).join("、"),...(x.RequiresScopeReview?["请编辑适用范围，不允许直接停用其他知识。"]:[])],x.RequiresScopeReview?[]:[
       ["保留此答案并停用直接冲突",()=>{if(confirm("确认解决此冲突？"))startV2Operation("conflict_resolve",{fact_key:x.FactKey,knowledge_id:y.Id,fingerprint:data.fingerprint},true,device)}],
       ["直接冲突转为候选",()=>{if(confirm("确认保留此答案并将直接冲突记录转为禁用候选？"))startV2Operation("conflict_resolve",{fact_key:x.FactKey,knowledge_id:y.Id,fingerprint:data.fingerprint,reason:"candidate"},true,device)}]]))));
   }else if(task.action==="rollback_list"){
