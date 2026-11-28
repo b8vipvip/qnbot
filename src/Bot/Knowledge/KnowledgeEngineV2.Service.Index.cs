@@ -110,8 +110,17 @@ namespace Bot.Knowledge
                 // Never prune exact aliases before applicability and conflict checks.
                 // A broad predicate/intent bucket can otherwise displace a reviewed FAQ.
                 var exactIds = exact ?? new HashSet<int>();
+                // Filter scope-inapplicable candidates before consuming the
+                // bounded ranking budget. Otherwise thousands of same-intent but
+                // wrong-product or excluded records can hide the only valid match.
                 var ordered = result.Where(i => !exactIds.Contains(i))
-                    .OrderByDescending(i => PreliminaryScore(snapshot.Records[i], query))
+                    .Where(i =>
+                    {
+                        string ignored;
+                        return KnowledgeEngineV2Semantics.IsApplicable(snapshot.Records[i], query, out ignored);
+                    })
+                    .OrderByDescending(i => KnowledgeV2AuthorityPolicy.IsProductionApproved(snapshot.Records[i]))
+                    .ThenByDescending(i => PreliminaryScore(snapshot.Records[i], query))
                     .ThenBy(i => snapshot.Records[i].Id, StringComparer.Ordinal)
                     .Take(Math.Max(0, 96 - exactIds.Count));
                 var selected = new HashSet<int>(exactIds);
