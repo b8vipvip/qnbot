@@ -51,6 +51,22 @@ $many = (1..11 | ForEach-Object { '商品ID:' + (10000000 + $_) }) -join ' '
 $overflow = $parse.Invoke($null, [object[]]@($many, $null))
 $conflictProperty = $queryType.GetProperty('ProductEvidenceConflict', [Reflection.BindingFlags]'Instance,Public,NonPublic')
 Assert-Equal ($conflictProperty.GetValue($overflow, $null)) $true 'product evidence overflow'
+$unverified = $validator.GetMethod('HasUnverifiedProductConclusion', $flags)
+$promise = $validator.GetMethod('HasTransactionalPromise', $flags)
+$overlap = $semantics.GetMethod('ProductScopesOverlap', $flags)
+$productQuestion = '商品ID:12345678 是否支持'
+Assert-Equal ($unverified.Invoke($null, @($productQuestion, '支持', ''))) $true 'unsupported product claim'
+Assert-Equal ($unverified.Invoke($null, @($productQuestion, 'A支持，B不支持', ''))) $true 'mixed unsupported product claims'
+Assert-Equal ($unverified.Invoke($null, @($productQuestion, '无法确认是否支持，请提供型号', ''))) $false 'clarification without claim'
+Assert-Equal ($promise.Invoke($null, @('我马上给您退款'))) $true 'unauthorized transactional promise'
+Assert-Equal ($promise.Invoke($null, @('请提供订单号核实退款情况'))) $false 'refund clarification'
+$left = [Activator]::CreateInstance($recordType)
+$right = [Activator]::CreateInstance($recordType)
+$left.ProductIds = [System.Collections.Generic.List[string]]@('12345678')
+$right.ProductIds = [System.Collections.Generic.List[string]]@('87654321')
+Assert-Equal ($overlap.Invoke($null, @($left, $right))) $false 'disjoint product scopes'
+$right.ProductIds.Add('12345678')
+Assert-Equal ($overlap.Invoke($null, @($left, $right))) $true 'overlapping product scopes'
 # Exercise the actual compiled in-memory recall index with a large same-intent bucket.
 # This is synthetic index coverage, not a live SQLite/UI or long-duration benchmark.
 $service = $assembly.GetType('Bot.Knowledge.KnowledgeEngineV2Service', $true)
