@@ -40,6 +40,5 @@ def test_knowledge_launcher_page_is_removed_without_deleting_business_settings()
 def test_former_guide_actions_exist_inside_v2():
     assert 'var help = Button("使用帮助", 92);' in SHELL
     assert 'KnowledgeCenterHelpWindow.MyShow(_owner, _seller);' in SHELL
-    assert 'Button("旧版知识库预览", 136)' in SHELL
-    assert 'LegacyKnowledgePreviewWindow.MyShow(_owner, _seller);' in SHELL
-    assert 'ToolTip = "只读查看当前店铺的旧版知识库，不启用旧版功能"' in SHELL
+    assert 'Button("旧版知识库预览", 136)' not in SHELL
+    assert 'LegacyKnowledgePreviewWindow.MyShow(_owner, _seller);' not in SHELL

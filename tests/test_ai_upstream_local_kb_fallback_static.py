@@ -47,7 +47,7 @@ def test_ai_failure_answer_is_replaced_by_v2_before_the_pipeline_error_gate():
 
     assert "TryResolveV2OfflineFallback(" in reply
     assert '"Knowledge V2 AI故障兜底"' in reply
-    assert "&& !string.IsNullOrWhiteSpace(offline)" in reply
+    assert "if (!string.IsNullOrWhiteSpace(offline)) return offline;" in reply
     assert "PreSendAnswerValidator.Validate(" in read("src/Bot/ChromeNs/ReplyDeduplicationService.cs")
     assert "knowledgeV2Result == null ? null : knowledgeV2Result.OfflineFallbackDecision" in pipeline
     assert "KnowledgeV2Decision OfflineFallbackDecision" in runtime

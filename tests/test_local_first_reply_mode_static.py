@@ -57,7 +57,7 @@ def test_local_first_high_confidence_v2_knowledge_returns_before_ai():
     assert pipeline.index("KnowledgeEngineV2RuntimeBridge.TryHandleWithContextAsync(qn, lease)") < pipeline.index(
         "StreamingBuyerAnswerService.GetAnswerAsync("
     )
-    assert "if (!decision.CanDirectReply" in route
+    assert "if (decision == null || !decision.CanDirectReply" in route
     assert "KnowledgeV2RuntimeResult.HandledResult()" in route
 
 def test_ai_first_keeps_approved_v2_knowledge_as_context_and_does_not_direct_send():

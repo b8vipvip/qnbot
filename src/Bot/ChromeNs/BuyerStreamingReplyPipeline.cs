@@ -595,8 +595,7 @@ namespace Bot.ChromeNs
 
         private static bool IsLocalKnowledgeDirectAnswerSource(string source)
         {
-            return string.Equals(source, "智能路由-本地直答", StringComparison.Ordinal)
-                || string.Equals(source, "智能路由-离线知识兜底", StringComparison.Ordinal);
+            return string.Equals(source, "Knowledge V2 AI故障兜底", StringComparison.Ordinal);
         }
 
         private static async Task<T> AwaitWithCancellationAsync<T>(Task<T> task, CancellationToken token)
@@ -1196,6 +1195,12 @@ namespace Bot.ChromeNs
                 {
                     if (!KnowledgeEngineV2Service.IsEnabled(seller)
                         || !KnowledgeEngineV2Service.IsSnapshotReady(seller))
+                        return string.Empty;
+
+                    // A reception step may have advanced since the original decision.
+                    var authority = CommerceReplyAuthorityService.Evaluate(seller, buyer, question, shopKey);
+                    if (!authority.AllowLocalTerminalReply
+                        || ConversationProgressGuardService.RequiresContextualHandling(authority.ConversationState))
                         return string.Empty;
 
                     var priorMatch = (approvedDecision.Matches ?? new List<KnowledgeV2Match>())

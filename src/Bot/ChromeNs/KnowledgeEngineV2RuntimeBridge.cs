@@ -325,6 +325,17 @@ namespace Bot.ChromeNs
                 }
             }
 
+            // Ordinary fixed answers must not intercept a live reception step.
+            // Typed conditional advice remains subject to its separate evidence gate.
+            if (decision != null && decision.CanDirectReply
+                && string.IsNullOrWhiteSpace(decision.ConditionalAdviceKey)
+                && ConversationProgressGuardService.RequiresContextualHandling(commerceAuthority.ConversationState))
+            {
+                decision.CanDirectReply = false;
+                decision.Answer = string.Empty;
+                Log.Info("Knowledge V2 当前会话需要上下文处理，禁止固定知识直答。");
+            }
+
             if (decision == null || !decision.CanDirectReply || string.IsNullOrWhiteSpace(decision.Answer))
             {
                 var contextPromptAddon = BuildContextPromptAddon(decision);

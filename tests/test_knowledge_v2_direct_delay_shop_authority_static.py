@@ -37,8 +37,12 @@ def test_streaming_local_knowledge_delay_is_only_owned_by_v2_direct_path():
     assert "KnowledgeDirectReplyDelaySeconds" in method
     assert "await Task.Delay(TimeSpan.FromSeconds(directDelaySeconds)" in method
     assert "ReplyModeService.IsLocalFirst(burst.SellerNick)" in method
-    assert "IsLocalKnowledgeDirectAnswerSource" not in pipeline
-    assert "KnowledgeDirectReplyDelaySeconds" not in pipeline
+    fallback = pipeline.split("private static bool IsLocalKnowledgeDirectAnswerSource", 1)[1].split("private static async Task<T>", 1)[0]
+    assert '"Knowledge V2 AI故障兜底"' in fallback
+    assert '"智能路由-本地直答"' not in fallback
+    assert '"智能路由-离线知识兜底"' not in fallback
+    assert "if (IsLocalKnowledgeDirectAnswerSource(answerSource))" in pipeline
+    assert "KnowledgeDirectReplyDelaySeconds" in pipeline
     assert method.index("if (!ReplyModeService.IsLocalFirst") < method.index(
         "await Task.Delay(TimeSpan.FromSeconds(directDelaySeconds)"
     )
