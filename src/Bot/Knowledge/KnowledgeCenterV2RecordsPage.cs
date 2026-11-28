@@ -50,6 +50,7 @@ namespace Bot.Knowledge
         private CheckBox _enabled;
         private ComboBox _status;
         private KnowledgeV2Record _selected;
+        private string _selectedFingerprint = string.Empty;
         private string _globalSearch = string.Empty;
         private string _pendingRecordId = string.Empty;
         private bool _recordsLoaded;
@@ -387,6 +388,11 @@ namespace Bot.Knowledge
         private void LoadEditor(KnowledgeV2Record item)
         {
             if (item == null) return;
+            // Capture the version being edited, not whichever version happens to
+            // be present in a later refresh of the list.
+            _selectedFingerprint = _all.Any(x => x != null && string.Equals(x.Id, item.Id, StringComparison.Ordinal))
+                ? KnowledgeEngineV2Repository.EditorRecordFingerprint(item)
+                : string.Empty;
             _title.Text = item.Title ?? string.Empty;
             _type.Text = item.Type ?? string.Empty;
             _intent.Text = item.Intent ?? string.Empty;
@@ -411,10 +417,8 @@ namespace Bot.Knowledge
         {
             if (string.IsNullOrWhiteSpace(_seller) || _recordSaving) return;
             var selected = _selected;
-            var existing = selected == null ? null : _all.FirstOrDefault(x =>
-                x != null && string.Equals(x.Id, selected.Id, StringComparison.Ordinal));
             // Do not mutate the grid's selected object before validation or a successful commit.
-            var expectedFingerprint = KnowledgeEngineV2Repository.EditorRecordFingerprint(existing);
+            var expectedFingerprint = selected == null ? string.Empty : _selectedFingerprint;
             var record = selected == null
                 ? new KnowledgeV2Record { Id = Guid.NewGuid().ToString("N"), CreatedAt = DateTime.Now }
                 : JsonConvert.DeserializeObject<KnowledgeV2Record>(JsonConvert.SerializeObject(selected));
