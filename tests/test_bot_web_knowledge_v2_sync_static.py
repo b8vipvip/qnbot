@@ -570,3 +570,33 @@ def test_web_v2_editor_and_packages_do_not_call_legacy_knowledge_api():
     assert 'id="knowledgeDialog"' not in html
     render=js.split("function renderKnowledgeV2(",1)[1].split("function openKnowledgeV2Dialog",1)[0]
     assert 'esc(quality)' in render
+
+@pytest.mark.skipif(importlib.util.find_spec("fastapi") is None, reason="server dependencies are not installed")
+def test_remote_v2_operations_are_shop_bound_confirmed_and_exclusive(tmp_path):
+    from fastapi import HTTPException
+    m=_load_v2_cas_module(tmp_path)
+    with m._cp.db() as conn:
+        conn.execute("CREATE TABLE bot_client_shop_binding(client_id INTEGER PRIMARY KEY,shop_key TEXT)")
+        conn.execute("INSERT INTO bot_client_shop_binding VALUES(1,'shop-a')")
+        conn.execute("ALTER TABLE bot_commands ADD COLUMN completed_at TEXT")
+    with pytest.raises(HTTPException):
+        m.web_v2_operation(m.KnowledgeV2OperationInput(action="history_scan"),{"id":1})
+    with pytest.raises(HTTPException):
+        m.web_v2_operation(m.KnowledgeV2OperationInput(action="rollback",confirmed=True),{"id":1})
+    task=m.web_v2_operation(m.KnowledgeV2OperationInput(action="history_scan",confirmed=True),{"id":1})
+    with pytest.raises(HTTPException) as busy:
+        m.web_v2_operation(m.KnowledgeV2OperationInput(action="revision_list"),{"id":1})
+    assert busy.value.status_code==409
+    assert m.web_v2_operation_status(task["command_id"],{"id":1})["status"]=="pending"
+    assert m.web_v2_operation_cancel(task["command_id"],{"id":1})["status"]=="cancelled"
+    assert m.web_v2_operation(m.KnowledgeV2OperationInput(action="history_status"),{"id":1})["command_id"]!=task["command_id"]
+
+def test_remote_v2_operations_claim_before_dispatch_and_guard_results():
+    s=read(ROOT/"services/api-control-plane/bot_web_console.py")
+    claim=s.split("def _command_rows(",1)[1].split("def _decode_message_attachment",1)[0]
+    assert 'conn.execute("BEGIN IMMEDIATE")' in claim
+    assert "payload[\"claim\"]=secrets.token_hex(24)" in claim
+    assert "payload.get(\"shop_key\")!=shop_key" in claim
+    assert "status='running'" in claim and "status='pending'" in claim
+    assert "secrets.compare_digest(expected,supplied)" in s
+    assert "knowledge_v2_operation_cancel" in claim

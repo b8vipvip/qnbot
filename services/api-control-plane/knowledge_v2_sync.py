@@ -40,6 +40,18 @@ class KnowledgeV2RestoreInput(BaseModel):
     expected_revision: int
     restore_confirmed: bool = False
 
+class KnowledgeV2OperationInput(BaseModel):
+    action: str
+    confirmed: bool = False
+    candidate_id: str = ""
+    knowledge_id: str = ""
+    revision_id: str = ""
+    fingerprint: str = ""
+    fact_key: str = ""
+    checkpoint_id: str = ""
+    reason: str = ""
+    max_contacts: int = 5000
+
 class KnowledgeV2SmartImportInput(BaseModel):
     text: str
     timeout_seconds: int = 90
@@ -480,6 +492,106 @@ def runtime_sync(payload: KnowledgeV2SyncInput, request: Request, x_shop_key: st
         return _save(client_id,payload.records,"windows",expected_revision=payload.revision)
     return current
 
+
+_OPERATION_ACTIONS = {"history_status","history_scan","history_resume","revision_generate","revision_list",
+    "revision_apply","revision_reject","conflict_list","conflict_resolve","rollback_list","rollback"}
+_OPERATION_MUTATIONS = {"history_scan","history_resume","revision_generate","revision_apply","revision_reject","conflict_resolve","rollback"}
+
+@router.post("/api/bot-web/knowledge-v2/operations")
+def web_v2_operation(payload: KnowledgeV2OperationInput,client=Depends(bot_web_console._web_client)):
+    action=payload.action
+    if action not in _OPERATION_ACTIONS or (action in _OPERATION_MUTATIONS and not payload.confirmed):
+        raise HTTPException(status_code=400,detail="操作无效或未明确确认")
+    for value in (payload.candidate_id,payload.knowledge_id,payload.revision_id,payload.checkpoint_id,payload.reason,payload.fact_key,payload.fingerprint):
+        if len(value)>1000:
+            raise HTTPException(status_code=400,detail="操作参数过长")
+    if not 1<=payload.max_contacts<=5000:
+        raise HTTPException(status_code=400,detail="扫描联系人范围无效")
+    if action in {"revision_apply","revision_reject"} and not payload.candidate_id.strip():
+        raise HTTPException(status_code=400,detail="缺少修订候选ID")
+    if action=="history_resume" and not payload.checkpoint_id.strip():
+        raise HTTPException(status_code=400,detail="缺少历史扫描断点ID")
+    if action in {"conflict_resolve","rollback"} and (not payload.knowledge_id.strip() or not payload.fingerprint.strip()):
+        raise HTTPException(status_code=400,detail="缺少选中知识或版本指纹")
+    if action=="conflict_resolve" and not payload.fact_key.strip():
+        raise HTTPException(status_code=400,detail="缺少冲突事实键")
+    if action=="rollback" and not payload.revision_id.strip():
+        raise HTTPException(status_code=400,detail="缺少目标修订ID")
+    client_id=int(client["id"])
+    with _cp.db() as conn:
+        conn.execute("BEGIN IMMEDIATE")
+        shop_key=_feedback_binding(conn,client_id)
+        active=conn.execute("""SELECT id FROM bot_commands WHERE client_id=? AND command_type='knowledge_v2_operation'
+            AND status IN ('pending','running','cancel_requested') ORDER BY id DESC LIMIT 1""",(client_id,)).fetchone()
+        if active:
+            raise HTTPException(status_code=409,detail={"message":"本店已有知识操作正在处理","command_id":active["id"]})
+        data=payload.model_dump() if hasattr(payload,"model_dump") else payload.dict()
+        data["shop_key"]=shop_key
+        row=conn.execute("""INSERT INTO bot_commands(client_id,command_type,payload_json,status,result_json,error,created_at)
+            VALUES(?, 'knowledge_v2_operation', ?, 'pending', '{}', '', ?)""",
+            (client_id,json.dumps(data,ensure_ascii=False),_cp.iso_now()))
+        return {"command_id":int(row.lastrowid),"status":"pending"}
+
+@router.get("/api/bot-web/knowledge-v2/operations")
+def web_v2_operations(client=Depends(bot_web_console._web_client)):
+    with _cp.db() as conn:
+        rows=conn.execute("""SELECT id,status,payload_json,created_at,completed_at FROM bot_commands WHERE client_id=?
+            AND command_type='knowledge_v2_operation' ORDER BY id DESC LIMIT 30""",(int(client["id"]),)).fetchall()
+    return {"items":[{"command_id":r["id"],"status":r["status"],"action":json.loads(r["payload_json"] or "{}").get("action"),
+        "created_at":r["created_at"],"updated_at":r["completed_at"]} for r in rows]}
+
+@router.get("/api/bot-web/knowledge-v2/operations/{command_id}")
+def web_v2_operation_status(command_id:int,client=Depends(bot_web_console._web_client)):
+    with _cp.db() as conn:
+        row=conn.execute("""SELECT status,result_json,error,payload_json,created_at,completed_at FROM bot_commands
+            WHERE id=? AND client_id=? AND command_type='knowledge_v2_operation'""",(command_id,int(client["id"]))).fetchone()
+    if not row:
+        raise HTTPException(status_code=404,detail="知识操作不存在")
+    return {"command_id":command_id,"status":row["status"],"result":json.loads(row["result_json"] or "{}"),
+        "error":row["error"] or "","action":json.loads(row["payload_json"] or "{}").get("action"),
+        "created_at":row["created_at"],"updated_at":row["completed_at"]}
+
+@router.post("/api/bot-web/knowledge-v2/operations/{command_id}/cancel")
+def web_v2_operation_cancel(command_id:int,client=Depends(bot_web_console._web_client)):
+    with _cp.db() as conn:
+        conn.execute("BEGIN IMMEDIATE")
+        row=conn.execute("""SELECT status,payload_json FROM bot_commands WHERE id=? AND client_id=?
+            AND command_type='knowledge_v2_operation'""",(command_id,int(client["id"]))).fetchone()
+        if not row:
+            raise HTTPException(status_code=404,detail="知识操作不存在")
+        if row["status"]=="pending":
+            status="cancelled"
+        elif row["status"] in ("running","cancel_requested") and json.loads(row["payload_json"]).get("action") in ("history_scan","history_resume","revision_generate"):
+            status="cancel_requested"
+        else:
+            raise HTTPException(status_code=409,detail="操作已结束或不可中断")
+        conn.execute("UPDATE bot_commands SET status=?,completed_at=? WHERE id=? AND client_id=?",
+            (status,_cp.iso_now(),command_id,int(client["id"])))
+    return {"command_id":command_id,"status":status}
+
+@router.post("/api/bot-web/knowledge-v2/operations/{command_id}/abandon")
+def web_v2_operation_abandon(command_id:int,client=Depends(bot_web_console._web_client)):
+    # A lost dispatch/desktop restart is never automatically replayed: a mutation
+    # might have committed. After a long heartbeat gap the operator may abandon
+    # the unknown result and inspect current state before starting a new operation.
+    from datetime import datetime,timezone,timedelta
+    with _cp.db() as conn:
+        conn.execute("BEGIN IMMEDIATE")
+        row=conn.execute("""SELECT status,completed_at FROM bot_commands WHERE id=? AND client_id=?
+            AND command_type='knowledge_v2_operation'""",(command_id,int(client["id"]))).fetchone()
+        if not row or row["status"] not in ("running","cancel_requested"):
+            raise HTTPException(status_code=409,detail="没有可放弃的执行中任务")
+        try:
+            last=datetime.fromisoformat(row["completed_at"])
+            if last.tzinfo is None:
+                last=last.replace(tzinfo=timezone.utc)
+        except (TypeError,ValueError):
+            raise HTTPException(status_code=409,detail="无法确定任务最后心跳")
+        if datetime.now(timezone.utc)-last<timedelta(minutes=30):
+            raise HTTPException(status_code=409,detail="最近30分钟内仍有领取或执行心跳，禁止放弃")
+        conn.execute("UPDATE bot_commands SET status='abandoned',error=?,completed_at=? WHERE id=? AND client_id=?",
+            ("执行结果未知，请检查当前知识或原设备断点",_cp.iso_now(),command_id,int(client["id"])))
+    return {"command_id":command_id,"status":"abandoned"}
 
 @router.post("/api/bot-web/knowledge-v2/smart-import")
 def web_smart_import(payload: KnowledgeV2SmartImportInput, client=Depends(bot_web_console._web_client)):
