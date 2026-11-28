@@ -812,10 +812,10 @@ namespace Bot.ChromeNs
                     .Append("；Predicate：").Append(SafeContext(record.Predicate, 60)).Append("\n")
                     .Append("Entities：").Append(SafeContext(string.Join("、", record.Entities ?? new System.Collections.Generic.List<string>()), 160)).Append("\n")
                     .Append("Aliases：").Append(SafeContext(string.Join("、", (record.Aliases ?? new System.Collections.Generic.List<string>()).Take(5)), 180)).Append("\n")
-                    .Append("商品ID：").Append(string.Join("；", record.ProductIds ?? new System.Collections.Generic.List<string>())).Append("\n")
-                    .Append("适用条件：").Append(string.Join("；", record.Conditions ?? new System.Collections.Generic.List<string>())).Append("\n")
-                    .Append("必要上下文：").Append(string.Join("；", record.RequiredContext ?? new System.Collections.Generic.List<string>())).Append("\n")
-                    .Append("排除条件：").Append(string.Join("；", record.Exclusions ?? new System.Collections.Generic.List<string>())).Append("\n")
+                    .Append("商品ID：").Append(SafeContext(string.Join("；", record.ProductIds ?? new System.Collections.Generic.List<string>()), int.MaxValue)).Append("\n")
+                    .Append("适用条件：").Append(SafeContext(string.Join("；", record.Conditions ?? new System.Collections.Generic.List<string>()), int.MaxValue)).Append("\n")
+                    .Append("必要上下文：").Append(SafeContext(string.Join("；", record.RequiredContext ?? new System.Collections.Generic.List<string>()), int.MaxValue)).Append("\n")
+                    .Append("排除条件：").Append(SafeContext(string.Join("；", record.Exclusions ?? new System.Collections.Generic.List<string>()), int.MaxValue)).Append("\n")
                     .Append("相关度：").Append(matches[i].Score.ToString("0.00"))
                     .Append("；可信度：").Append(matches[i].ConfidenceScore.ToString("0.00")).Append("\n");
             }
@@ -875,7 +875,7 @@ namespace Bot.ChromeNs
                         KnowledgeEngineV2Repository.EditorRecordFingerprint(committed), StringComparison.Ordinal))
                     return false;
             }
-            return true;
+            return KnowledgeEngineV2Service.IsDecisionSnapshotCurrent(seller, result.ContextDecision);
         }
 
         private static string SafeContext(string value, int max)
@@ -911,7 +911,9 @@ namespace Bot.ChromeNs
                 return KnowledgeV2AuthorityPolicy.IsProductionApproved(committed)
                     && !ShopReceptionPolicy.IsQuarantined(seller, committed.Id, committed.Title, committed.Answer)
                     && string.Equals(KnowledgeEngineV2Repository.EditorRecordFingerprint(record),
-                        KnowledgeEngineV2Repository.EditorRecordFingerprint(committed), StringComparison.Ordinal);
+                        KnowledgeEngineV2Repository.EditorRecordFingerprint(committed), StringComparison.Ordinal)
+                    && (string.IsNullOrWhiteSpace(decision.SnapshotGeneration)
+                        || KnowledgeEngineV2Service.IsDecisionSnapshotCurrent(seller, decision));
             }
             catch (Exception ex)
             {
