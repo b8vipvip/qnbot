@@ -42,7 +42,7 @@ def test_feedback_quality_influences_ranking_conservatively():
     public = read("src/Bot/Knowledge/KnowledgeEngineV2.Service.Public.cs")
     index = read("src/Bot/Knowledge/KnowledgeEngineV2.Service.Index.cs")
     assert "Score(seller, snapshot.Records[i], query)" in public
-    assert "KnowledgeEngineV2FeedbackService.GetQualityAdjustment(seller, record.Id)" in index
+    assert "KnowledgeEngineV2FeedbackService.GetQualityAdjustment(seller, record.Id, record.Answer)" in index
     assert "record.Confidence * 0.72 + record.Authority * 0.28 + feedbackAdjustment" in index
     assert 'feedback=" + feedbackAdjustment' in index
 
@@ -168,3 +168,12 @@ def test_feedback_cache_expires_and_backup_restore_checks_event_identity():
     assert "FeedbackUtcTicks(old) != FeedbackUtcTicks(row)" in feedback
     assert 'old.Evidence == "cloud_synced_statistic"' in feedback
     assert "row.CloudUtcTicks > DateTime.UtcNow.AddMinutes(5).Ticks" in feedback
+
+
+def test_feedback_rank_is_version_specific_and_negative_reactions_do_not_become_acceptance():
+    feedback = read("src/Bot/Knowledge/KnowledgeEngineV2FeedbackService.cs")
+    assert "aggregate.ByAnswer.TryGetValue(version, out exact)" in feedback
+    assert "AnswerVersion(row.Answer)" in feedback
+    assert 'type == "buyer_negative"' in feedback
+    assert "pending.NegativeBuyerReaction || pending.WithdrawalRecorded" in feedback
+    assert "answer.Length >= 1400" in feedback
