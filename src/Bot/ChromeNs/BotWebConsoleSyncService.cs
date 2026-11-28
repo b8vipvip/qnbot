@@ -10,6 +10,7 @@ using System.Collections.Concurrent;
 using System.Collections.Generic;
 using System.Diagnostics;
 using System.Linq;
+using System.IO;
 using System.Net;
 using System.Net.Http;
 using System.Net.Http.Headers;
@@ -84,6 +85,34 @@ namespace Bot.ChromeNs
             public int Syncing;
             public bool Loaded;
         }
+
+        private static readonly Lazy<string> KnowledgeDeviceId = new Lazy<string>(() =>
+        {
+            try
+            {
+                var root = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "qnbot");
+                Directory.CreateDirectory(root);
+                var path = Path.Combine(root, "knowledge-operation-device-id");
+                if (!File.Exists(path))
+                {
+                    try
+                    {
+                        using (var stream = new FileStream(path, FileMode.CreateNew, FileAccess.Write, FileShare.None))
+                        using (var writer = new StreamWriter(stream))
+                            writer.Write(Guid.NewGuid().ToString("N"));
+                    }
+                    catch (IOException) { if (!File.Exists(path)) throw; }
+                }
+                var value = File.ReadAllText(path).Trim();
+                Guid parsed;
+                return Guid.TryParseExact(value, "N", out parsed) && parsed != Guid.Empty ? parsed.ToString("N") : string.Empty;
+            }
+            catch (Exception ex)
+            {
+                Log.ErrorWithMaxCount("知识操作设备标识无法读取：" + ex.GetType().Name, 5);
+                return string.Empty;
+            }
+        });
 
         private sealed class KnowledgeOperation
         {
@@ -672,6 +701,7 @@ namespace Bot.ChromeNs
                     var payload = new JObject
                     {
                         ["shop_key"] = state.Shop.ShopKey,
+                        ["knowledge_device_id"] = KnowledgeDeviceId.Value,
                         ["status"] = BuildStatus(state),
                         ["current_settings"] = new JObject
                         {
@@ -1061,7 +1091,8 @@ namespace Bot.ChromeNs
                 try
                 {
                     if (state.Shop == null || !state.Shop.HasStableSellerId
-                        || (string)payload["shop_key"] != state.Shop.ShopKey)
+                        || (string)payload["shop_key"] != state.Shop.ShopKey
+                        || string.IsNullOrEmpty(KnowledgeDeviceId.Value) || (string)payload["device_id"] != KnowledgeDeviceId.Value)
                         throw new InvalidOperationException("远程知识操作店铺身份不匹配。");
                     using (ShopSettingsScope.Enter(state.Shop))
                         result = Result(id, true, string.Empty, await ExecuteKnowledgeOperationAsync(state, payload, job));
@@ -1104,9 +1135,19 @@ namespace Bot.ChromeNs
                         ["active"] = ChatHistoryScanService.IsBuyerScanActive(seller) };
                 case "history_scan":
                 case "history_resume":
-                    var scan = await new ChatHistoryScanService().ScanBuyerMessagesAsync(seller,
-                        new ChatHistoryScanOptions { ScanAll = true, MaxContacts = payload.Value<int?>("max_contacts") ?? 5000,
-                            ResumeCheckpointId = action == "history_resume" ? (string)payload["checkpoint_id"] : null },
+                    var scanOptions = new ChatHistoryScanOptions { ScanAll = true, MaxContacts = payload.Value<int?>("max_contacts") ?? 5000 };
+                    if (action == "history_resume")
+                    {
+                        var checkpoint = BuyerHistoryScanCheckpointStore.Latest(seller);
+                        if (checkpoint == null || checkpoint.Id != (string)payload["checkpoint_id"])
+                            throw new InvalidOperationException("所选设备没有此最新断点，请重新读取断点。");
+                        scanOptions.ScanAll = checkpoint.ScanAll;
+                        scanOptions.MaxContacts = checkpoint.MaxContacts;
+                        scanOptions.StartTime = checkpoint.StartTime;
+                        scanOptions.EndTime = checkpoint.EndTime;
+                        scanOptions.ResumeCheckpointId = checkpoint.Id;
+                    }
+                    var scan = await new ChatHistoryScanService().ScanBuyerMessagesAsync(seller, scanOptions,
                         p =>
                         {
                             lock (job.Sync)

@@ -51,6 +51,7 @@ class KnowledgeV2OperationInput(BaseModel):
     checkpoint_id: str = ""
     reason: str = ""
     max_contacts: int = 5000
+    device_id: str = ""
 
 class KnowledgeV2SmartImportInput(BaseModel):
     text: str
@@ -84,6 +85,10 @@ def init_db():
             )
         """)
 
+        conn.execute("""CREATE TABLE IF NOT EXISTS bot_knowledge_v2_devices (
+            client_id INTEGER NOT NULL, shop_key TEXT NOT NULL, device_id TEXT NOT NULL,
+            last_seen_at TEXT NOT NULL, PRIMARY KEY(client_id,shop_key,device_id),
+            FOREIGN KEY(client_id) REFERENCES client_tokens(id) ON DELETE CASCADE)""")
         conn.execute("""CREATE TABLE IF NOT EXISTS bot_knowledge_v2_backups (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             client_id INTEGER NOT NULL, revision INTEGER NOT NULL, records_json TEXT NOT NULL,
@@ -497,6 +502,25 @@ _OPERATION_ACTIONS = {"history_status","history_scan","history_resume","revision
     "revision_apply","revision_reject","conflict_list","conflict_resolve","rollback_list","rollback"}
 _OPERATION_MUTATIONS = {"history_scan","history_resume","revision_generate","revision_apply","revision_reject","conflict_resolve","rollback"}
 
+@router.get("/api/bot-web/knowledge-v2/devices")
+def web_v2_devices(client=Depends(bot_web_console._web_client)):
+    from datetime import datetime,timezone,timedelta
+    with _cp.db() as conn:
+        shop_key=_feedback_binding(conn,int(client["id"]))
+        rows=conn.execute("""SELECT device_id,last_seen_at FROM bot_knowledge_v2_devices WHERE client_id=? AND shop_key=?
+            ORDER BY last_seen_at DESC LIMIT 30""",(int(client["id"]),shop_key)).fetchall()
+    cutoff=datetime.now(timezone.utc)-timedelta(seconds=90)
+    result=[]
+    for row in rows:
+        try:
+            seen=datetime.fromisoformat(row["last_seen_at"])
+            if seen.tzinfo is None: seen=seen.replace(tzinfo=timezone.utc)
+            online=seen>=cutoff
+        except (ValueError,TypeError):
+            online=False
+        result.append({"id":row["device_id"],"last_seen_at":row["last_seen_at"],"online":online})
+    return {"items":result}
+
 @router.post("/api/bot-web/knowledge-v2/operations")
 def web_v2_operation(payload: KnowledgeV2OperationInput,client=Depends(bot_web_console._web_client)):
     action=payload.action
@@ -521,6 +545,9 @@ def web_v2_operation(payload: KnowledgeV2OperationInput,client=Depends(bot_web_c
     with _cp.db() as conn:
         conn.execute("BEGIN IMMEDIATE")
         shop_key=_feedback_binding(conn,client_id)
+        if not payload.device_id or not conn.execute("""SELECT 1 FROM bot_knowledge_v2_devices WHERE client_id=?
+            AND shop_key=? AND device_id=?""",(client_id,shop_key,payload.device_id)).fetchone():
+            raise HTTPException(status_code=400,detail="请选择本店已注册的Windows设备")
         active=conn.execute("""SELECT id FROM bot_commands WHERE client_id=? AND command_type='knowledge_v2_operation'
             AND status IN ('pending','running','cancel_requested') ORDER BY id DESC LIMIT 1""",(client_id,)).fetchone()
         if active:
@@ -538,6 +565,7 @@ def web_v2_operations(client=Depends(bot_web_console._web_client)):
         rows=conn.execute("""SELECT id,status,payload_json,created_at,completed_at FROM bot_commands WHERE client_id=?
             AND command_type='knowledge_v2_operation' ORDER BY id DESC LIMIT 30""",(int(client["id"]),)).fetchall()
     return {"items":[{"command_id":r["id"],"status":r["status"],"action":json.loads(r["payload_json"] or "{}").get("action"),
+        "device_id":json.loads(r["payload_json"] or "{}").get("device_id"),
         "created_at":r["created_at"],"updated_at":r["completed_at"]} for r in rows]}
 
 @router.get("/api/bot-web/knowledge-v2/operations/{command_id}")
@@ -549,6 +577,7 @@ def web_v2_operation_status(command_id:int,client=Depends(bot_web_console._web_c
         raise HTTPException(status_code=404,detail="知识操作不存在")
     return {"command_id":command_id,"status":row["status"],"result":json.loads(row["result_json"] or "{}"),
         "error":row["error"] or "","action":json.loads(row["payload_json"] or "{}").get("action"),
+        "device_id":json.loads(row["payload_json"] or "{}").get("device_id"),
         "created_at":row["created_at"],"updated_at":row["completed_at"]}
 
 @router.post("/api/bot-web/knowledge-v2/operations/{command_id}/cancel")

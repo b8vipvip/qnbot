@@ -36,6 +36,10 @@ namespace Bot.Knowledge
         public string UpdatedAt { get; set; }
         public int Total { get; set; }
         public int Completed { get; set; }
+        public bool ScanAll { get; set; }
+        public int MaxContacts { get; set; }
+        public DateTime? StartTime { get; set; }
+        public DateTime? EndTime { get; set; }
         public string State { get; set; }
     }
 
@@ -121,6 +125,8 @@ namespace Bot.Knowledge
                 {
                     Id = value.Id, UpdatedAt = value.UpdatedAt,
                     Total = value.Contacts.Count, Completed = value.Completed.Count,
+                    ScanAll = value.ScanAll, MaxContacts = value.MaxContacts,
+                    StartTime = value.StartTime, EndTime = value.EndTime,
                     State = value.State
                 };
             }

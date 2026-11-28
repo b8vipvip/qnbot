@@ -355,7 +355,7 @@ def _clear_login_attempts(request: Request) -> None:
         _LOGIN_ATTEMPTS.pop(key, None)
 
 
-def _command_rows(client_id: int, shop_key: str = "") -> List[Dict[str, Any]]:
+def _command_rows(client_id: int, shop_key: str = "", device_id: str = "") -> List[Dict[str, Any]]:
     commands=[]
     with _cp.db() as conn:
         conn.execute("BEGIN IMMEDIATE")
@@ -373,7 +373,7 @@ def _command_rows(client_id: int, shop_key: str = "") -> List[Dict[str, Any]]:
             payload=_parse(row["payload_json"],{})
             kind=row["command_type"]
             if kind=="knowledge_v2_operation":
-                if not shop_key or payload.get("shop_key")!=shop_key:
+                if not shop_key or payload.get("shop_key")!=shop_key or not device_id or payload.get("device_id")!=device_id:
                     continue
                 bound=conn.execute("SELECT shop_key FROM bot_client_shop_binding WHERE client_id=?",(client_id,)).fetchone()
                 if not bound or bound["shop_key"]!=shop_key:
@@ -555,6 +555,7 @@ class AdminClientInput(BaseModel):
 
 class SyncInput(BaseModel):
     shop_key: str = ""
+    knowledge_device_id: str = ""
     status: Dict[str, Any] = Field(default_factory=dict)
     current_settings: Dict[str, Any] = Field(default_factory=dict)
     messages: List[Dict[str, Any]] = Field(default_factory=list)
@@ -824,6 +825,15 @@ def runtime_bot_web_sync(
             """,
             (_json(status_data), _json(current_settings), app_version, _json(sellers), _now(), _now(), client_id),
         )
+    # Only a registered device in the authoritative shop binding can receive operations.
+    device_id=data.knowledge_device_id
+    if len(device_id)==32 and all(c in "0123456789abcdef" for c in device_id):
+        with _cp.db() as conn:
+            bound=conn.execute("SELECT shop_key FROM bot_client_shop_binding WHERE client_id=?",(client_id,)).fetchone()
+            if bound and bound["shop_key"]==data.shop_key:
+                conn.execute("""INSERT INTO bot_knowledge_v2_devices(client_id,shop_key,device_id,last_seen_at)
+                    VALUES(?,?,?,?) ON CONFLICT(client_id,shop_key,device_id) DO UPDATE SET last_seen_at=excluded.last_seen_at""",
+                    (client_id,data.shop_key,device_id,_now()))
     settings = _settings_for(client_id)["desired"]
     if bool(settings.get("message_sync_enabled", True)):
         for item in data.messages[:500]:
@@ -835,7 +845,7 @@ def runtime_bot_web_sync(
         "ok": True,
         "server_time": _now(),
         "desired_settings": settings,
-        "commands": _command_rows(client_id, data.shop_key),
+        "commands": _command_rows(client_id, data.shop_key, device_id),
     }
 
 
