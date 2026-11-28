@@ -134,3 +134,28 @@ def test_real_windows_sqlite_crash_injection_is_ci_gated():
     assert "before-marker" in script and "after-marker" in script
     assert "receipt.Value -eq 'rollback'" in script
     assert "reload_rebuild_recall_p95_ms" in script
+
+
+def test_remote_candidate_recovery_needs_exact_claim_receipt():
+    revision = read("src/Bot/Knowledge/KnowledgeEngineV2RevisionService.cs")
+    recover = revision[revision.index("internal static bool HasCommittedCandidateOutcome"):revision.index("public static bool RejectCandidate")]
+    assert "HasRemoteMutationReceipt(seller, operationReceipt, action)" in recover
+    assert "receipt.CandidateId == candidateId" in recover
+    assert "row.ResolutionNote ==" not in recover
+    assert "KnowledgeV2CandidateMutationReceiptRow" in revision
+    repo = read("src/Bot/Knowledge/KnowledgeEngineV2.Repository.cs")
+    apply = repo[repo.index("internal static bool TrySaveEditorRecord"):repo.index("internal static string EditorRecordFingerprint")]
+    assert 'RemoteMutationReceipt(operationReceipt, "revision_apply")' in apply
+    assert "state.Db.SaveRecordsInTransaction(writes)" in apply
+
+
+def test_followups_preserve_product_scope_and_overflow_and_compact_tombstones():
+    semantics = read("src/Bot/Knowledge/KnowledgeEngineV2.Semantics.cs")
+    assert "memory.ProductEvidenceConflict" in semantics
+    assert "memory.Entities.Where(IsProductEntity)" in semantics
+    assert ".OrderByDescending(IsProductEntity)" in semantics
+    index = read("src/Bot/Knowledge/KnowledgeEngineV2.Service.Index.cs")
+    assert "current.ProductEvidenceConflict = query.ProductEvidenceConflict" in index
+    incremental = read("src/Bot/Knowledge/KnowledgeEngineV2.Service.Incremental.cs")
+    assert "ShouldCompactSnapshot(next)" in incremental
+    assert "next.Records.Where(IsIndexableRecord)" in incremental
