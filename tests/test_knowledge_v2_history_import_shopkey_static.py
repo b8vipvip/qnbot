@@ -111,3 +111,20 @@ def test_history_import_atomic_insert_respects_existing_rows_and_deleted_knowled
     assert "if (!KnowledgeEngineV2Repository.TryAddHistoryImportRecord" in importer
     assert "KnowledgeEngineV2Repository.IsSafeHistoryImportForAutoPublish(title, answer)" in importer
     assert "return IsSafeAutomaticNewKnowledge(question, answer);" in repository
+
+
+def test_history_scan_rejects_unbound_or_changed_desk_before_promoting_evidence():
+    source = read("src/Bot/Knowledge/ChatHistoryScanService.cs")
+    scan = source[source.index("public async Task<ChatHistoryScanResult> ScanAndImportAsync("):]
+    assert "ReferenceEquals(QN.CurQN, qn)" in scan
+    assert "ReferenceEquals(qn.CDP, scanCdp)" in scan
+    assert "!string.IsNullOrWhiteSpace(scanSessionId)" in scan
+    assert "string.Equals(scanCdp.SessionId, scanSessionId, StringComparison.Ordinal)" in scan
+    assert "string.Equals(scanCdp.ShopKey, shopKey, StringComparison.Ordinal)" in scan
+    for operation in ("ReadVisibleChatBuyerListContactsAsync", "TryOpenMessageManagerAsync",
+                      "ReadVisibleMessageManagerContactsAsync", "ReadContactsFromApisAsync",
+                      "ResolveConversationCodeAsync", "ReadHistoryAsync"):
+        call = scan.index("await " + operation)
+        assert "requireOriginalSession();" in scan[call:scan.index(";", call)+100]
+    assert "if (isOriginalSession() && !string.IsNullOrWhiteSpace(originalBuyer))" in scan
+    assert scan.index("requireOriginalSession();", scan.index("finally")) < scan.index("BuildTranscript(histories")

@@ -562,16 +562,30 @@ namespace Bot.Knowledge
                 throw new Exception("未识别到可用的千牛客服会话，请先打开任意买家聊天窗口。");
             }
 
-            if (!string.Equals(shop.SellerNick, qn.Seller.Nick, StringComparison.Ordinal)
-                || (qn.CDP != null && !string.IsNullOrWhiteSpace(qn.CDP.ShopKey)
-                    && !string.Equals(qn.CDP.ShopKey, shopKey, StringComparison.Ordinal)))
-                throw new InvalidOperationException("当前千牛会话与指定 ShopKey 不匹配，已阻止历史聊天跨店导入。");
+            var scanCdp = qn.CDP;
+            var scanSessionId = scanCdp.SessionId;
+            // UI contact discovery operates on the current desk. Never combine
+            // those results with a retired or differently bound CDP session.
+            Func<bool> isOriginalSession = () => ReferenceEquals(QN.CurQN, qn)
+                && ReferenceEquals(qn.CDP, scanCdp)
+                && qn.Seller != null
+                && string.Equals(shop.SellerNick, qn.Seller.Nick, StringComparison.Ordinal)
+                && !string.IsNullOrWhiteSpace(scanSessionId)
+                && string.Equals(scanCdp.SessionId, scanSessionId, StringComparison.Ordinal)
+                && string.Equals(scanCdp.ShopKey, shopKey, StringComparison.Ordinal);
+            Action requireOriginalSession = () =>
+            {
+                if (!isOriginalSession())
+                    throw new InvalidOperationException("历史扫描期间千牛会话或 ShopKey 已变化，已停止导入，避免跨店学习。");
+            };
+            requireOriginalSession();
 
             var diagnostics = new StringBuilder();
             var originalBuyer = qn.Buyer == null ? string.Empty : (qn.Buyer.Nick ?? string.Empty);
 
             Report(progress, "正在读取千牛左侧“全部买家”列表...", 0, 0, string.Empty, 0, 0, 0);
             var chatBuyerListContacts = await ReadVisibleChatBuyerListContactsAsync(diagnostics, token);
+            requireOriginalSession();
 
             var contacts = new HashSet<string>(StringComparer.Ordinal);
             AddContact(contacts, originalBuyer, qn.Seller.Nick);
@@ -585,10 +599,13 @@ namespace Bot.Knowledge
             if (contacts.Count <= 1)
             {
                 Report(progress, "左侧买家列表未完整读取，正在尝试千牛消息管理器...", 0, 0, string.Empty, 0, 0, 0);
+                requireOriginalSession();
                 managerOpened = await TryOpenMessageManagerAsync(diagnostics, token);
+                requireOriginalSession();
                 if (managerOpened)
                 {
                     messageManagerContacts = await ReadVisibleMessageManagerContactsAsync(diagnostics, token);
+                    requireOriginalSession();
                     foreach (var name in messageManagerContacts)
                     {
                         AddContact(contacts, name, qn.Seller.Nick);
@@ -601,7 +618,9 @@ namespace Bot.Knowledge
             }
 
             Report(progress, "正在通过千牛接口补充联系人...", 0, 0, string.Empty, 0, 0, 0);
+            requireOriginalSession();
             var apiContacts = await ReadContactsFromApisAsync(qn, diagnostics, token);
+            requireOriginalSession();
             foreach (var name in apiContacts)
             {
                 AddContact(contacts, name, qn.Seller.Nick);
@@ -633,12 +652,14 @@ namespace Bot.Knowledge
                 for (var i = 0; i < orderedContacts.Count; i++)
                 {
                     token.ThrowIfCancellationRequested();
+                    requireOriginalSession();
                     var buyer = orderedContacts[i];
                     Report(progress, "正在读取聊天记录...", i + 1, orderedContacts.Count, buyer, totalMessages, CountPairs(histories), TextChars(histories));
 
                     try
                     {
                         var ccode = await ResolveConversationCodeAsync(qn, buyer, token);
+                        requireOriginalSession();
                         if (string.IsNullOrWhiteSpace(ccode))
                         {
                             failedContacts++;
@@ -647,6 +668,7 @@ namespace Bot.Knowledge
                         }
 
                         var turns = await ReadHistoryAsync(qn, qn.Seller.Nick, buyer, ccode, options, token);
+                        requireOriginalSession();
                         if (turns.Count < 1) continue;
                         histories.Add(new ContactHistory { Buyer = buyer, Turns = turns });
                         totalMessages += turns.Count;
@@ -657,6 +679,9 @@ namespace Bot.Knowledge
                     }
                     catch (Exception ex)
                     {
+                        // A changed shop/session is a fatal scan error, not a
+                        // per-contact failure that may be skipped.
+                        requireOriginalSession();
                         failedContacts++;
                         diagnostics.AppendLine("读取失败 " + buyer + "：" + Safe(ex.Message));
                         Log.Info("扫描历史聊天失败: buyer=" + buyer + ", error=" + ex.Message);
@@ -665,13 +690,14 @@ namespace Bot.Knowledge
             }
             finally
             {
-                if (!string.IsNullOrWhiteSpace(originalBuyer))
+                if (isOriginalSession() && !string.IsNullOrWhiteSpace(originalBuyer))
                 {
                     try { qn.OpenChat(originalBuyer); } catch { }
                 }
             }
 
             token.ThrowIfCancellationRequested();
+            requireOriginalSession();
             Dictionary<string, KnowledgeV2ImportEvidence> sourceEvidenceByToken;
             var transcript = BuildTranscript(histories, options, out sourceEvidenceByToken);
             var pairCount = CountTranscriptPairs(transcript);
