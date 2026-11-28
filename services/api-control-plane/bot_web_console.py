@@ -484,7 +484,8 @@ def _save_message(client_id: int, item: Dict[str, Any]) -> None:
         )
 
 
-def _apply_command_results(client_id: int, results: List[Dict[str, Any]]) -> None:
+def _apply_command_results(client_id: int, results: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    knowledge_receipts=[]
     for result in results[:100]:
         try:
             command_id = int(result.get("id") or 0)
@@ -507,13 +508,23 @@ def _apply_command_results(client_id: int, results: List[Dict[str, Any]]) -> Non
             if row["command_type"]=="knowledge_v2_operation":
                 expected=_parse(row["payload_json"],{}).get("claim","")
                 supplied=result.get("claim","")
-                if row["status"] not in ("running","cancel_requested") or not expected or not isinstance(supplied,str) or not secrets.compare_digest(expected,supplied):
+                if not expected or not isinstance(supplied,str) or not secrets.compare_digest(expected,supplied):
+                    continue
+                if row["status"] not in ("running","cancel_requested"):
+                    # Idempotent acknowledgement when the original response was lost.
+                    # Never overwrite a terminal command with a late heartbeat/result.
+                    if row["status"] in ("completed","failed","cancelled","abandoned"):
+                        knowledge_receipts.append({"id":command_id,"claim":supplied})
                     continue
                 phase=result.get("phase","")
                 if phase=="running":
                     new_status=row["status"]
                 elif phase=="cancelled":
                     new_status="cancelled"
+                elif phase=="interrupted":
+                    new_status="failed"
+                if phase!="running":
+                    knowledge_receipts.append({"id":command_id,"claim":supplied})
             conn.execute(
                 """
                 UPDATE bot_commands
@@ -527,6 +538,7 @@ def _apply_command_results(client_id: int, results: List[Dict[str, Any]]) -> Non
                     "UPDATE bot_messages SET message_type=? WHERE client_id=? AND message_key=?",
                     ("web_sent" if success else "web_failed", client_id, f"command:{command_id}"),
                 )
+    return knowledge_receipts
 
 
 def _cleanup_messages(client_id: int, retention_days: int) -> None:
@@ -840,13 +852,14 @@ def runtime_bot_web_sync(
         for item in data.messages[:500]:
             if isinstance(item, dict):
                 _save_message(client_id, item)
-    _apply_command_results(client_id, data.command_results or [])
+    knowledge_receipts=_apply_command_results(client_id, data.command_results or [])
     _cleanup_messages(client_id, int(settings.get("message_retention_days", 7)))
     return {
         "ok": True,
         "server_time": _now(),
         "desired_settings": settings,
         "commands": _command_rows(client_id, data.shop_key, device_id),
+        "knowledge_result_receipts": knowledge_receipts,
     }
 
 

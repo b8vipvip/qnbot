@@ -725,6 +725,7 @@ namespace Bot.ChromeNs
                         ["command_results"] = new JArray(resultSnapshot.Select(x => x.Value))
                     };
 
+                    JArray knowledgeReceipts = null;
                     ServicePointManager.SecurityProtocol |= SecurityProtocolType.Tls12;
                     using (var handler = new HttpClientHandler { UseProxy = true, Proxy = WebRequest.DefaultWebProxy })
                     using (var http = new HttpClient(handler))
@@ -764,12 +765,13 @@ namespace Bot.ChromeNs
                                             0, state.PendingMessageBytes - PendingMessageSizeBytes(item));
                                 }
                             }
+                            knowledgeReceipts = root["knowledge_result_receipts"] as JArray;
                             ApplyDesiredSettings(state, root["desired_settings"] as JObject);
                             await ApplyCommandsAsync(state, root["commands"] as JArray, journalScope);
                         }
                     }
 
-                    AcknowledgeCommandResults(state, resultSnapshot);
+                    AcknowledgeCommandResults(state, resultSnapshot, knowledgeReceipts);
                 }
                 catch (Exception ex)
                 {
@@ -1177,7 +1179,7 @@ namespace Bot.ChromeNs
                         {
                             // Terminal result was computed but its first disk write
                             // failed. Retry the durable write before publishing it.
-                            WriteKnowledgeJournal(path, scope, pending);
+                            if (!JToken.DeepEquals(result, pending)) WriteKnowledgeJournal(path, scope, pending);
                             continue;
                         }
                         if ((string)result["phase"] == "started")
@@ -1510,7 +1512,7 @@ namespace Bot.ChromeNs
         }
 
         private static void AcknowledgeCommandResults(
-            ShopWebState state, IEnumerable<KeyValuePair<long, JObject>> acknowledged)
+            ShopWebState state, IEnumerable<KeyValuePair<long, JObject>> acknowledged, JArray knowledgeReceipts)
         {
             if (state == null || acknowledged == null) return;
             lock (state.PendingCommandResultsSync)
@@ -1527,7 +1529,11 @@ namespace Bot.ChromeNs
                         var scope = (string)current["journal_scope"];
                         if (!string.IsNullOrWhiteSpace(scope) && (string)current["phase"] != "running")
                         {
-                            var path = KnowledgeJournalPath(scope, pair.Key, (string)current["claim"]);
+                            var claim = (string)current["claim"];
+                            if (knowledgeReceipts == null || !knowledgeReceipts.OfType<JObject>().Any(x =>
+                                x.Value<long?>("id") == pair.Key && (string)x["claim"] == claim))
+                                continue;
+                            var path = KnowledgeJournalPath(scope, pair.Key, claim);
                             // Server already committed this exact terminal receipt.
                             // Delete the encrypted local copy only after HTTP acknowledgement.
                             if (File.Exists(path + ".bak")) File.Delete(path + ".bak");

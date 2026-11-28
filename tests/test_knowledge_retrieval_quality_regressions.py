@@ -24,7 +24,7 @@ def test_structured_product_ids_participate_in_full_and_incremental_knowledge_in
     assert "foreach (var entity in RecordEntities(record))" in index
     assert "EntitySimilarity(query.Entities, RecordEntities(record))" in index
     assert "foreach (var entity in RecordEntities(record))" in incremental
-    assert "Add(snapshot.Entity" in incremental
+    assert "AddIncremental(snapshot.Entity" in incremental
     assert "Remove(snapshot.Entity" in incremental
     assert "foreach (var productId in ExtractProductIds(value))" in semantics
     extractor = semantics.split("private static List<string> ExtractProductIds", 1)[1].split(

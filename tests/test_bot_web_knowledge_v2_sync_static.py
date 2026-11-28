@@ -694,3 +694,13 @@ def test_remote_knowledge_job_receipts_survive_restart_without_replaying_mutatio
     assert "ReferenceEquals(current, pair.Value)" in source
     assert "ThenBy(x => x.Key).Take(100)" in source
     assert "File.Delete(path)" in source
+
+def test_remote_result_acknowledgement_is_claim_specific_and_idempotent():
+    console=read(ROOT/"services/api-control-plane/bot_web_console.py")
+    client=read(ROOT/"src/Bot/ChromeNs/BotWebConsoleSyncService.cs")
+    assert '"knowledge_result_receipts": knowledge_receipts' in console
+    assert "secrets.compare_digest(expected,supplied)" in console
+    assert 'knowledge_receipts.append({"id":command_id,"claim":supplied})' in console
+    assert 'elif phase=="interrupted":' in console
+    assert 'knowledgeReceipts = root["knowledge_result_receipts"] as JArray' in client
+    assert 'x.Value<long?>("id") == pair.Key && (string)x["claim"] == claim' in client
