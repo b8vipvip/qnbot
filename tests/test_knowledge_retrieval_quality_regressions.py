@@ -341,8 +341,12 @@ def test_existing_v2_ai_evidence_source_is_trusted_but_unverified_history_stays_
     assert "IsTrustedProductionSource(record.SourceType)" in candidate
     assert "ai_auto_learned_human_evidence" in bridge
     assert "chat_history_unverified_candidate" in importer
-    assert "record.Type = autoPublish" not in importer
-    assert 'record.Type = autoPublish' not in importer
+    assert "var autoPublish = evidenceValid && !risk && !modelCandidate" in importer
+    assert "confidence >= 0.90" in importer
+    assert "authority >= 0.90" in importer
+    assert "record.Type = autoPublish" in importer
+    assert ': "learning_candidate";' in importer
+    assert "record.Enabled = autoPublish;" in importer
     assert 'record.Status = autoPublish ? "active" : "candidate";' in importer
 
 def test_old_ai_source_records_are_normalized_to_candidate_status_without_disabling_them():
