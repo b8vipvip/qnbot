@@ -2,6 +2,8 @@ from __future__ import annotations
 
 import json
 import math
+import time
+import uuid
 from typing import Any
 
 from fastapi import APIRouter, Depends, Header, HTTPException, Request
@@ -17,6 +19,11 @@ _MAX_BODY_BYTES = 4 * 1024 * 1024
 class KnowledgeV2SyncInput(BaseModel):
     revision: int = 0
     records: list[dict[str, Any]] | None = None
+
+class KnowledgeV2FeedbackInput(BaseModel):
+    epoch: str = ""
+    cursor: int = 0
+    events: list[dict[str, Any]] = []
 
 class KnowledgeV2WebInput(BaseModel):
     records: list[dict[str, Any]]
@@ -53,6 +60,102 @@ def init_db():
                 FOREIGN KEY(client_id) REFERENCES client_tokens(id) ON DELETE CASCADE
             )
         """)
+
+        conn.execute("""CREATE TABLE IF NOT EXISTS bot_knowledge_v2_feedback_epoch (
+            id INTEGER PRIMARY KEY CHECK(id=1), epoch TEXT NOT NULL)""")
+        conn.execute("INSERT OR IGNORE INTO bot_knowledge_v2_feedback_epoch(id,epoch) VALUES(1,?)", (uuid.uuid4().hex,))
+        conn.execute("""CREATE TABLE IF NOT EXISTS bot_knowledge_v2_feedback (
+            seq INTEGER PRIMARY KEY AUTOINCREMENT,
+            client_id INTEGER NOT NULL, shop_key TEXT NOT NULL, event_id TEXT NOT NULL,
+            knowledge_id TEXT NOT NULL, event_type TEXT NOT NULL, utc_ticks INTEGER NOT NULL,
+            UNIQUE(client_id,shop_key,event_id),
+            FOREIGN KEY(client_id) REFERENCES client_tokens(id) ON DELETE CASCADE
+        )""")
+        conn.execute("CREATE INDEX IF NOT EXISTS ix_v2_feedback_cursor ON bot_knowledge_v2_feedback(client_id,shop_key,seq)")
+        conn.execute("CREATE INDEX IF NOT EXISTS ix_v2_feedback_time ON bot_knowledge_v2_feedback(client_id,shop_key,utc_ticks)")
+
+_FEEDBACK_TYPES = {"sent", "send_failed", "accepted", "correction", "withdrawal", "buyer_negative"}
+_TICKS_PER_SECOND = 10_000_000
+_UNIX_TICKS = 621355968000000000
+
+def _feedback_now_ticks():
+    return _UNIX_TICKS + int(time.time() * _TICKS_PER_SECOND)
+
+def _feedback_binding(conn, client_id, requested=None):
+    row = conn.execute("SELECT shop_key FROM bot_client_shop_binding WHERE client_id=?", (client_id,)).fetchone()
+    bound = str(row["shop_key"] or "").strip() if row else ""
+    if not bound or (requested is not None and requested != bound):
+        raise HTTPException(status_code=403, detail="反馈同步令牌未绑定该店铺")
+    return bound
+
+def _validate_feedback(events, now):
+    if len(events) > 200:
+        raise HTTPException(status_code=413, detail="反馈同步每批最多200条")
+    seen = set()
+    clean = []
+    for row in events:
+        if set(row) != {"Id", "KnowledgeId", "EventType", "UtcTicks"}:
+            raise HTTPException(status_code=400, detail="反馈事件字段无效")
+        eid, kid, typ, ticks = (row[k] for k in ("Id", "KnowledgeId", "EventType", "UtcTicks"))
+        try:
+            valid_id = isinstance(eid, str) and len(eid) == 32 and uuid.UUID(hex=eid).hex == eid and int(eid,16) != 0
+        except (ValueError, AttributeError, TypeError):
+            valid_id = False
+        if (not valid_id or eid in seen or not isinstance(kid, str) or not kid.strip()
+            or len(kid) > 200 or not isinstance(typ, str) or typ not in _FEEDBACK_TYPES
+            or type(ticks) is not int or ticks <= 0 or ticks > now + 300 * _TICKS_PER_SECOND):
+            raise HTTPException(status_code=400, detail="反馈事件内容无效或ID重复")
+        seen.add(eid)
+        clean.append((eid, kid, typ, ticks))
+    return clean
+
+@router.post("/api/runtime/v1/bot-web/knowledge-v2-feedback-sync")
+def runtime_feedback_sync(payload: KnowledgeV2FeedbackInput, request: Request, x_shop_key: str | None = Header(default=None)):
+    client_id = int(bot_web_console._runtime_client(request)["id"])
+    if not x_shop_key or payload.cursor < 0 or payload.cursor > 9223372036854775807:
+        raise HTTPException(status_code=400, detail="反馈同步店铺或游标无效")
+    now = _feedback_now_ticks()
+    cutoff = now - 180 * 86400 * _TICKS_PER_SECOND
+    events = _validate_feedback(payload.events, now)
+    with _cp.db() as conn:
+        conn.execute("BEGIN IMMEDIATE")
+        shop_key = _feedback_binding(conn, client_id, x_shop_key.strip())
+        epoch = conn.execute("SELECT epoch FROM bot_knowledge_v2_feedback_epoch WHERE id=1").fetchone()["epoch"]
+        cursor = payload.cursor if payload.epoch == epoch else 0
+        conn.execute("DELETE FROM bot_knowledge_v2_feedback WHERE client_id=? AND shop_key=? AND utc_ticks<?", (client_id,shop_key,cutoff))
+        for eid,kid,typ,ticks in events:
+            if ticks < cutoff:
+                continue
+            conn.execute("""INSERT OR IGNORE INTO bot_knowledge_v2_feedback(client_id,shop_key,event_id,knowledge_id,event_type,utc_ticks)
+                VALUES(?,?,?,?,?,?)""", (client_id,shop_key,eid,kid,typ,ticks))
+            prior = conn.execute("""SELECT knowledge_id,event_type,utc_ticks FROM bot_knowledge_v2_feedback
+                WHERE client_id=? AND shop_key=? AND event_id=?""", (client_id,shop_key,eid)).fetchone()
+            if (prior["knowledge_id"],prior["event_type"],prior["utc_ticks"]) != (kid,typ,ticks):
+                raise HTTPException(status_code=409,detail="反馈事件ID内容冲突")
+        rows = conn.execute("""SELECT seq,event_id,knowledge_id,event_type,utc_ticks FROM bot_knowledge_v2_feedback
+            WHERE client_id=? AND shop_key=? AND seq>? ORDER BY seq LIMIT 201""", (client_id,shop_key,cursor)).fetchall()
+        page = rows[:200]
+        return {"epoch":epoch,"cursor":int(page[-1]["seq"]) if page else cursor,
+            "has_more":len(rows)>200,"ack_ids":[e[0] for e in events],
+            "events":[{"Id":row["event_id"],"KnowledgeId":row["knowledge_id"],"EventType":row["event_type"],
+                       "UtcTicks":row["utc_ticks"]} for row in page]}
+
+@router.get("/api/bot-web/knowledge-v2/feedback")
+def web_feedback(client=Depends(bot_web_console._web_client)):
+    client_id = int(client["id"])
+    cutoff = _feedback_now_ticks() - 180 * 86400 * _TICKS_PER_SECOND
+    with _cp.db() as conn:
+        shop_key = _feedback_binding(conn,client_id)
+        rows = conn.execute("""SELECT knowledge_id,event_type,COUNT(*) AS count,MAX(utc_ticks) AS last_ticks
+            FROM bot_knowledge_v2_feedback WHERE client_id=? AND shop_key=? AND utc_ticks>=?
+            GROUP BY knowledge_id,event_type""",(client_id,shop_key,cutoff)).fetchall()
+    counts = {}
+    for row in rows:
+        item=counts.setdefault(row["knowledge_id"],{})
+        item[row["event_type"]]=row["count"]
+        if row["event_type"]=="sent":
+            item["last_used_utc_ticks"]=row["last_ticks"]
+    return {"items":counts,"window_days":180}
 
 def _validate_records(records):
     if not isinstance(records, list):
