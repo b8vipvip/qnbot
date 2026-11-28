@@ -123,6 +123,7 @@ namespace Bot.Knowledge
                     var authority = record.Authority;
                     var autoPublish = evidenceValid && !risk && !modelCandidate
                         && !parsed.ContextDependent
+                        && KnowledgeEngineV2Repository.IsSafeHistoryImportForAutoPublish(title, answer)
                         && !double.IsNaN(confidence) && !double.IsInfinity(confidence)
                         && confidence >= 0.90 && !double.IsNaN(authority) && !double.IsInfinity(authority)
                         && authority >= 0.90;
@@ -183,7 +184,11 @@ namespace Bot.Knowledge
                     record.LastVerifiedAt = autoPublish ? DateTime.Now : DateTime.MinValue;
                     record.ImportEvidenceTokens = new List<string>();
 
-                    KnowledgeEngineV2Repository.Save(seller, record);
+                    if (!KnowledgeEngineV2Repository.TryAddHistoryImportRecord(seller, record))
+                    {
+                        result.DuplicateSkipped++;
+                        continue;
+                    }
                     result.AddedItems.Add(record);
                     result.Added++;
                     if (autoPublish) result.Published++;

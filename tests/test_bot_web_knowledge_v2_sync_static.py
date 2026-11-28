@@ -51,7 +51,8 @@ def test_first_runtime_report_seeds_state_and_stale_runtime_cannot_overwrite_web
 def test_windows_bridge_reuses_shop_repository_and_existing_cloud_credentials():
     s=read(WINDOWS)
     assert "ShopControlPlaneConnectionStore" in s
-    assert "KnowledgeCloudSyncService.IsEnabledForShop" in s
+    assert "IsEnabledForShop(shop)" in s
+    assert "KnowledgeCloudSyncService.IsEnabledForShop" not in s
     assert '"/api/runtime/v1/bot-web/knowledge-v2-sync"' in s
     assert 'request.Headers.TryAddWithoutValidation("X-Shop-Key",shop.ShopKey)' in s
     assert "KnowledgeEngineV2Repository.LoadAll" in s

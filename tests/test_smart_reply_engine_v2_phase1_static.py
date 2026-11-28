@@ -56,10 +56,11 @@ def test_rewritten_queries_are_contextual_and_preserve_the_original_buyer_questi
     runtime = read("src/Bot/ChromeNs/KnowledgeEngineV2RuntimeBridge.cs")
     model = read("src/Bot/Knowledge/KnowledgeEngineV2.Models.cs")
 
-    assert "class ContextualQueryResolution" in router
+    state = read("src/Bot/ChromeNs/ConversationStateService.cs")
+    assert "class ContextualQueryResolution" in state
     assert "ContextualQueryRewriteService.Resolve(" in router
-    assert "contextDependencyScore < 0.30" in router
-    assert "买家当前追问" in router
+    assert "contextDependencyScore < 0.30" in state
+    assert "买家当前追问" in state
     assert "retrievalQuestion = contextualResolution.ResolvedQuery;" in runtime
     assert "decision.Query.UserOriginal = currentQuestion;" in runtime
     assert "public string UserOriginal { get; set; }" in model

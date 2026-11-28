@@ -72,6 +72,40 @@ namespace Bot.Knowledge
             KnowledgeEngineV2Service.ApplyRecordUpdate(seller, record);
         }
 
+        // History imports are add-only. Check the committed corpus and deletion ledger
+        // under the same lock as the insert, including concurrent imports/cloud applies.
+        internal static bool TryAddHistoryImportRecord(string seller, KnowledgeV2Record record)
+        {
+            if (record == null || string.IsNullOrWhiteSpace(record.Id)) return false;
+            var shop = ResolveShopRequired(seller);
+            var state = GetState(shop);
+            EnsureSchemaInitialized(state);
+            NormalizeForSave(record);
+            var question = KnowledgeEngineV2Semantics.Compact(record.Title);
+            var hash = KnowledgeAiService.ContentHash(record.Title, record.Answer);
+            lock (state.Sync)
+            {
+                if (HasExplicitlyRemovedKnowledge(state, record.SourceId, new[] { question }))
+                    return false;
+                foreach (var existing in state.Db.ReadRecords<KnowledgeV2RecordRow>(null).Select(FromRow))
+                {
+                    if (existing == null) continue;
+                    if (string.Equals(existing.Id, record.Id, StringComparison.Ordinal)
+                        || (!string.IsNullOrWhiteSpace(record.SourceId)
+                            && string.Equals(existing.SourceId, record.SourceId, StringComparison.Ordinal))
+                        || string.Equals(KnowledgeAiService.ContentHash(existing.Title, existing.Answer), hash, StringComparison.Ordinal))
+                        return false;
+                    if (string.Equals(existing.Status, "deleted", StringComparison.OrdinalIgnoreCase)
+                        && new[] { existing.Title }.Concat(existing.Aliases ?? new List<string>())
+                            .Select(KnowledgeEngineV2Semantics.Compact).Contains(question, StringComparer.Ordinal))
+                        return false;
+                }
+                state.Db.SaveOneRecord(ToRow(record));
+            }
+            KnowledgeEngineV2Service.ApplyRecordUpdate(seller, record);
+            return true;
+        }
+
         // A knowledge editor may remain open across a learning or cloud-sync update.
         // Use the exact record fingerprint, not a wall-clock timestamp, to reject stale writes.
         internal static bool TrySaveEditorRecord(string seller, KnowledgeV2Record record, string expectedFingerprint)
@@ -840,6 +874,11 @@ namespace Bot.Knowledge
                 if (deletedVariants.Any(variants.Contains)) return true;
             }
             return false;
+        }
+
+        internal static bool IsSafeHistoryImportForAutoPublish(string question, string answer)
+        {
+            return IsSafeAutomaticNewKnowledge(question, answer);
         }
 
         private static bool IsSafeAutomaticNewKnowledge(string question, string answer)

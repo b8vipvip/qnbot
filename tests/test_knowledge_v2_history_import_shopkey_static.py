@@ -29,7 +29,7 @@ def test_history_promotion_uses_exact_shopkey_and_v2_repository_only():
     assert "string.Equals(shop.ShopKey, shopKey, StringComparison.Ordinal)" in method
     assert "using (ShopSettingsScope.Enter(shop))" in method
     assert method.index("KnowledgeEngineV2Repository.LoadAll(seller)") < method.index(
-        "KnowledgeEngineV2Repository.Save(seller, record)"
+        "KnowledgeEngineV2Repository.TryAddHistoryImportRecord(seller, record)"
     ) < method.index("KnowledgeEngineV2Service.Warm(seller)") < method.index(
         "AppendAudit(seller, importId, result)"
     )
@@ -96,3 +96,18 @@ def test_verified_history_source_identity_is_stable_across_device_scans():
     assert "importId" not in helper and "tokens" not in helper and "Guid" not in helper
     assert "AutoPublishedEvidenceKey" in cloud
     assert "return (record.SourceId ?? string.Empty).Trim();" in cloud
+
+
+def test_history_import_atomic_insert_respects_existing_rows_and_deleted_knowledge():
+    repository = read("src/Bot/Knowledge/KnowledgeEngineV2.Repository.cs")
+    importer = read("src/Bot/Knowledge/KnowledgeV2HistoryImportService.cs")
+    method = repository.split("internal static bool TryAddHistoryImportRecord(", 1)[1].split("// A knowledge editor", 1)[0]
+    assert method.index("lock (state.Sync)") < method.index("HasExplicitlyRemovedKnowledge") < method.index("state.Db.SaveOneRecord")
+    assert "existing.SourceId, record.SourceId" in method
+    assert 'existing.Status, "deleted"' in method
+    assert "existing.Aliases" in method
+    assert "KnowledgeAiService.ContentHash(existing.Title, existing.Answer)" in method
+    assert "KnowledgeEngineV2Service.ApplyRecordUpdate(seller, record)" in method
+    assert "if (!KnowledgeEngineV2Repository.TryAddHistoryImportRecord" in importer
+    assert "KnowledgeEngineV2Repository.IsSafeHistoryImportForAutoPublish(title, answer)" in importer
+    assert "return IsSafeAutomaticNewKnowledge(question, answer);" in repository
