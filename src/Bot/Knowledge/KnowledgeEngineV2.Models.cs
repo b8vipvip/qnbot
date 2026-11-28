@@ -245,6 +245,7 @@ namespace Bot.Knowledge
         public string Reason { get; set; }
         public string Answer { get; set; }
         public KnowledgeV2Query Query { get; set; }
+        internal string SnapshotGeneration { get; set; }
         public List<KnowledgeV2Match> Matches { get; set; }
         // The selected match can differ from the score-ranked display list.
         public KnowledgeV2Match SelectedMatch { get; set; }
