@@ -150,7 +150,7 @@ namespace Bot.Knowledge
             var selected = _recordGrid.SelectedItem as KnowledgeV2Record;
             var fingerprint = _conflictFingerprint;
             if (conflict == null || selected == null || string.IsNullOrEmpty(fingerprint)) return;
-            if (MessageBox.Show(_owner, "保留所选答案并停用其他冲突记录，是否继续？",
+            if (MessageBox.Show(_owner, "保留所选答案，只停用与它直接矛盾的知识记录，是否继续？",
                 "解决知识冲突", MessageBoxButton.YesNo, MessageBoxImage.Question) != MessageBoxResult.Yes) return;
             Task.Run(() => InConflictShop(() =>
                 KnowledgeEngineV2Service.TryResolveConflict(_seller, fingerprint, conflict.FactKey, selected.Id, asCandidate)))

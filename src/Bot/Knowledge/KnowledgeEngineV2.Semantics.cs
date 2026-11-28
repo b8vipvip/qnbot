@@ -339,16 +339,16 @@ namespace Bot.Knowledge
             if (subject.Length == 0) subject = Compact(record.Title);
             var predicate = NormalizePredicate(record.Predicate);
             var intent = NormalizeIntent(record.Intent);
-            var products = Signature(record.ProductIds, 8, true);
+            var products = Signature(record.ProductIds, 20, true);
             var entities = Signature(
                 (record.Entities ?? new List<string>())
                     .Where(x => !string.IsNullOrWhiteSpace(x)
                         && !x.StartsWith("product:", StringComparison.OrdinalIgnoreCase)),
-                6,
+                24,
                 false);
-            var conditions = Signature(record.Conditions, 8, false);
-            var required = Signature(record.RequiredContext, 8, false);
-            var exclusions = Signature(record.Exclusions, 8, false);
+            var conditions = Signature(record.Conditions, 20, false);
+            var required = Signature(record.RequiredContext, 20, false);
+            var exclusions = Signature(record.Exclusions, 20, false);
             return subject + "|" + predicate + "|" + intent
                 + "|p=" + products
                 + "|e=" + entities
@@ -451,11 +451,13 @@ namespace Bot.Knowledge
         {
             return string.Join(",", (values ?? Enumerable.Empty<string>())
                 .Where(x => !string.IsNullOrWhiteSpace(x))
-                .Select(x => preserveDigits ? (x ?? string.Empty).Trim().ToLowerInvariant() : Compact(x))
+                // Scope identifiers and conditions retain punctuation (decimal
+                // points, version separators, commerce-scope keys).
+                .Select(x => (x ?? string.Empty).Trim().ToLowerInvariant())
                 .Where(x => x.Length > 0)
                 .Distinct(StringComparer.Ordinal)
                 .OrderBy(x => x, StringComparer.Ordinal)
-                .Take(max));
+                .Take(max).Select(x => x.Length + ":" + x));
         }
 
         private static List<string> ExtractProductIds(string text)

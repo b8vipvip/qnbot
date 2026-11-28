@@ -205,8 +205,8 @@ def test_knowledge_v2_disabled_and_deleted_provenance_is_never_normalized_back_t
 
     for method in (auto, human):
         assert "record == null || !record.Enabled" in method
-        assert 'string.Equals(record.Status, "disabled"' in method
-        assert 'string.Equals(record.Status, "deleted"' in method
+        assert '!string.Equals(record.Status, "active"' in method
+        assert 'IsCandidate(record)' in method
         assert 'record.Status = "active";' in method
     assert "IsPersistedStateSynchronized" not in bridge
     assert "MirrorOneToLegacy" not in read("src/Bot/Knowledge/KnowledgeEngineV2.Repository.cs")

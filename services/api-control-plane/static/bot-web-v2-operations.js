@@ -113,8 +113,8 @@ function renderV2OperationResult(task){
       ["驳回",()=>{if(confirm("确认驳回此修订？"))startV2Operation("revision_reject",{candidate_id:x.Id,reason:"Web人工驳回"},true,device)}]]:[])));
   }else if(task.action==="conflict_list"){
     list.replaceChildren(...items.flatMap(x=>(x.Records||[]).map(y=>v2OpsCard(x.Subject+" / "+x.Predicate,[y.Title,y.Answer],[
-      ["保留此答案并停用其他",()=>{if(confirm("确认解决此冲突？"))startV2Operation("conflict_resolve",{fact_key:x.FactKey,knowledge_id:y.Id,fingerprint:data.fingerprint},true,device)}],
-      ["其余转为候选",()=>{if(confirm("确认保留此答案并将其余转为禁用候选？"))startV2Operation("conflict_resolve",{fact_key:x.FactKey,knowledge_id:y.Id,fingerprint:data.fingerprint,reason:"candidate"},true,device)}]]))));
+      ["保留此答案并停用直接冲突",()=>{if(confirm("确认解决此冲突？"))startV2Operation("conflict_resolve",{fact_key:x.FactKey,knowledge_id:y.Id,fingerprint:data.fingerprint},true,device)}],
+      ["直接冲突转为候选",()=>{if(confirm("确认保留此答案并将直接冲突记录转为禁用候选？"))startV2Operation("conflict_resolve",{fact_key:x.FactKey,knowledge_id:y.Id,fingerprint:data.fingerprint,reason:"candidate"},true,device)}]]))));
   }else if(task.action==="rollback_list"){
     list.replaceChildren(...items.map(x=>v2OpsCard(x.title,["当前："+x.current_answer,"回滚为："+x.previous_answer],[
       ["回滚此修订",()=>{if(confirm("确认回滚此修订？"))startV2Operation("rollback",{knowledge_id:x.knowledge_id,revision_id:x.revision_id,fingerprint:x.fingerprint},true,device)}]])));

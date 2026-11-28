@@ -13,7 +13,7 @@ def test_revision_candidates_use_real_manual_corrections_and_cross_buyer_evidenc
     assert 'const string prefix = "manual_reply:"' in service
     assert "DistinctBuyerCount(cluster)" in service
     assert "cluster.Samples.Count < minEvidence || distinctBuyers < minBuyers" in service
-    assert "dominance < 0.50" in service
+    assert "dominance <= 0.50" in service
     assert "BuildClusters(samples)" in service
     assert 'Clean(x.Event.Buyer).ToLowerInvariant() + "|" + NormalizeComparable(x.Text)' in service
 
@@ -93,3 +93,11 @@ def test_revision_generation_is_shop_serialized_cancellable_and_not_capped_to_fi
     assert ".Take(120)" not in service
     assert "OriginalFingerprint = KnowledgeEngineV2Repository.EditorRecordFingerprint(record)" in service
     assert "SafeDate(x.CreatedAtTicks) >= record.LastVerifiedAt" in service
+
+def test_revision_clusters_require_factual_compatibility_and_strict_distinct_buyer_majority():
+    service = read("src/Bot/Knowledge/KnowledgeEngineV2RevisionService.cs")
+    assert "cluster.Samples.Any(x => !KnowledgeEngineV2Service.AnswerFactsCompatible(x.Text, sample.Text))" in service
+    assert "similarityToCurrent >= 0.88 && KnowledgeEngineV2Service.AnswerFactsCompatible(record.Answer, proposal)" in service
+    assert "dominance = distinctBuyers /" in service
+    assert "dominance <= 0.50" in service
+    assert ".Where(KnowledgeV2AuthorityPolicy.IsProductionApproved)" in service

@@ -28,3 +28,23 @@ def test_same_fact_key_different_procedures_are_not_automatically_conflicts():
     assert "same buyer question" in text
     assert "different" in text
     assert "同一明确业务问题存在相互矛盾的生产知识" in text
+
+def test_conflict_resolution_keeps_nonconflicting_neighbors_and_numeric_questions_distinct():
+    public = read("src/Bot/Knowledge/KnowledgeEngineV2.Service.Public.cs")
+    index = read("src/Bot/Knowledge/KnowledgeEngineV2.Service.Index.cs")
+    assert "IsMeaningfulConflictPair(selected, x)" in public
+    assert "foreach (var record in conflicting)" in public
+    assert "ExactQuestionMatches(a, b)" in index
+    assert "if (!SameAnswerNumbers(left.Title, right.Title)) return false;" in index
+    assert "HasCompatibleQuestionNumbers(match.Record, query)" in public
+    assert "SameAnswerNumbers(query.Original, x)" in index
+    assert "ExactQuestionMatches(a, query.Original)" in public
+
+def test_working_memory_resets_on_standalone_or_expired_turn_and_never_shares_empty_buyer():
+    index = read("src/Bot/Knowledge/KnowledgeEngineV2.Service.Index.cs")
+    public = read("src/Bot/Knowledge/KnowledgeEngineV2.Service.Public.cs")
+    assert "if (!query.ContextDependent || current.UpdatedAt < DateTime.Now.AddMinutes(-45))" in index
+    assert 'current.Predicate = query.Predicate ?? "general"' in index
+    assert "current.Entities = (query.Entities ?? new List<string>()).Take(8).ToList()" in index
+    assert "if (string.IsNullOrWhiteSpace(buyer)) return null;" in index
+    assert "if (!sandbox && message.Length > 0)" in public

@@ -145,7 +145,7 @@ namespace Bot.Knowledge
 
             var result = new KnowledgeV2RevisionGenerationResult();
             var records = KnowledgeEngineV2Repository.LoadAll(seller)
-                .Where(x => x != null && x.Enabled && !string.Equals(x.Status, "deleted", StringComparison.OrdinalIgnoreCase))
+                .Where(KnowledgeV2AuthorityPolicy.IsProductionApproved)
                 .ToDictionary(x => x.Id ?? string.Empty, x => x, StringComparer.Ordinal);
             var quality = KnowledgeEngineV2FeedbackService.GetQualityItems(seller)
                 .Where(x => x != null && (x.HealthStatus == "低质量" || x.HealthStatus == "观察") && x.CorrectionCount > 0)
@@ -171,7 +171,7 @@ namespace Bot.Knowledge
 
                 var samples = events
                     .Select(x => new CorrectionSample { Event = x, Text = ExtractManualReply(x.Evidence) })
-                    .Where(x => !string.IsNullOrWhiteSpace(x.Text))
+                    .Where(x => !string.IsNullOrWhiteSpace(x.Text) && !string.IsNullOrWhiteSpace(x.Event.Buyer))
                     .GroupBy(x => Clean(x.Event.Buyer).ToLowerInvariant() + "|" + NormalizeComparable(x.Text), StringComparer.Ordinal)
                     .Select(x => x.OrderByDescending(y => y.Event.CreatedAtTicks).First())
                     .Take(60)
@@ -198,9 +198,10 @@ namespace Bot.Knowledge
                 var minEvidence = highRisk ? 3 : 2;
                 var minBuyers = highRisk ? 3 : 2;
                 var minSimilarity = highRisk ? 0.82 : 0.74;
-                var dominance = cluster.Samples.Count / (double)Math.Max(1, samples.Count);
+                var dominance = distinctBuyers / (double)Math.Max(1, samples.Select(x => Clean(x.Event.Buyer))
+                    .Where(x => x.Length > 0).Distinct(StringComparer.OrdinalIgnoreCase).Count());
                 if (cluster.Samples.Count < minEvidence || distinctBuyers < minBuyers
-                    || cluster.AverageSimilarity < minSimilarity || dominance < 0.50)
+                    || cluster.AverageSimilarity < minSimilarity || dominance <= 0.50)
                 {
                     result.SkippedInsufficientEvidence++;
                     continue;
@@ -213,7 +214,7 @@ namespace Bot.Knowledge
                     continue;
                 }
                 var similarityToCurrent = KnowledgeEngineV2Semantics.TextSimilarity(record.Answer ?? string.Empty, proposal);
-                if (similarityToCurrent >= 0.88)
+                if (similarityToCurrent >= 0.88 && KnowledgeEngineV2Service.AnswerFactsCompatible(record.Answer, proposal))
                 {
                     result.SkippedUnchanged++;
                     continue;
@@ -406,6 +407,10 @@ namespace Bot.Knowledge
                 var bestSimilarity = 0.0;
                 foreach (var cluster in clusters)
                 {
+                    // Single-link similarity allows opposite or numeric facts to
+                    // drift together via an intermediate representative. Require
+                    // factual compatibility with every existing cluster member.
+                    if (cluster.Samples.Any(x => !KnowledgeEngineV2Service.AnswerFactsCompatible(x.Text, sample.Text))) continue;
                     var similarity = KnowledgeEngineV2Semantics.TextSimilarity(cluster.Representative ?? string.Empty, sample.Text);
                     if (similarity > bestSimilarity)
                     {
@@ -474,7 +479,7 @@ namespace Bot.Knowledge
             if (record == null) return true;
             if (string.Equals(record.RiskLevel, "high", StringComparison.OrdinalIgnoreCase)
                 || string.Equals(record.RiskLevel, "critical", StringComparison.OrdinalIgnoreCase)) return true;
-            return KnowledgeEngineV2Semantics.IsHighRisk(record.Answer ?? string.Empty);
+            return KnowledgeEngineV2Semantics.IsHighRisk((record.Title ?? string.Empty) + " " + (record.Answer ?? string.Empty));
         }
 
         private static KnowledgeV2RevisionCandidateRow FindPendingByProposal(string seller, string knowledgeId, string proposal)

@@ -77,7 +77,7 @@ def test_ocr_evidence_enriches_knowledge_recall_without_rewriting_buyer_query_or
     assert "hasCuratedImageKnowledge" in resolve
     assert "if (message.Length == 0 && !hasEvidence)" in internal
     assert "if (IsMediaPlaceholder(message)) message = string.Empty;" in internal
-    assert "if (message.Length > 0)" in internal
+    assert "if (!sandbox && message.Length > 0)" in internal
     assert internal.index("UpdateWorkingMemory(shop.ShopKey, seller, buyer, query)") < internal.index(
         "ExtractEntities(evidenceText)"
     )
@@ -654,7 +654,7 @@ def test_conflicting_knowledge_is_not_equivalent_by_text_similarity_alone():
     equivalent = index.split("private static bool AnswersEquivalent(", 1)[1].split("private static double EntitySimilarity", 1)[0]
     assert "!HasAnswerPolarityConflict(left, right)" in equivalent
     assert "SameAnswerNumbers(left, right)" in equivalent
-    assert "a.SequenceEqual(b, StringComparer.Ordinal)" in equivalent
+    assert "NumericTokens(left).SequenceEqual(NumericTokens(right), StringComparer.Ordinal)" in equivalent
     assert "if (exactQuestion) return true;" in index
     assert "allProductionMatches.Any(x => !ReferenceEquals(x, best) && HasConflict(best, x))" in public
     assert "if (!AnswersEquivalent(best.Record.Answer, candidate.Record.Answer)) return false;" in public

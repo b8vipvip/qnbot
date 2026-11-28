@@ -136,7 +136,7 @@ def test_feedback_restore_is_shop_bound_idempotent_and_invalidates_cache():
     source = read("src/Bot/Knowledge/KnowledgeEngineV2FeedbackService.cs")
     restore = source.split("internal static int MergeBackupEvents",1)[1].split("private static bool RemovePending",1)[0]
     assert "shop.ShopKey, sourceShopKey" in restore
-    assert "ids.Add(x.Id)" in restore
+    assert "existing.TryGetValue(row.Id, out old)" in restore
     assert "state.Db.SaveRecordsInTransaction(additions)" in restore
     assert "AggregateCaches.TryRemove(shop.ShopKey" in restore
     assert "messageTime >= pending.SentAt" in source
@@ -159,3 +159,12 @@ def test_feedback_sync_commits_cursor_and_ack_with_event_rows():
     assert "Buyer = string.Empty, Question = string.Empty, Answer = string.Empty" in feedback
     assert "/api/runtime/v1/bot-web/knowledge-v2-feedback-sync" in cloud
     assert "state.FeedbackStatus" in cloud
+
+def test_feedback_cache_expires_and_backup_restore_checks_event_identity():
+    feedback = read("src/Bot/Knowledge/KnowledgeEngineV2FeedbackService.cs")
+    assert "cached.ExpiresUtc > DateTime.UtcNow" in feedback
+    assert "FeedbackUtcTicks(x) >= cutoff" in feedback
+    assert "if (!negative || pending.NegativeBuyerReaction) return;" in feedback
+    assert "FeedbackUtcTicks(old) != FeedbackUtcTicks(row)" in feedback
+    assert 'old.Evidence == "cloud_synced_statistic"' in feedback
+    assert "row.CloudUtcTicks > DateTime.UtcNow.AddMinutes(5).Ticks" in feedback

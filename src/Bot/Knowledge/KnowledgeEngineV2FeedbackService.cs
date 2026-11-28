@@ -103,6 +103,7 @@ namespace Bot.Knowledge
         private sealed class AggregateCache
         {
             public ConcurrentDictionary<string, Aggregate> ByKnowledgeId;
+            public DateTime ExpiresUtc;
         }
 
         private static readonly IShopScopedPathProvider Paths = new ShopScopedPathProvider();
@@ -164,13 +165,13 @@ namespace Bot.Knowledge
             lock (pending.Sync)
             {
                 pending.BuyerFollowup = true;
-                if (negative) pending.NegativeBuyerReaction = true;
+                if (!negative || pending.NegativeBuyerReaction) return;
+                pending.NegativeBuyerReaction = true;
             }
-            if (negative)
-            {
-                AppendEvent(pending.Seller, pending.Buyer, pending.KnowledgeId, "buyer_negative",
-                    pending.Question, pending.Answer, Truncate(text, 160));
-            }
+            // One negative signal per delivered answer, even if the same buyer
+            // notification is replayed by CDP or repeatedly delivered after reconnect.
+            AppendEvent(pending.Seller, pending.Buyer, pending.KnowledgeId, "buyer_negative",
+                pending.Question, pending.Answer, Truncate(text, 160));
         }
 
         public static void ObserveSellerMessage(string seller, string buyer, string text, DateTime messageTime)
@@ -381,20 +382,24 @@ namespace Bot.Knowledge
             var shop = ResolveShopRequired(seller);
             AggregateCache cached;
             if (AggregateCaches.TryGetValue(shop.ShopKey, out cached)
-                && cached != null && cached.ByKnowledgeId != null)
+                && cached != null && cached.ByKnowledgeId != null && cached.ExpiresUtc > DateTime.UtcNow)
                 return cached.ByKnowledgeId;
 
             var state = GetState(shop);
             lock (state.Sync)
             {
                 if (AggregateCaches.TryGetValue(shop.ShopKey, out cached)
-                    && cached != null && cached.ByKnowledgeId != null)
+                    && cached != null && cached.ByKnowledgeId != null && cached.ExpiresUtc > DateTime.UtcNow)
                     return cached.ByKnowledgeId;
                 var rows = state.Db.ReadRecords<KnowledgeV2FeedbackEventRow>(null);
                 var result = new ConcurrentDictionary<string, Aggregate>(StringComparer.Ordinal);
-                foreach (var row in rows.Where(x => x != null && !string.IsNullOrWhiteSpace(x.KnowledgeId)))
+                var cutoff = DateTime.UtcNow.AddDays(-180).Ticks;
+                foreach (var row in rows.Where(x => x != null && !string.IsNullOrWhiteSpace(x.KnowledgeId)
+                    && FeedbackUtcTicks(x) >= cutoff))
                     ApplyEventToAggregate(result, row);
-                var next = new AggregateCache { ByKnowledgeId = result };
+                // Expiration must work even on idle stores with no 200-event
+                // cleanup cycle; align reliability scoring with the Web 180-day window.
+                var next = new AggregateCache { ByKnowledgeId = result, ExpiresUtc = DateTime.UtcNow.AddMinutes(1) };
                 AggregateCaches[shop.ShopKey] = next;
                 return next.ByKnowledgeId;
             }
@@ -623,6 +628,7 @@ namespace Bot.Knowledge
                     || !ids.Add(row.Id) || !knowledgeIds.Contains(row.KnowledgeId)
                     || !types.Contains(row.EventType) || row.CreatedAtTicks <= 0
                     || row.CreatedAtTicks > DateTime.Now.AddMinutes(5).Ticks
+                    || row.CloudUtcTicks < 0 || row.CloudUtcTicks > DateTime.UtcNow.AddMinutes(5).Ticks
                     || (row.Question ?? string.Empty).Length > 800 || (row.Answer ?? string.Empty).Length > 1400
                     || (row.Evidence ?? string.Empty).Length > 500)
                     throw new InvalidDataException("知识包反馈事件无效、重复或没有对应知识。");
@@ -643,10 +649,26 @@ namespace Bot.Knowledge
             var state = GetState(shop);
             lock (state.Sync)
             {
-                var ids = new HashSet<string>(state.Db.ReadRecords<KnowledgeV2FeedbackEventRow>(null)
-                    .Where(x => x != null).Select(x => x.Id), StringComparer.Ordinal);
-                var cutoff = DateTime.Now.AddDays(-180).Ticks;
-                var additions = incoming.Where(x => x.CreatedAtTicks >= cutoff && ids.Add(x.Id)).Cast<object>().ToList();
+                var existing = state.Db.ReadRecords<KnowledgeV2FeedbackEventRow>(null)
+                    .Where(x => x != null).ToDictionary(x => x.Id, StringComparer.Ordinal);
+                var cutoff = DateTime.UtcNow.AddDays(-180).Ticks;
+                var additions = new List<object>();
+                foreach (var row in incoming.Where(x => FeedbackUtcTicks(x) >= cutoff))
+                {
+                    KnowledgeV2FeedbackEventRow old;
+                    if (!existing.TryGetValue(row.Id, out old))
+                    {
+                        additions.Add(row);
+                        continue;
+                    }
+                    if (old.KnowledgeId != row.KnowledgeId || old.EventType != row.EventType
+                        || FeedbackUtcTicks(old) != FeedbackUtcTicks(row))
+                        throw new InvalidDataException("反馈备份包含与当前事件同ID但内容冲突的记录。");
+                    // Cloud statistical mirrors deliberately omit private evidence.
+                    // Restoring the original same-shop backup can safely enrich them.
+                    if (old.Evidence == "cloud_synced_statistic" && row.Evidence != "cloud_synced_statistic")
+                        additions.Add(row);
+                }
                 if (additions.Count > 0)
                 {
                     state.Db.SaveRecordsInTransaction(additions);
