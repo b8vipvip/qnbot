@@ -80,9 +80,11 @@ namespace Bot.ChromeNs
                 .Where(x => x != null && !string.IsNullOrWhiteSpace(x.Text))
                 .OrderBy(x => x.Timestamp)
                 .ToList();
+            cancellationToken.ThrowIfCancellationRequested();
             var dependency = CalculateContextDependency(question, turns);
             var state = ConversationStateService.Build(
                 seller, buyer, question, turns);
+            cancellationToken.ThrowIfCancellationRequested();
             var queryResolution = ContextualQueryRewriteService.Resolve(
                 question, dependency, state, turns);
             var recent = turns.Skip(Math.Max(0, turns.Count - 8)).ToList();
@@ -100,6 +102,7 @@ namespace Bot.ChromeNs
                 SemanticModel = string.Empty,
                 SemanticLatencyMs = 0
             };
+            cancellationToken.ThrowIfCancellationRequested();
             return Task.FromResult(plan);
         }
 

@@ -493,7 +493,7 @@ namespace Bot.Knowledge
             }
         }
 
-        private static List<KnowledgeV2Record> MergeCloudAndLocal(
+        internal static List<KnowledgeV2Record> MergeCloudAndLocal(
             IEnumerable<KnowledgeV2Record> cloudRecords,
             IEnumerable<KnowledgeV2Record> localRecords,
             bool preserveLocalOnly)
@@ -696,7 +696,12 @@ namespace Bot.Knowledge
                 return;
             }
 
-            var sourceFingerprint=Fingerprint(new[]{source});
+            // Retry metadata and usage counters are not a different business answer.
+            // Stabilize the candidate identity across repeated syncs of the same content.
+            var identity = CloneRecord(source);
+            identity.UseCount = identity.AcceptedCount = identity.CorrectionCount = identity.WithdrawCount = 0;
+            identity.CreatedAt = identity.UpdatedAt = identity.LastVerifiedAt = DateTime.MinValue;
+            var sourceFingerprint=Fingerprint(new[]{identity});
             candidate.Id="cloud-conflict-"+sourceFingerprint.Substring(0,24);
             candidate.Title="云同步冲突待审核："+Safe(source.Title,180);
             candidate.SourceType="cloud_sync_conflict_candidate";
@@ -705,6 +710,14 @@ namespace Bot.Knowledge
             candidate.Status="candidate";
             candidate.Authority=Math.Min(candidate.Authority,0.85);
             candidate.Confidence=Math.Min(candidate.Confidence,0.85);
+            var existing = merged.FirstOrDefault(x => string.Equals(x.Id, candidate.Id, StringComparison.Ordinal));
+            if (existing != null)
+            {
+                // A deleted conflict candidate must never reappear on another retry.
+                if (!IsDeleteTombstone(existing) && SameRecordContent(existing, candidate))
+                    MergeRecordMetadata(existing, candidate);
+                return;
+            }
             AddUnique(merged,ids,candidate);
         }
 

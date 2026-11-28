@@ -58,3 +58,15 @@ def test_complete_backup_carries_same_shop_feedback_without_replacing_existing_e
     assert "KnowledgeEngineV2FeedbackService.ValidateBackupEvents(package.FeedbackEvents, package.Records)" in page
     assert "package.SourceShopKey, _shopKey" in page
     assert "KnowledgeEngineV2FeedbackService.MergeBackupEvents" in page
+
+def test_additive_import_and_records_only_export_use_validated_v2_packages():
+    source = read("src/Bot/Knowledge/KnowledgeCenterV2OperationsPages.cs")
+    assert 'ImportPackage("merge")' in source
+    assert 'ImportPackage("append")' in source
+    assert "KnowledgeV2CloudSyncService.MergeCloudAndLocal(before.Records" in source
+    assert "append ? package.Records.Where(x => !before.Records.Any(old => old.Id == x.Id))" in source
+    assert "if (replace && package.Settings != null)" in source
+    assert "var restoredFeedback = !replace" in source
+    export = source.split("private void ExportRecords()", 1)[1].split("private void ImportPackage()", 1)[0]
+    assert "SchemaVersion = KnowledgeEngineV2Constants.SchemaVersion" in export
+    assert "FeedbackEvents = null" in export and "Settings = null" in export

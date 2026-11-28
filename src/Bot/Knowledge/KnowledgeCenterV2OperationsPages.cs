@@ -436,9 +436,11 @@ namespace Bot.Knowledge
             var actions = new WrapPanel();
             var export = Btn("导出V2完整包", 124); export.Click += delegate { InShop(ExportPackage); };
             var import = Btn("导入V2完整包", 124); import.Click += delegate { InShop(ImportPackage); };
+            var merge = Btn("合并V2知识包", 124); merge.Click += delegate { InShop(() => ImportPackage("merge")); };
+            var append = Btn("追加V2知识包", 124); append.Click += delegate { InShop(() => ImportPackage("append")); };
             var exportRecords = Btn("仅导出结构化知识", 142); exportRecords.Click += delegate { InShop(ExportRecords); };
             var rebuild = Btn("重建V2检索索引", 140); rebuild.Click += delegate { InShop(RebuildIndex); };
-            actions.Children.Add(export); actions.Children.Add(import); actions.Children.Add(exportRecords); actions.Children.Add(rebuild);
+            actions.Children.Add(export); actions.Children.Add(import); actions.Children.Add(merge); actions.Children.Add(append); actions.Children.Add(exportRecords); actions.Children.Add(rebuild);
             root.Children.Add(actions);
             _status = new TextBlock { Margin = new Thickness(0, 16, 0, 0), TextWrapping = TextWrapping.Wrap };
             root.Children.Add(_status);
@@ -476,15 +478,26 @@ namespace Bot.Knowledge
                 };
                 if (dialog.ShowDialog(_owner) != true) return;
                 File.WriteAllText(dialog.FileName,
-                    JsonConvert.SerializeObject(KnowledgeEngineV2Repository.LoadAll(_seller), Formatting.Indented),
+                    JsonConvert.SerializeObject(new KnowledgeV2PortablePackage
+                    {
+                        SchemaVersion = KnowledgeEngineV2Constants.SchemaVersion,
+                        ExportedAt = DateTime.Now.ToString("yyyy-MM-dd HH:mm:ss"),
+                        Records = KnowledgeEngineV2Repository.LoadAll(_seller),
+                        Settings = null,
+                        FeedbackEvents = null
+                    }, Formatting.Indented),
                     new System.Text.UTF8Encoding(false));
                 _status.Text = "结构化知识已导出：" + dialog.FileName;
             }
             catch (Exception ex) { MessageBox.Show(_owner, "导出失败：" + ex.Message); }
         }
 
-        private void ImportPackage()
+        private void ImportPackage() { ImportPackage("replace"); }
+
+        private void ImportPackage(string mode)
         {
+            var replace = mode == "replace";
+            var append = mode == "append";
             try
             {
                 var dialog = new OpenFileDialog
@@ -497,7 +510,7 @@ namespace Bot.Knowledge
                     File.ReadAllText(dialog.FileName, System.Text.Encoding.UTF8));
                 if (package.FeedbackEvents != null && package.FeedbackEvents.Count > 0
                     && !string.Equals(package.SourceShopKey, _shopKey, StringComparison.Ordinal))
-                    throw new InvalidDataException("该完整包含其他店铺反馈事件，禁止跨店恢复。");
+                    throw new InvalidDataException("该完整包包含其他店铺反馈事件，禁止跨店恢复。");
                 if (package.FeedbackEvents != null)
                 {
                     var shop = RequireShop();
@@ -506,25 +519,33 @@ namespace Bot.Knowledge
                         throw new InvalidDataException("知识包反馈卖家身份不匹配。");
                 }
                 if (MessageBox.Show(_owner,
-                    "将用导入包的 " + package.Records.Count + " 条记录替换店铺 " + _seller
-                    + "（ShopKey: " + _shopKey + "）的 V2 结构化知识。"
-                    + (package.Records.Count == 0 ? "注意：该包为空，将清空当前知识。" : string.Empty)
-                    + "未包含的旧记录将写入删除标记，已删除的ID不会自动复活。导入前会自动备份现有数据。是否继续？",
+                    "将" + (replace ? "替换" : append ? "仅追加新ID到" : "合并到") + "店铺 " + _seller
+                    + "（ShopKey: " + _shopKey + "）的 V2 知识，导入包含 " + package.Records.Count + " 条记录。"
+                    + (replace && package.Records.Count == 0 ? "注意：该包为空，将清空当前知识。" : string.Empty)
+                    + (replace ? "未包含的旧记录将写入删除标记。" : "保留现有知识及设置；合并时不同内容保留为禁用候选，追加不覆盖已有ID。")
+                    + "已删除的ID不会自动复活。导入前自动备份。是否继续？",
                     "导入完整包", MessageBoxButton.YesNo, MessageBoxImage.Warning) != MessageBoxResult.Yes) return;
 
                 var before = BuildPackage();
                 var expectedFingerprint = KnowledgeEngineV2Repository.ComputeCloudSyncFingerprint(before.Records);
-                var replacement = BuildImportReplacement(before.Records, package.Records);
+                var replacement = replace ? BuildImportReplacement(before.Records, package.Records)
+                    : KnowledgeV2CloudSyncService.MergeCloudAndLocal(before.Records,
+                        append ? package.Records.Where(x => !before.Records.Any(old => old.Id == x.Id)) : package.Records,
+                        preserveLocalOnly: true);
                 var backup = CreateAutomaticBackup(before);
                 if (!KnowledgeEngineV2Repository.TryReplaceAllIfUnchanged(_seller, expectedFingerprint, replacement))
                     throw new InvalidOperationException("备份期间知识库已被自动学习或其他设备修改；未覆盖任何知识，请重新导入。");
-                if (package.Settings != null)
+                if (replace && package.Settings != null)
                     KnowledgeEngineV2Service.SetSettings(_seller, package.Settings.Enabled, package.Settings.Mode,
                         package.Settings.DirectThreshold, package.Settings.MinConfidence);
-                var restoredFeedback = package.FeedbackEvents == null || package.FeedbackEvents.Count == 0 ? 0
+                // In additive modes evidence may describe a conflicting answer or an
+                // incoming ID that was deduplicated. Only restore feedback when the full
+                // package is restored, preserving its original record IDs.
+                var restoredFeedback = !replace || package.FeedbackEvents == null || package.FeedbackEvents.Count == 0 ? 0
                     : KnowledgeEngineV2FeedbackService.MergeBackupEvents(_seller, package.SourceShopKey, package.FeedbackEvents);
                 KnowledgeEngineV2Service.Warm(_seller);
-                _status.Text = "导入完成，共 " + package.Records.Count + " 条；新增反馈 " + restoredFeedback + " 条。导入前备份：" + backup;
+                _status.Text = "导入完成，当前共 " + replacement.Count + " 条（含删除标记及候选）；新增反馈 " + restoredFeedback
+                    + " 条。" + (!replace ? "合并/追加未修改检索设置或恢复反馈事件。" : "") + " 导入前备份：" + backup;
             }
             catch (Exception ex) { MessageBox.Show(_owner, "导入失败：" + ex.Message); }
         }
