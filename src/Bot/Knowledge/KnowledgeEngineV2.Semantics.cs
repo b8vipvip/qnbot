@@ -32,21 +32,36 @@ namespace Bot.Knowledge
 
             if (query.ContextDependent && memory != null && memory.UpdatedAt >= DateTime.Now.AddMinutes(-45))
             {
-                if (query.Entities.Count == 0 && memory.Entities != null)
-                    query.Entities.AddRange(memory.Entities.Take(6));
+                var hasCurrentProduct = query.Entities.Any(IsProductEntity);
+                if (!hasCurrentProduct)
+                {
+                    // A follow-up can introduce a device/feature without naming a
+                    // new product. Preserve every prior explicit product, never
+                    // silently narrow an ambiguous multi-product question.
+                    if (memory.ProductEvidenceConflict) query.ProductEvidenceConflict = true;
+                    if (memory.Entities != null)
+                        query.Entities.AddRange(query.Entities.Count == 0
+                            ? memory.Entities : memory.Entities.Where(IsProductEntity));
+                }
                 if (string.IsNullOrWhiteSpace(query.Subject)) query.Subject = memory.Subject;
                 if (query.Intent == "general") query.Intent = memory.Intent;
                 if (query.Predicate == "general") query.Predicate = memory.Predicate;
                 query.WorkingMemoryReason = "当前消息缺少完整主体，仅补全最近明确业务对象";
             }
-            if (query.Entities.Count(x => x != null && x.StartsWith("product:", StringComparison.OrdinalIgnoreCase)) > 10)
+            if (query.Entities.Where(IsProductEntity).Distinct(StringComparer.OrdinalIgnoreCase).Count() > 10)
                 query.ProductEvidenceConflict = true;
             query.Entities = query.Entities
                 .Where(x => !string.IsNullOrWhiteSpace(x))
                 .Distinct(StringComparer.OrdinalIgnoreCase)
+                .OrderByDescending(IsProductEntity)
                 .Take(10)
                 .ToList();
             return query;
+        }
+
+        internal static bool IsProductEntity(string value)
+        {
+            return !string.IsNullOrWhiteSpace(value) && value.StartsWith("product:", StringComparison.OrdinalIgnoreCase);
         }
 
         public static string DetectIntent(string text)
