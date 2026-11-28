@@ -15,6 +15,7 @@ namespace Bot.Knowledge
         {
             public string ShopKey;
             public DateTime BuiltAt;
+            public readonly string Generation = Guid.NewGuid().ToString("N");
             public List<KnowledgeV2Record> Records;
             public Dictionary<string, HashSet<int>> Exact;
             public Dictionary<string, HashSet<int>> Intent;
@@ -41,6 +42,15 @@ namespace Bot.Knowledge
 
         public static bool IsEnabled(string seller) { return GetSettings(seller).Enabled; }
         public static string GetMode(string seller) { return GetSettings(seller).Mode; }
+
+        internal static bool IsDecisionSnapshotCurrent(string seller, KnowledgeV2Decision decision)
+        {
+            if (decision == null || string.IsNullOrWhiteSpace(decision.SnapshotGeneration)) return false;
+            var shop = ResolveShop(seller);
+            Snapshot current;
+            return shop != null && Snapshots.TryGetValue(shop.ShopKey, out current)
+                && current != null && string.Equals(current.Generation, decision.SnapshotGeneration, StringComparison.Ordinal);
+        }
 
         public static bool IsSnapshotReady(string seller)
         {
@@ -310,6 +320,7 @@ namespace Bot.Knowledge
             }
 
             var snapshot = GetSnapshot(seller);
+            decision.SnapshotGeneration = snapshot.Generation;
             var recallSw = Stopwatch.StartNew();
             var candidates = Recall(snapshot, query);
             decision.CandidateCount = candidates.Count;
