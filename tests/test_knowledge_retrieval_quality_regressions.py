@@ -44,7 +44,7 @@ def test_explicit_product_id_mismatch_cannot_use_product_bound_knowledge():
         semantics.index("public static string FactKey")
     ]
     normalize = semantics[
-        semantics.index("private static List<string> NormalizeProductIds"):
+        semantics.index("internal static List<string> NormalizeProductIds"):
         semantics.index("private static List<string> NormalizeScopeTerms")
     ]
 
@@ -686,3 +686,14 @@ def test_context_and_conditional_advice_share_production_applicability_and_numer
     assert "IsEligibleContextMatch(match, decision.Query)" in runtime
     assert "IsEligibleProductionMatch(match, decision.Query)" in conditional
     assert "record.ProductIds" in runtime
+
+
+def test_cross_scope_governance_indexes_only_overlapping_products():
+    public = read("src/Bot/Knowledge/KnowledgeEngineV2.Service.Public.cs")
+    assert "var productIndex = new Dictionary<string, List<int>>" in public
+    assert "overlapping.UnionWith(productIndex[product]" in public
+    assert "ProductScopesOverlap(left, right)" in public
+    semantics = read("src/Bot/Knowledge/KnowledgeEngineV2.Semantics.cs")
+    assert "private sealed class ScopeExpressionParser" in semantics
+    assert "inner.HasValue ? (bool?)!inner.Value : null" in semantics
+    assert "return requireAffirmative ? value == true : value != false" in semantics
