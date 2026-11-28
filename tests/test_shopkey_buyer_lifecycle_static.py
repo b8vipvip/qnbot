@@ -285,7 +285,7 @@ def test_delivery_echo_and_progress_ui_keys_use_explicit_shopkey():
     assert "string method, int timeoutMs, string shopKey" in send_guard
     assert "ArmLateServiceAttitudeContinuationWatch(buyer, text, method, shopKey)" in send_guard
     assert "VerifyShopIdentityBeforeSendAsync(shop.ShopKey)" in qn
-    assert "client.SendTimiMsg(buyer, text)" in qn
+    assert "client.SendPinnedTimiMsgAsync(buyer, text, dispatch =>" in qn
     assert "IsAuthoritativeShopSession(shop.ShopKey, client.SessionId)" in qn
     assert "SendDeliveryWatchdog.EnsurePending(seller, buyer, text, shop.ShopKey)" in qn
     assert "SendDeliveryWatchdog.MarkSubmissionAccepted(" in qn
