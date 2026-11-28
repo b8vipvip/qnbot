@@ -166,6 +166,7 @@ namespace Bot.ChromeNs
             generationCts.CancelAfter(TimeSpan.FromSeconds(TotalAiBudgetSeconds));
 
             string answer;
+            var offlineFallbackUsed = false;
             try
             {
                 if (workflowDecision != null && workflowDecision.RequiresSend)
@@ -191,7 +192,8 @@ namespace Bot.ChromeNs
                         },
                         burst.ShopKey,
                         knowledgeV2Result == null ? null : knowledgeV2Result.ContextPromptAddon,
-                        knowledgeV2Result == null ? null : knowledgeV2Result.OfflineFallbackDecision);
+                        knowledgeV2Result == null ? null : knowledgeV2Result.OfflineFallbackDecision,
+                        () => offlineFallbackUsed = true);
                     // Legacy synchronous fallbacks may run inside Task.Run and cannot always be force-stopped
                     // after they begin. Race the whole answer task only against the canonical generation
                     // budget. Provider/control-plane timeouts remain upstream concerns and must not be
@@ -309,6 +311,7 @@ namespace Bot.ChromeNs
                         answer, lease.CancellationToken, false,
                         knowledgeV2Result == null ? string.Empty : knowledgeV2Result.ContextPromptAddon);
                 answer = deduplication.Answer;
+                if (deduplication.Regenerated) offlineFallbackUsed = false;
             }
             catch (OperationCanceledException)
             {
@@ -381,6 +384,7 @@ namespace Bot.ChromeNs
             var answerReadyAt = DateTime.Now;
             var answerSource = workflowDecision != null && workflowDecision.RequiresSend
                 ? "Reception Agent"
+                : offlineFallbackUsed ? "Knowledge V2 AI故障兜底"
                 : KnowledgeLearningService.ResolveAnswerSource(
                     burst.SellerNick,
                     burst.BuyerNick,
@@ -475,6 +479,19 @@ namespace Bot.ChromeNs
                 }
             }
 
+            // Revalidate after the configured delay, even when the original answer was
+            // generated from a differently formatted ModelQuestion.
+            if (offlineFallbackUsed && !StreamingBuyerAnswerService.IsV2OfflineFallbackCurrent(
+                burst.SellerNick, burst.BuyerNick, burst.CombinedQuestion, burst.ShopKey,
+                knowledgeV2Result == null ? null : knowledgeV2Result.OfflineFallbackDecision, answer))
+            {
+                const string staleKnowledge = "未发送：Knowledge V2兜底答案在等待期间已修改、删除或不再适用";
+                lease.MarkCompleted("streaming_v2_fallback_stale");
+                if (conversationCtl != null) conversationCtl.SetSendResult(false, staleKnowledge);
+                ResponseProgressTracker.Cancel(burst.SellerNick, burst.BuyerNick, staleKnowledge, burst.ShopKey);
+                return;
+            }
+
             // Human seller replies are observational and intentionally do not cancel the
             // generation. Re-read takeover/timeline evidence after any configured delay
             // and immediately before entering the irreversible send path.
@@ -527,6 +544,10 @@ namespace Bot.ChromeNs
                         + latestRelevanceReason);
                     return false;
                 }
+                if (offlineFallbackUsed && !StreamingBuyerAnswerService.IsV2OfflineFallbackCurrent(
+                    burst.SellerNick, burst.BuyerNick, burst.CombinedQuestion, burst.ShopKey,
+                    knowledgeV2Result == null ? null : knowledgeV2Result.OfflineFallbackDecision, answer))
+                    return false;
                 return workflowDecision == null || !workflowDecision.RequiresSend
                     || ReceptionWorkflowRuntimeService.IsDecisionCurrent(workflowDecision);
             };
@@ -945,7 +966,8 @@ namespace Bot.ChromeNs
             Action<string> partial,
             string shopKey = null,
             string knowledgeV2ContextAddon = null,
-            KnowledgeV2Decision offlineFallbackDecision = null)
+            KnowledgeV2Decision offlineFallbackDecision = null,
+            Action onOfflineFallbackUsed = null)
         {
             token.ThrowIfCancellationRequested();
 
@@ -1054,7 +1076,11 @@ namespace Bot.ChromeNs
             {
                 var offline = TryResolveV2OfflineFallback(
                     seller, buyer, question, shopKey, offlineFallbackDecision, "no_enabled_ai_endpoint");
-                if (!string.IsNullOrWhiteSpace(offline)) return offline;
+                if (!string.IsNullOrWhiteSpace(offline))
+                {
+                    if (onOfflineFallbackUsed != null) onOfflineFallbackUsed();
+                    return offline;
+                }
                 return "错误：没有可用的AI接口；Knowledge V2 未提供通过实时复核的批准答案，已阻止旧知识库离线兜底。";
             }
 
@@ -1121,7 +1147,11 @@ namespace Bot.ChromeNs
             {
                 var offline = TryResolveV2OfflineFallback(
                     seller, buyer, question, shopKey, offlineFallbackDecision, "shop_ai_circuit_open");
-                if (!string.IsNullOrWhiteSpace(offline)) return offline;
+                if (!string.IsNullOrWhiteSpace(offline))
+                {
+                    if (onOfflineFallbackUsed != null) onOfflineFallbackUsed();
+                    return offline;
+                }
                 return "错误：当前店铺AI上游处于熔断保护期，Knowledge V2 未提供通过实时复核的批准答案，已阻止旧知识库离线兜底并建议转人工。";
             }
 
@@ -1149,7 +1179,11 @@ namespace Bot.ChromeNs
             {
                 var offline = TryResolveV2OfflineFallback(
                     seller, buyer, question, shopKey, offlineFallbackDecision, "ai_upstream_exhausted");
-                if (!string.IsNullOrWhiteSpace(offline)) return offline;
+                if (!string.IsNullOrWhiteSpace(offline))
+                {
+                    if (onOfflineFallbackUsed != null) onOfflineFallbackUsed();
+                    return offline;
+                }
                 return "错误：所有AI接口均未返回有效答案；Knowledge V2 未提供通过实时复核的批准答案，已阻止旧知识库兜底。";
             }
             answer = ReplyTranscriptSanitizer.Sanitize(answer);
@@ -1166,13 +1200,25 @@ namespace Bot.ChromeNs
             return answer;
         }
 
+        internal static bool IsV2OfflineFallbackCurrent(
+            string seller, string buyer, string question, string shopKey,
+            KnowledgeV2Decision approvedDecision, string expectedAnswer)
+        {
+            var latest = TryResolveV2OfflineFallback(seller, buyer, question, shopKey,
+                approvedDecision, "final_send_recheck", false);
+            return !string.IsNullOrWhiteSpace(latest)
+                && string.Equals(BotOutboundMessageFormatter.EnsureAiMarker(latest),
+                    BotOutboundMessageFormatter.EnsureAiMarker(expectedAnswer), StringComparison.Ordinal);
+        }
+
         private static string TryResolveV2OfflineFallback(
             string seller,
             string buyer,
             string question,
             string shopKey,
             KnowledgeV2Decision approvedDecision,
-            string reason)
+            string reason,
+            bool recordProvenance = true)
         {
             // This fallback is deliberately V2-only and never opens another
             // knowledge store. It is available only when the V2 runtime
@@ -1233,9 +1279,7 @@ namespace Bot.ChromeNs
                         || !string.Equals(latestMatch.Record.Id, priorMatch.Record.Id, StringComparison.Ordinal))
                         return string.Empty;
 
-                    var persisted = KnowledgeEngineV2Repository.LoadAll(seller)
-                        .FirstOrDefault(x => x != null
-                            && string.Equals(x.Id, latestMatch.Record.Id, StringComparison.Ordinal));
+                    var persisted = KnowledgeEngineV2Repository.LoadCommittedRecord(seller, latestMatch.Record.Id);
                     if (persisted == null || !KnowledgeV2AuthorityPolicy.IsProductionApproved(persisted)
                         || !string.Equals(persisted.Answer, latest.Answer, StringComparison.Ordinal))
                         return string.Empty;
@@ -1248,6 +1292,7 @@ namespace Bot.ChromeNs
                         return string.Empty;
 
                     answer = BotMessageSuffixService.Apply(seller, answer);
+                    if (!recordProvenance) return answer;
                     KnowledgeLearningService.RegisterAnswerSource(
                         seller, buyer, question, answer, "Knowledge V2 AI故障兜底");
                     MessageProcessingTraceService.RecordKnowledgeDecision(

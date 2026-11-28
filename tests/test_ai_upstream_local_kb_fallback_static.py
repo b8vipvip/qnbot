@@ -47,7 +47,8 @@ def test_ai_failure_answer_is_replaced_by_v2_before_the_pipeline_error_gate():
 
     assert "TryResolveV2OfflineFallback(" in reply
     assert '"Knowledge V2 AI故障兜底"' in reply
-    assert "if (!string.IsNullOrWhiteSpace(offline)) return offline;" in reply
+    assert "if (!string.IsNullOrWhiteSpace(offline))" in reply
+    assert "onOfflineFallbackUsed()" in reply
     assert "PreSendAnswerValidator.Validate(" in read("src/Bot/ChromeNs/ReplyDeduplicationService.cs")
     assert "knowledgeV2Result == null ? null : knowledgeV2Result.OfflineFallbackDecision" in pipeline
     assert "KnowledgeV2Decision OfflineFallbackDecision" in runtime
@@ -68,7 +69,7 @@ def test_ai_failure_fallback_is_exact_shop_scoped_and_rejects_stale_or_withdrawn
     assert "latestMatch.Record.Id, priorMatch.Record.Id, StringComparison.Ordinal" in method
     assert "KnowledgeV2AuthorityPolicy.IsProductionApproved(persisted)" in method
     assert "ConversationContextStore.IsWithdrawnAnswer(seller, buyer, answer)" in method
-    assert "KnowledgeEngineV2Repository.LoadAll(seller)" in method
+    assert "KnowledgeEngineV2Repository.LoadCommittedRecord(seller, latestMatch.Record.Id)" in method
     assert "BotFeatureStore.GetKnowledgeBase()" not in method
 
 def test_streaming_reply_retries_only_transient_provider_failures_within_generation_budget():
@@ -145,3 +146,19 @@ def test_pre_send_dedup_requires_verified_shop_scope_and_uses_v2_evidence_only()
     assert "AiFailureKnowledgeFallbackService.TryResolve" not in source
     assert "BotFeatureStore.GetKnowledgeBase()" not in source
 
+
+
+def test_v2_offline_fallback_revalidates_after_delay_and_inside_send_guard():
+    source = read("src/Bot/ChromeNs/BuyerStreamingReplyPipeline.cs")
+    assert "() => offlineFallbackUsed = true" in source
+    assert "if (deduplication.Regenerated) offlineFallbackUsed = false" in source
+    assert 'offlineFallbackUsed ? "Knowledge V2 AI故障兜底"' in source
+    delay = source.index("await Task.Delay(TimeSpan.FromSeconds(directDelaySeconds)")
+    check = source.index("if (offlineFallbackUsed && !StreamingBuyerAnswerService.IsV2OfflineFallbackCurrent(", delay)
+    send_guard = source.index("Func<bool> preSendGuard", check)
+    second = source.index("if (offlineFallbackUsed && !StreamingBuyerAnswerService.IsV2OfflineFallbackCurrent(", send_guard)
+    send = source.index("qn.SendTextWithRetryAsync(", second)
+    assert delay < check < send_guard < second < send
+    assert 'approvedDecision, "final_send_recheck", false' in source
+    assert "if (!recordProvenance) return answer" in source
+    assert "KnowledgeEngineV2Repository.LoadCommittedRecord(seller, latestMatch.Record.Id)" in source
