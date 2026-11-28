@@ -270,3 +270,6 @@ try {
     # leave any locked temp files to runner teardown, never touch live shop data.
     Remove-Item -LiteralPath $root -Recurse -Force -ErrorAction SilentlyContinue
 }
+# Expected abnormal child exits are consumed by assertions above; do not leak
+# their exit status to the GitHub Actions PowerShell wrapper.
+exit 0
