@@ -607,8 +607,8 @@ namespace Bot.Knowledge
             var conflicts = approved.GroupBy(KnowledgeEngineV2Semantics.FactKey)
                 .Where(g => !string.IsNullOrWhiteSpace(g.Key) && g.Count() > 1)
                 .Select(g => new KnowledgeV2Conflict { FactKey = g.Key, Subject = g.First().Subject, Predicate = g.First().Predicate,
-                    Records = g.Where(x => g.Any(y => !ReferenceEquals(x, y) && IsMeaningfulConflictPair(x, y))).ToList() })
-                .Where(x => HasAnswerDisagreement(x.Records)).ToList();
+                    Records = FindConflictMembers(g) })
+                .Where(x => x.Records.Count > 1).ToList();
 
             // Different applicability signatures can conflict for a subset of
             // products/conditions. Surface these for scope editing, not the
@@ -646,6 +646,31 @@ namespace Bot.Knowledge
                 }
             }
             return conflicts;
+        }
+
+        private static List<KnowledgeV2Record> FindConflictMembers(IEnumerable<KnowledgeV2Record> records)
+        {
+            // Duplicate answer text alone cannot contradict itself. Collapse
+            // identical title/alias variants inside each answer group before
+            // pairwise comparison, then map the result back to every record.
+            var groups = records.GroupBy(x => x.Answer ?? string.Empty, StringComparer.Ordinal)
+                .Select(g => g.GroupBy(x => new
+                {
+                    Title = x.Title ?? string.Empty,
+                    Aliases = string.Concat((x.Aliases ?? new List<string>()).Select(a =>
+                        (a ?? string.Empty).Length + ":" + (a ?? string.Empty)))
+                }).Select(v => v.ToList()).ToList()).ToList();
+            var conflicting = new HashSet<KnowledgeV2Record>();
+            for (var i = 0; i < groups.Count; i++)
+            for (var j = i + 1; j < groups.Count; j++)
+            foreach (var left in groups[i])
+            foreach (var right in groups[j])
+                if (IsMeaningfulConflictPair(left[0], right[0]))
+                {
+                    conflicting.UnionWith(left);
+                    conflicting.UnionWith(right);
+                }
+            return records.Where(conflicting.Contains).ToList();
         }
 
         internal static bool TryResolveConflict(string seller, string expectedFingerprint, string factKey, string selectedId, bool asCandidate, string operationReceipt = null)
