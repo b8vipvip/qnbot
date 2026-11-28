@@ -1448,8 +1448,28 @@ namespace Bot.Knowledge
             }
         }
 
+        private static KnowledgeV2MetaRow RemoteMutationReceipt(string key, string action)
+        {
+            if (string.IsNullOrWhiteSpace(key)) return null;
+            if (!Regex.IsMatch(key, @"^[0-9a-f]{64}$")) throw new InvalidOperationException("远程操作凭证无效");
+            return new KnowledgeV2MetaRow { Key = "remote_mutation:" + key, Value = action };
+        }
+
+        internal static bool HasRemoteMutationReceipt(string seller, string key, string action)
+        {
+            var receipt = RemoteMutationReceipt(key, action);
+            if (receipt == null) return false;
+            var state = GetState(ResolveShopRequired(seller));
+            EnsureSchemaInitialized(state);
+            lock (state.Sync)
+            {
+                var found = state.Db.ReadOneRecord<KnowledgeV2MetaRow>(x => x.Key == receipt.Key);
+                return found != null && found.Value == action;
+            }
+        }
+
         public static bool TryRollbackLastBotCorrection(string seller, string knowledgeId, out string result,
-            string expectedRevisionId = null, string expectedFingerprint = null)
+            string expectedRevisionId = null, string expectedFingerprint = null, string operationReceipt = null)
         {
             result = string.Empty;
             knowledgeId = (knowledgeId ?? string.Empty).Trim();
@@ -1496,7 +1516,10 @@ namespace Bot.Knowledge
                     CurrentJson = JsonConvert.SerializeObject(restored),
                     CreatedAtTicks = DateTime.Now.Ticks
                 };
-                state.Db.SaveRecordsInTransaction(new List<object> { ToRow(restored), rollback });
+                var writes = new List<object> { ToRow(restored), rollback };
+                var receipt = RemoteMutationReceipt(operationReceipt, "rollback");
+                if (receipt != null) writes.Add(receipt);
+                state.Db.SaveRecordsInTransaction(writes);
             }
             KnowledgeEngineV2Service.ApplyRecordUpdate(seller, restored);
             string auditError;
@@ -1713,7 +1736,7 @@ namespace Bot.Knowledge
 
         internal static bool TryReplaceAllIfUnchanged(
             string seller,string expectedFingerprint,IEnumerable<KnowledgeV2Record> records,
-            PortableImportRecovery recovery = null)
+            PortableImportRecovery recovery = null, string operationReceipt = null)
         {
             var shop=ResolveShopRequired(seller);
             var state=GetState(shop);
@@ -1750,6 +1773,8 @@ namespace Bot.Knowledge
                     Key = "schema_version",
                     Value = KnowledgeEngineV2Constants.SchemaVersion.ToString()
                 });
+                var receipt = RemoteMutationReceipt(operationReceipt, "conflict_resolve");
+                if (receipt != null) replacementRows.Add(receipt);
                 // The compare-and-swap check and replacement remain under the repository
                 // lock; the actual DELETE + INSERT + metadata write are now one SQLite
                 // transaction, so a process crash cannot leave a partially cleared corpus.
