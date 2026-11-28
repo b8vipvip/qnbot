@@ -31,7 +31,7 @@ def test_v2_cloud_conflicts_preserve_local_facts_as_disabled_review_candidates()
         service.index("private static void AddUnique")
     ]
 
-    assert "MergeCloudAndLocal(records,latestLocal,preserveLocalOnly:!hasBaseline)" in service
+    assert "MergeCloudAndLocal(records,latestLocal,preserveLocalOnly:true)" in service
     assert "cloud_sync_conflict_candidate" in candidate
     assert 'candidate.Enabled=false;' in candidate
     assert 'candidate.Status="candidate";' in candidate
@@ -260,7 +260,8 @@ def test_verified_human_evidence_is_deduplicated_across_different_device_record_
     assert "KnowledgeV2AuthorityPolicy.IsAutoPublishedHumanEvidenceSource(record.SourceType)" in merge
     assert "SameRecordContent(existingEvidence, record)" in merge
     assert "SameRecordContent(evidenceRecord, local)" in merge
-    assert "AddCandidate(merged, mergedIds, record, record.Id)" in merge
+    assert "AddUnique(merged, mergedIds, duplicate)" in merge
+    assert "cloudById[duplicate.Id] = duplicate" in merge
     assert "AddCandidate(merged, mergedIds, local, local.Id)" in merge
     assert "if (preserveLocalOnly || IsDeleteTombstone(local))" in merge
     # The deterministic human-evidence SourceId, not a random record ID, is the cross-device dedupe key.
@@ -405,5 +406,15 @@ def test_delete_evidence_normalization_keeps_all_device_ids_and_handles_clean_cl
     assert "tombstone.Enabled = false" in normalize
     assert 'tombstone.Status = "deleted"' in normalize
     assert "tombstone.Id =" not in normalize
-    assert ": NormalizeEvidenceDeletes(records, DeletedEvidenceKeys(records))" in service
+    assert ": MergeCloudAndLocal(records, Enumerable.Empty<KnowledgeV2Record>(), preserveLocalOnly:true)" in service
     assert "NormalizeEvidenceDeletes(local, DeletedEvidenceKeys(local))" in service
+
+def test_cloud_duplicate_evidence_keeps_existing_ids_without_tombstoning_canonical_record():
+    service = read("src/Bot/Knowledge/KnowledgeV2CloudSyncService.cs")
+    merge = service.split("private static List<KnowledgeV2Record> MergeCloudAndLocal", 1)[1]
+    duplicate = merge.split("var duplicate = CloneRecord(record);", 1)[1].split("continue;", 1)[0]
+    assert 'duplicate.Status = "candidate"' in duplicate
+    assert "duplicate.Enabled = false" in duplicate
+    assert "duplicate.Id =" not in duplicate
+    assert "cloudById[duplicate.Id] = duplicate" in duplicate
+    assert "preserveLocalOnly:true" in service

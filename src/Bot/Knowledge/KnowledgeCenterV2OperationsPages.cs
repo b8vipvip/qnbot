@@ -497,11 +497,15 @@ namespace Bot.Knowledge
                     "将用导入包的 " + package.Records.Count + " 条记录替换店铺 " + _seller
                     + "（ShopKey: " + _shopKey + "）的 V2 结构化知识。"
                     + (package.Records.Count == 0 ? "注意：该包为空，将清空当前知识。" : string.Empty)
-                    + "导入前会自动备份现有数据。是否继续？",
+                    + "未包含的旧记录将写入删除标记，已删除的ID不会自动复活。导入前会自动备份现有数据。是否继续？",
                     "导入完整包", MessageBoxButton.YesNo, MessageBoxImage.Warning) != MessageBoxResult.Yes) return;
 
-                var backup = CreateAutomaticBackup();
-                KnowledgeEngineV2Repository.ReplaceAll(_seller, package.Records);
+                var before = BuildPackage();
+                var expectedFingerprint = KnowledgeEngineV2Repository.ComputeCloudSyncFingerprint(before.Records);
+                var replacement = BuildImportReplacement(before.Records, package.Records);
+                var backup = CreateAutomaticBackup(before);
+                if (!KnowledgeEngineV2Repository.TryReplaceAllIfUnchanged(_seller, expectedFingerprint, replacement))
+                    throw new InvalidOperationException("备份期间知识库已被自动学习或其他设备修改；未覆盖任何知识，请重新导入。");
                 if (package.Settings != null)
                     KnowledgeEngineV2Service.SetSettings(_seller, package.Settings.Enabled, package.Settings.Mode,
                         package.Settings.DirectThreshold, package.Settings.MinConfidence);
@@ -509,6 +513,42 @@ namespace Bot.Knowledge
                 _status.Text = "导入完成，共 " + package.Records.Count + " 条。导入前备份：" + backup;
             }
             catch (Exception ex) { MessageBox.Show(_owner, "导入失败：" + ex.Message); }
+        }
+
+        internal static List<KnowledgeV2Record> BuildImportReplacement(
+            IEnumerable<KnowledgeV2Record> current, IEnumerable<KnowledgeV2Record> incoming)
+        {
+            var rows = (incoming ?? Enumerable.Empty<KnowledgeV2Record>())
+                .ToDictionary(x => x.Id, StringComparer.Ordinal);
+            foreach (var old in current ?? Enumerable.Empty<KnowledgeV2Record>())
+            {
+                if (old == null || string.IsNullOrWhiteSpace(old.Id)) continue;
+                if (string.Equals(old.Status, "deleted", StringComparison.OrdinalIgnoreCase))
+                {
+                    // Explicit deletion remains authoritative even when an older package is imported.
+                    rows[old.Id] = old;
+                    continue;
+                }
+                if (rows.ContainsKey(old.Id)) continue;
+                var tombstone = JsonConvert.DeserializeObject<KnowledgeV2Record>(JsonConvert.SerializeObject(old));
+                tombstone.Enabled = false;
+                tombstone.Status = "deleted";
+                tombstone.UpdatedAt = DateTime.Now;
+                rows.Add(tombstone.Id, tombstone);
+            }
+            // A previously deleted human-evidence source must not return under another random ID.
+            var deletedEvidence = new HashSet<string>(rows.Values
+                .Where(x => string.Equals(x.Status, "deleted", StringComparison.OrdinalIgnoreCase)
+                    && KnowledgeV2AuthorityPolicy.IsAutoPublishedHumanEvidenceSource(x.SourceType))
+                .Select(x => (x.SourceId ?? string.Empty).Trim()).Where(x => x.Length > 0), StringComparer.Ordinal);
+            foreach (var row in rows.Values)
+            {
+                if (!KnowledgeV2AuthorityPolicy.IsAutoPublishedHumanEvidenceSource(row.SourceType)
+                    || !deletedEvidence.Contains((row.SourceId ?? string.Empty).Trim())) continue;
+                row.Enabled = false;
+                row.Status = "deleted";
+            }
+            return rows.Values.ToList();
         }
 
         internal static KnowledgeV2PortablePackage ParseValidatedPackage(string json)
@@ -536,6 +576,8 @@ namespace Bot.Knowledge
             }
 
             var package = root.ToObject<KnowledgeV2PortablePackage>();
+            foreach (var record in package.Records)
+                record.Id = record.Id.Trim();
             var settings = root.GetValue("Settings", StringComparison.OrdinalIgnoreCase);
             if (settings == null || settings.Type == JTokenType.Null)
                 package.Settings = null;
@@ -577,13 +619,13 @@ namespace Bot.Knowledge
             };
         }
 
-        private string CreateAutomaticBackup()
+        private string CreateAutomaticBackup(KnowledgeV2PortablePackage snapshot = null)
         {
             var dbPath = KnowledgeEngineV2Repository.GetDatabasePath(_seller);
             var root = Path.Combine(Path.GetDirectoryName(dbPath) ?? string.Empty, "backups");
             Directory.CreateDirectory(root);
             var path = Path.Combine(root, "knowledge-center-v2-before-import-" + DateTime.Now.ToString("yyyyMMdd-HHmmss-fff") + "-" + Guid.NewGuid().ToString("N") + ".json");
-            File.WriteAllText(path, JsonConvert.SerializeObject(BuildPackage(), Formatting.Indented), new System.Text.UTF8Encoding(false));
+            File.WriteAllText(path, JsonConvert.SerializeObject(snapshot ?? BuildPackage(), Formatting.Indented), new System.Text.UTF8Encoding(false));
             return path;
         }
 

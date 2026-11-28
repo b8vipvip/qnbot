@@ -8,7 +8,7 @@ def read(path):
 def test_v2_package_rejects_invalid_shape_and_duplicate_ids_before_replacement():
     source = read("src/Bot/Knowledge/KnowledgeCenterV2OperationsPages.cs")
     page = source.split("internal sealed class KnowledgeV2ImportExportPage", 1)[1].split("internal sealed class KnowledgeV2SettingsPage", 1)[0]
-    assert page.index("var package = ParseValidatedPackage(") < page.index("var backup = CreateAutomaticBackup();") < page.index("KnowledgeEngineV2Repository.ReplaceAll")
+    assert page.index("var package = ParseValidatedPackage(") < page.index("var backup = CreateAutomaticBackup(before);") < page.index("KnowledgeEngineV2Repository.TryReplaceAllIfUnchanged")
     assert "version.Type != JTokenType.Integer" in page
     assert "version.Value<long>() != KnowledgeEngineV2Constants.SchemaVersion || rows == null" in page
     assert "!ids.Add(((string)id).Trim())" in page
@@ -39,3 +39,14 @@ def test_restored_non_finite_thresholds_and_reviewed_write_races_are_guarded():
     review = read("src/Bot/ChromeNs/ReviewedKnowledgeLearningService.cs")
     assert "TrySaveReviewedDirectAnswer(" in review
     assert "KnowledgeEngineV2Repository.Save(" not in review
+
+def test_portable_import_preserves_tombstones_and_uses_exact_backup_snapshot_for_cas():
+    source = read("src/Bot/Knowledge/KnowledgeCenterV2OperationsPages.cs")
+    assert "ComputeCloudSyncFingerprint(before.Records)" in source
+    assert "BuildImportReplacement(before.Records, package.Records)" in source
+    assert "CreateAutomaticBackup(before)" in source
+    assert "TryReplaceAllIfUnchanged(_seller, expectedFingerprint, replacement)" in source
+    assert "snapshot ?? BuildPackage()" in source
+    assert 'tombstone.Status = "deleted"' in source
+    assert "rows[old.Id] = old;" in source
+    assert "deletedEvidence.Contains((row.SourceId ?? string.Empty).Trim())" in source

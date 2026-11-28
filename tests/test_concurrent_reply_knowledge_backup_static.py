@@ -37,7 +37,7 @@ def test_knowledge_center_has_complete_package_import_export():
     assert 'new KnowledgeV2ImportExportPage(_owner, _seller, _shopKey)' in center
     assert '导入V2完整包' in io
     assert '导出V2完整包' in io
-    assert "KnowledgeEngineV2Repository.ReplaceAll(_seller, package.Records)" in io
+    assert "KnowledgeEngineV2Repository.TryReplaceAllIfUnchanged(_seller, expectedFingerprint, replacement)" in io
     assert "Settings = KnowledgeEngineV2Service.GetSettingsView(_seller)" in io
     assert "ParseValidatedPackage" in io
     assert "CreateAutomaticBackup()" in io

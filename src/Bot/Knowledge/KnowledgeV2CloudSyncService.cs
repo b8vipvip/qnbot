@@ -375,8 +375,8 @@ namespace Bot.Knowledge
                                 ? !string.Equals(latestFingerprint,state.Fingerprint,StringComparison.Ordinal)
                                 : latestLocal.Count>0;
                             var merged=localDirty
-                                ? MergeCloudAndLocal(records,latestLocal,preserveLocalOnly:!hasBaseline)
-                                : NormalizeEvidenceDeletes(records, DeletedEvidenceKeys(records));
+                                ? MergeCloudAndLocal(records,latestLocal,preserveLocalOnly:true)
+                                : MergeCloudAndLocal(records, Enumerable.Empty<KnowledgeV2Record>(), preserveLocalOnly:true);
                             var mergedFingerprint=Fingerprint(merged);
 
                             if(!string.Equals(mergedFingerprint,latestFingerprint,StringComparison.Ordinal))
@@ -528,8 +528,16 @@ namespace Bot.Knowledge
                 {
                     if (SameRecordContent(existingEvidence, record))
                         MergeRecordMetadata(existingEvidence, record);
-                    else
-                        AddCandidate(merged, mergedIds, record, record.Id);
+                    // The server requires every previously committed ID to remain present.
+                    // Do not tombstone this duplicate: an evidence-key tombstone would delete
+                    // the canonical active record too. Retain a disabled candidate at its ID.
+                    var duplicate = CloneRecord(record);
+                    duplicate.SourceType = "cloud_sync_conflict_candidate";
+                    duplicate.SourceId = record.Id;
+                    duplicate.Enabled = false;
+                    duplicate.Status = "candidate";
+                    AddUnique(merged, mergedIds, duplicate);
+                    cloudById[duplicate.Id] = duplicate;
                     continue;
                 }
 
