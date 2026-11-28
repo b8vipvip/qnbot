@@ -104,7 +104,8 @@ def test_conflict_is_scoped_to_same_fact_key():
 def test_working_memory_only_supplements_context_dependent_messages():
     semantics = read("src/Bot/Knowledge/KnowledgeEngineV2.Semantics.cs")
     assert 'if (query.ContextDependent && memory != null' in semantics
-    assert 'if (query.Entities.Count == 0 && memory.Entities != null)' in semantics
+    assert 'if (!hasCurrentProduct)' in semantics
+    assert 'memory.Entities : memory.Entities.Where(IsProductEntity)' in semantics
     assert 'if (query.Predicate == "general") query.Predicate = memory.Predicate;' in semantics
 
 
