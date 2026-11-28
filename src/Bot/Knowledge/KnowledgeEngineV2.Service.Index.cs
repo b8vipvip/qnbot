@@ -190,6 +190,35 @@ namespace Bot.Knowledge
             return IsMeaningfulConflictPair(best.Record, second.Record);
         }
 
+        private static bool HasApplicableScopedConflict(KnowledgeV2Match best, KnowledgeV2Match other, KnowledgeV2Query query)
+        {
+            if (best == null || other == null || best.Record == null || other.Record == null
+                || query == null || best.Score < 0.78 || other.Score < 0.74
+                || !KnowledgeEngineV2Semantics.ProductScopesOverlap(best.Record, other.Record))
+                return false;
+            var left = best.Record;
+            var right = other.Record;
+            if ((left.ProductIds == null || left.ProductIds.Count == 0)
+                && (right.ProductIds == null || right.ProductIds.Count == 0)
+                && (left.Conditions == null || left.Conditions.Count == 0)
+                && (right.Conditions == null || right.Conditions.Count == 0)
+                && (left.RequiredContext == null || left.RequiredContext.Count == 0)
+                && (right.RequiredContext == null || right.RequiredContext.Count == 0)
+                && (left.Exclusions == null || left.Exclusions.Count == 0)
+                && (right.Exclusions == null || right.Exclusions.Count == 0))
+                return false;
+            // Both candidates have already passed the same query applicability
+            // gate. Different condition signatures do not resolve overlapping
+            // business claims by themselves.
+            if (IsMeaningfulConflictPair(left, right)) return true;
+            if (best.PredicateScore < 0.99 || other.PredicateScore < 0.99
+                || best.IntentScore < 0.75 || other.IntentScore < 0.75
+                || KnowledgeEngineV2Semantics.TextSimilarity(left.Title, right.Title) < 0.86
+                || !SameAnswerNumbers(left.Title, right.Title))
+                return false;
+            return !AnswerFactsCompatible(left.Answer, right.Answer);
+        }
+
         private static bool HasAnswerDisagreement(List<KnowledgeV2Record> records)
         {
             records = records ?? new List<KnowledgeV2Record>();
@@ -212,7 +241,8 @@ namespace Bot.Knowledge
         /// </summary>
         private static bool IsMeaningfulConflictPair(KnowledgeV2Record left, KnowledgeV2Record right)
         {
-            if (left == null || right == null) return false;
+            if (left == null || right == null
+                || !KnowledgeEngineV2Semantics.ProductScopesOverlap(left, right)) return false;
             var exactQuestion = (left.Aliases ?? new List<string>()).Concat(new[] { left.Title })
                 .Any(a => (right.Aliases ?? new List<string>()).Concat(new[] { right.Title })
                     .Any(b => ExactQuestionMatches(a, b)));
