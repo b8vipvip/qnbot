@@ -24,6 +24,10 @@ Assert-Equal ($polarity.Invoke($null, @('A支持，B不支持'))) 0 'mixed polar
 Assert-Equal ($scope.Invoke($null, @('我没有会员', '会员'))) $false 'negative scope'
 Assert-Equal ($scope.Invoke($null, @('我有会员', '会员'))) $true 'affirmative scope'
 Assert-Equal ($scope.Invoke($null, @('版本1.5', '版本15'))) $false 'version punctuation'
+Assert-Equal ($scope.Invoke($null, @('会员未开通', '会员'))) $false 'suffix-negated condition'
+Assert-Equal ($scope.Invoke($null, @('如果有会员', '会员'))) $false 'hypothetical condition'
+Assert-Equal ($scope.Invoke($null, @('版本1.50', '版本1.5'))) $false 'numeric prefix'
+
 $recordType = $assembly.GetType('Bot.Knowledge.KnowledgeV2Record', $true)
 $queryType = $assembly.GetType('Bot.Knowledge.KnowledgeV2Query', $true)
 $record = [Activator]::CreateInstance($recordType)
@@ -65,6 +69,17 @@ Assert-Equal ($conflictProperty.GetValue($follow, $null)) $true 'overflow ambigu
 $follow = $parse.Invoke($null, [object[]]@('这款商品ID:12345678 是否支持', $memory))
 Assert-Equal ($conflictProperty.GetValue($follow, $null)) $false 'explicit fresh product replaces previous ambiguity'
 
+
+$scopedNumbers = $validator.GetMethod('HasUnverifiedScopedNumbers', $flags)
+$price = "V2知识1：`n问题：首单多少钱`n答案：首单价格10元`n商品ID：12345678`n适用条件：首单`n"
+Assert-Equal ($scopedNumbers.Invoke($null, @('商品ID:12345678 首单多少钱','首单价格10元',$price,''))) $false 'same product and qualifier'
+Assert-Equal ($scopedNumbers.Invoke($null, @('商品ID:87654321 首单多少钱','首单价格10元',$price,''))) $true 'price from wrong product'
+Assert-Equal ($scopedNumbers.Invoke($null, @('商品ID:12345678 续费多少钱','续费10元',$price,''))) $true 'renewal cannot inherit first order price'
+Assert-Equal ($scopedNumbers.Invoke($null, @('商品ID:12345678 多少钱','价格10元',$price,''))) $true 'omitted first order condition'
+Assert-Equal ($scopedNumbers.Invoke($null, @('商品ID:12345678 退款多少','退款10元',$price,''))) $true 'sale price cannot authorize refund'
+$shipping = "V2知识1：`n问题：发货时效`n答案：发货2天`n商品ID：12345678`n"
+Assert-Equal ($scopedNumbers.Invoke($null, @('商品ID:12345678 发货多久','发货2天',$shipping,''))) $false 'shipping time is supported'
+Assert-Equal ($scopedNumbers.Invoke($null, @('商品ID:12345678 退款多久','退款2天',$shipping,''))) $true 'shipping time cannot become refund time'
 $unverified = $validator.GetMethod('HasUnverifiedProductConclusion', $flags)
 $promise = $validator.GetMethod('HasTransactionalPromise', $flags)
 $overlap = $semantics.GetMethod('ProductScopesOverlap', $flags)
