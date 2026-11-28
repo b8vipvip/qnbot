@@ -485,7 +485,7 @@ def test_windows_cloud_sync_recovers_missing_tombstone_snapshot_from_cloud():
     assert "Backup(shop, latestLocal, cloudRevision)" in recovery
     assert recovery.index("Backup(shop, latestLocal, cloudRevision)") < recovery.index("TryReplaceAllIfUnchanged")
     assert "local_changed_during_tombstone_recovery" in recovery
-    assert "PersistState(shop, state, cloudRevision, cloudFingerprint)" in recovery
+    assert "PersistState(shop, state, cloudRevision, cloudFingerprint, records)" in recovery
 
 @pytest.mark.skipif(importlib.util.find_spec("fastapi") is None, reason="server dependencies are not installed")
 def test_feedback_two_devices_retry_and_paginate_without_duplicate_counts(tmp_path):
