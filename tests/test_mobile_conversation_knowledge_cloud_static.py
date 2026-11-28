@@ -68,7 +68,7 @@ def test_mobile_page_has_buyer_list_detail_long_press_and_knowledge_management()
     assert 'id="knowledgeMergeImportBtn"' in html
     assert 'id="knowledgeReplaceImportBtn"' in html
     assert 'id="knowledgeImportFile"' in html
-    assert 'src="/static/bot-web-v2.js?v=13"' in html
+    assert 'src="/static/bot-web-v2.js?v=14"' in html
     assert 'id="messageActionSheet"' in html
     assert "ORDER BY" not in js
     assert "bindLongPress" in js
@@ -76,8 +76,8 @@ def test_mobile_page_has_buyer_list_detail_long_press_and_knowledge_management()
     assert "inferKnowledgePair" in js
     assert "/api/bot-web/conversations" in js
     assert "/api/bot-web/knowledge" in js
-    assert "/api/bot-web/knowledge/export" in js
-    assert "/api/bot-web/knowledge/import" in js
+    assert "/api/bot-web/knowledge-v2/export" in js
+    assert "/api/bot-web/knowledge-v2/import" in js
     assert "replace_confirmed" in js
     assert "Windows 应用前会自动备份本店知识" in js
     assert ".conversation-item" in css

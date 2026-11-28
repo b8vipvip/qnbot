@@ -126,7 +126,7 @@ def test_web_v2_edits_use_compare_and_swap_to_prevent_stale_device_overwrites():
     assert "expected_revision:state.knowledgeV2EditRevision" in js
     assert "err.status===409" in js
     assert "await loadKnowledgeV2(false)" in js
-    assert 'bot-web-v2.js?v=13' in html
+    assert 'bot-web-v2.js?v=14' in html
 
 
 class _V2CasFakeControlPlane:
@@ -536,3 +536,37 @@ def test_web_delete_preserves_tombstone_and_rejects_resurrection(tmp_path):
     assert "knowledgeV2EditRevision!==state.knowledgeV2Revision" in js
     assert "expected_revision:state.knowledgeV2EditRevision" in js
     assert "/api/bot-web/knowledge-v2/feedback" in js
+
+@pytest.mark.skipif(importlib.util.find_spec("fastapi") is None, reason="server dependencies are not installed")
+def test_v2_web_packages_and_backups_are_cas_guarded_and_do_not_restore_deleted_ids(tmp_path):
+    from fastapi import HTTPException
+    m=_load_v2_cas_module(tmp_path)
+    original=_v2_cas_record("first")
+    m._save(1,[original],"windows",expected_revision=0)
+    pkg=m.web_v2_export({"id":1})
+    assert pkg["SchemaVersion"]==2 and pkg["Records"]==[original]
+    conflicting=dict(original,Answer="changed")
+    payload=m.KnowledgeV2PackageInput(expected_revision=1,mode="merge",package=dict(pkg,Records=[conflicting]))
+    merged=m.web_v2_import(payload,{"id":1})
+    assert len(merged["records"])==2
+    assert any(x["Status"]=="candidate" and not x["Enabled"] for x in merged["records"])
+    with pytest.raises(HTTPException) as stale:
+        m.web_v2_import(payload,{"id":1})
+    assert stale.value.status_code==409
+    m.web_put(m.KnowledgeV2WebInput(records=[],expected_revision=2),{"id":1})
+    backups=m.web_v2_backups(client={"id":1})["backups"]
+    prior=next(x for x in backups if x["revision"]==1)
+    restored=m.web_v2_restore(prior["id"],m.KnowledgeV2RestoreInput(expected_revision=3,restore_confirmed=True),{"id":1})
+    assert all(x["Status"]=="deleted" for x in restored["records"])
+
+def test_web_v2_editor_and_packages_do_not_call_legacy_knowledge_api():
+    js=read(ROOT/"services/api-control-plane/static/bot-web-v2.js")
+    html=read(ROOT/"services/api-control-plane/static/bot-web.html")
+    assert 'openKnowledgeV2Dialog(null,p.question,p.answer)' in js
+    assert 'api("/api/bot-web/knowledge-v2/export")' in js
+    assert 'api("/api/bot-web/knowledge-v2/import"' in js
+    assert '/api/bot-web/knowledge/' not in js
+    assert '/api/bot-web/knowledge?' not in js
+    assert 'id="knowledgeDialog"' not in html
+    render=js.split("function renderKnowledgeV2(",1)[1].split("function openKnowledgeV2Dialog",1)[0]
+    assert 'esc(quality)' in render

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import hashlib
 import math
 import time
 import uuid
@@ -28,6 +29,16 @@ class KnowledgeV2FeedbackInput(BaseModel):
 class KnowledgeV2WebInput(BaseModel):
     records: list[dict[str, Any]]
     expected_revision: int
+
+class KnowledgeV2PackageInput(BaseModel):
+    expected_revision: int
+    mode: str
+    replace_confirmed: bool = False
+    package: dict[str, Any]
+
+class KnowledgeV2RestoreInput(BaseModel):
+    expected_revision: int
+    restore_confirmed: bool = False
 
 class KnowledgeV2SmartImportInput(BaseModel):
     text: str
@@ -61,6 +72,12 @@ def init_db():
             )
         """)
 
+        conn.execute("""CREATE TABLE IF NOT EXISTS bot_knowledge_v2_backups (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            client_id INTEGER NOT NULL, revision INTEGER NOT NULL, records_json TEXT NOT NULL,
+            created_at TEXT NOT NULL, reason TEXT NOT NULL,
+            UNIQUE(client_id,revision), FOREIGN KEY(client_id) REFERENCES client_tokens(id) ON DELETE CASCADE
+        )""")
         conn.execute("""CREATE TABLE IF NOT EXISTS bot_knowledge_v2_feedback_epoch (
             id INTEGER PRIMARY KEY CHECK(id=1), epoch TEXT NOT NULL)""")
         conn.execute("INSERT OR IGNORE INTO bot_knowledge_v2_feedback_epoch(id,epoch) VALUES(1,?)", (uuid.uuid4().hex,))
@@ -231,6 +248,8 @@ def _state(client_id):
 
 def _save(client_id, records, updated_by, expected_revision=None, raise_on_conflict=False):
     records=_validate_records(records)
+    if any(not row.get("Id") for row in records):
+        raise HTTPException(status_code=400,detail="Knowledge V2 每条记录必须具有稳定ID")
     encoded=json.dumps(records,ensure_ascii=False,separators=(",",":"),sort_keys=True)
     now=_cp.iso_now()
     with _cp.db() as conn:
@@ -279,6 +298,11 @@ def _save(client_id, records, updated_by, expected_revision=None, raise_on_confl
         if encoded==current_encoded:
             return current
         revision=current["revision"]+1
+        if updated_by=="web":
+            conn.execute("""INSERT OR IGNORE INTO bot_knowledge_v2_backups(client_id,revision,records_json,created_at,reason)
+                VALUES(?,?,?,?,?)""",(client_id,current["revision"],current_encoded,now,"before_web_write"))
+            conn.execute("""DELETE FROM bot_knowledge_v2_backups WHERE client_id=? AND id NOT IN
+                (SELECT id FROM bot_knowledge_v2_backups WHERE client_id=? ORDER BY id DESC LIMIT 30)""",(client_id,client_id))
         conn.execute("""INSERT INTO bot_knowledge_v2_state(client_id,revision,records_json,updated_at,updated_by)
           VALUES(?,?,?,?,?) ON CONFLICT(client_id) DO UPDATE SET revision=excluded.revision,records_json=excluded.records_json,updated_at=excluded.updated_at,updated_by=excluded.updated_by""",
           (client_id,revision,encoded,now,updated_by))
@@ -297,6 +321,80 @@ def web_put(payload: KnowledgeV2WebInput, client=Depends(bot_web_console._web_cl
         expected_revision=payload.expected_revision,
         raise_on_conflict=True,
     )
+
+def _package_records(package):
+    if type(package.get("SchemaVersion")) is not int or package["SchemaVersion"]!=2 or not isinstance(package.get("Records"),list):
+        raise HTTPException(status_code=400,detail="请选择 SchemaVersion=2 的结构化知识包")
+    if package.get("Settings") is not None or package.get("FeedbackEvents"):
+        raise HTTPException(status_code=400,detail="含检索设置或私人反馈的完整包请在原店铺Windows恢复")
+    rows=_validate_records(package["Records"])
+    if any(not row.get("Id") for row in rows):
+        raise HTTPException(status_code=400,detail="知识包记录缺少稳定ID")
+    return rows
+
+def _deleted(row):
+    return row.get("Enabled") is False and str(row.get("Status") or "").lower()=="deleted"
+
+def _merge_web_package(current, incoming, mode):
+    old={r["Id"]:r for r in current}
+    if mode=="replace":
+        # The ordinary web CAS writer adds missing tombstones; an older backup
+        # cannot resurrect an explicitly deleted ID.
+        return [old[r["Id"]] if r["Id"] in old and _deleted(old[r["Id"]]) else r for r in incoming]
+    result=dict(old)
+    metadata={"CreatedAt","UpdatedAt","LastVerifiedAt","UseCount","AcceptedCount","CorrectionCount","WithdrawCount"}
+    def content(r):
+        return {k:v for k,v in r.items() if k not in metadata}
+    for r in incoming:
+        rid=r["Id"]
+        if rid not in result:
+            result[rid]=r
+        elif mode=="merge" and not _deleted(result[rid]) and content(result[rid])!=content(r):
+            # Preserve an incoming explicit deletion instead of making it an active conflict.
+            if _deleted(r):
+                result[rid]=r
+                continue
+            digest=hashlib.sha256(json.dumps(content(r),sort_keys=True,ensure_ascii=False,separators=(",",":")).encode("utf-8")).hexdigest()[:24]
+            cid="web-conflict-"+digest
+            result.setdefault(cid,dict(r,Id=cid,SourceType="cloud_sync_conflict_candidate",SourceId=rid,Enabled=False,Status="candidate"))
+    return list(result.values())
+
+@router.get("/api/bot-web/knowledge-v2/export")
+def web_v2_export(client=Depends(bot_web_console._web_client)):
+    state=_state(int(client["id"]))
+    return {"SchemaVersion":2,"ExportedAt":_cp.iso_now(),"Records":state["records"],"Settings":None,"FeedbackEvents":None}
+
+@router.post("/api/bot-web/knowledge-v2/import")
+def web_v2_import(payload: KnowledgeV2PackageInput,client=Depends(bot_web_console._web_client)):
+    if payload.mode not in ("replace","merge","append") or (payload.mode=="replace" and not payload.replace_confirmed):
+        raise HTTPException(status_code=400,detail="导入模式无效或未确认替换")
+    rows=_package_records(payload.package)
+    client_id=int(client["id"])
+    current=_state(client_id)
+    merged=_merge_web_package(current["records"],rows,payload.mode)
+    return _save(client_id,merged,"web",expected_revision=payload.expected_revision,raise_on_conflict=True)
+
+@router.get("/api/bot-web/knowledge-v2/backups")
+def web_v2_backups(limit:int=30,client=Depends(bot_web_console._web_client)):
+    with _cp.db() as conn:
+        rows=conn.execute("""SELECT id,revision,created_at,reason,length(CAST(records_json AS BLOB)) AS bytes
+            FROM bot_knowledge_v2_backups WHERE client_id=? ORDER BY id DESC LIMIT ?""",
+            (int(client["id"]),max(1,min(30,limit)))).fetchall()
+    return {"backups":[dict(row) for row in rows]}
+
+@router.post("/api/bot-web/knowledge-v2/backups/{backup_id}/restore")
+def web_v2_restore(backup_id:int,payload:KnowledgeV2RestoreInput,client=Depends(bot_web_console._web_client)):
+    if not payload.restore_confirmed:
+        raise HTTPException(status_code=400,detail="必须明确确认恢复")
+    client_id=int(client["id"])
+    with _cp.db() as conn:
+        row=conn.execute("SELECT revision,records_json FROM bot_knowledge_v2_backups WHERE id=? AND client_id=?",(backup_id,client_id)).fetchone()
+    if not row:
+        raise HTTPException(status_code=404,detail="本店知识备份不存在")
+    current=_state(client_id)
+    merged=_merge_web_package(current["records"],json.loads(row["records_json"]),"replace")
+    result=_save(client_id,merged,"web",expected_revision=payload.expected_revision,raise_on_conflict=True)
+    return dict(result,restored_from_revision=row["revision"])
 
 @router.post("/api/runtime/v1/bot-web/knowledge-v2-sync")
 def runtime_sync(payload: KnowledgeV2SyncInput, request: Request, x_shop_key: str | None = Header(default=None)):
