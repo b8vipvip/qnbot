@@ -183,7 +183,7 @@ namespace Bot.ChromeNs
             List<KnowledgeV2Record> knowledge;
             try
             {
-                knowledge = KnowledgeEngineV2Service.GetRecords(seller)
+                knowledge = KnowledgeEngineV2Service.GetProductionContextRecords(seller)
                     .Where(x => x != null && x.Enabled
                         && string.Equals(x.Status, "active", StringComparison.OrdinalIgnoreCase)
                         && KnowledgeV2AuthorityPolicy.IsProductionApproved(x))

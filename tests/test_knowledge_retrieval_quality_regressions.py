@@ -284,7 +284,7 @@ def test_conversation_entities_only_use_production_approved_v2_records():
         state.index("private static List<string> ExtractKnownEntities"):
         state.index("private static IEnumerable<string> CandidateEntityTerms")
     ]
-    assert "KnowledgeEngineV2Service.GetRecords(seller)" in entity
+    assert "KnowledgeEngineV2Service.GetProductionContextRecords(seller)" in entity
     assert "KnowledgeV2AuthorityPolicy.IsProductionApproved(x)" in entity
     assert "BotFeatureStore.GetKnowledgeBase()" not in entity
     assert "KnowledgeMemoryEngine" not in state
@@ -629,3 +629,12 @@ def test_exact_aliases_survive_broad_recall_budget_for_conflict_detection():
     assert ".Take(Math.Max(0, 96 - exactIds.Count))" in recall
     assert "new HashSet<int>(exactIds)" in recall
     assert "selected.UnionWith(ordered)" in recall
+
+
+def test_context_entity_extraction_reuses_production_snapshot_not_full_database():
+    source = read("src/Bot/Knowledge/KnowledgeEngineV2.Service.Public.cs")
+    method = source.split("internal static IEnumerable<KnowledgeV2Record> GetProductionContextRecords", 1)[1].split("public static List<KnowledgeV2Record> GetRecords", 1)[0]
+    assert "GetSnapshot(seller).Records" in method
+    assert "KnowledgeV2AuthorityPolicy.IsProductionApproved" in method
+    assert "ShopReceptionPolicy.IsQuarantined" in method
+    assert "KnowledgeEngineV2Repository.LoadAll" not in method

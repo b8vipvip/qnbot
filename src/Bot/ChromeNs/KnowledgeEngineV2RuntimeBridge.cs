@@ -237,6 +237,25 @@ namespace Bot.ChromeNs
                     + burst.BuyerNick
                     + ", phase=" + (commerceAuthority.CommerceContext == null ? string.Empty : commerceAuthority.CommerceContext.PurchasePhase)
                     + ", reason=" + commerceAuthority.Reason);
+                // Order-dependent questions still need applicable V2 facts for AI.
+                // No ordinary local terminal reply is permitted in this branch.
+                try
+                {
+                    var contextualDecision = KnowledgeEngineV2Service.ResolveWithCommerceContext(
+                        burst.SellerNick, burst.BuyerNick, retrievalQuestion, commerceAuthority.CommerceContext);
+                    if (contextualDecision != null)
+                    {
+                        contextualDecision.CanDirectReply = false;
+                        contextualDecision.Answer = string.Empty;
+                        if (contextualDecision.Query != null)
+                            contextualDecision.Query.UserOriginal = currentQuestion;
+                    }
+                    commercePrompt += BuildContextPromptAddon(contextualDecision);
+                }
+                catch (Exception ex)
+                {
+                    Log.ErrorWithMaxCount("Knowledge V2订单上下文检索失败：" + ex.GetType().Name, 10);
+                }
                 if (string.IsNullOrWhiteSpace(commercePrompt))
                     return KnowledgeV2RuntimeResult.Continue();
                 return KnowledgeV2RuntimeResult.Continue(commercePrompt);
@@ -257,7 +276,8 @@ namespace Bot.ChromeNs
                         burst.BuyerNick,
                         retrievalQuestion,
                         imageEvidenceText,
-                        conditionalAdviceEvidence.ImageDescription);
+                        conditionalAdviceEvidence.ImageDescription,
+                        commerceAuthority.CommerceContext);
                     string conditionalReason;
                     if (!ConditionalBusinessAdviceService.TryAuthorizeRefundSuggestion(
                         decision, conditionalAdviceEvidence, out conditionalReason))

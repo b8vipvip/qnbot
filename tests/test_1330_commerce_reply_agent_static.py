@@ -86,25 +86,29 @@ def test_single_commerce_reply_authority_owns_terminal_vs_contextual_decision():
     assert "KnowledgeEngineV2Service.Resolve" not in authority
 
     progress = read("src/Bot/ChromeNs/ConversationProgressGuardService.cs")
-    method = progress[progress.index("public static bool RequiresContextualHandling"):progress.index("public static bool AllowKnowledge")]
+    method = progress[progress.index("public static bool RequiresContextualHandling"):progress.index("public static void AddValidationIssues")]
     assert "CommerceReplyAuthorityService.Evaluate(state)" in method
     assert "commerce.HasStructuredOrder" not in method
     assert "post_order_unverified" not in method
 
 
 def test_commerce_scoped_knowledge_has_one_central_policy_authority():
-    policy = read("src/Bot/ChromeNs/KnowledgePolicyProfileService.cs")
-    evaluate = policy[policy.index("public static KnowledgePolicyEvaluation Evaluate"):policy.index("public static void RecordRouteSelection")]
-    assert "ReadAtomicCommerceScope(profile.RequiredContext)" in evaluate
-    assert "CommerceContextService.BuildPolicyScopeToken" in evaluate
-    assert "Excluded = true" in evaluate
-    assert "电商场景键不匹配" in evaluate
-    assert evaluate.index("ReadAtomicCommerceScope") < evaluate.index("if (!IsEnabled())")
-
-    progress = read("src/Bot/ChromeNs/ConversationProgressGuardService.cs")
-    allow = progress[progress.index("public static bool AllowKnowledge"):progress.index("public static void AddValidationIssues")]
-    assert "ReadAtomicCommerceScope" not in allow
-    assert "BuildPolicyScopeToken" not in allow
+    semantics = read("src/Bot/Knowledge/KnowledgeEngineV2.Semantics.cs")
+    service = read("src/Bot/Knowledge/KnowledgeEngineV2.Service.Public.cs")
+    runtime = read("src/Bot/ChromeNs/KnowledgeEngineV2RuntimeBridge.cs")
+    applicable = semantics.split("public static bool IsApplicable", 1)[1].split("public static string FactKey", 1)[0]
+    assert "CommerceScopes(record.Exclusions)" in applicable
+    assert "CommerceScopes(record.RequiredContext)" in applicable
+    assert "CommerceScopes(record.Conditions)" in applicable
+    assert "string.IsNullOrWhiteSpace(query.VerifiedCommerceScope)" in applicable
+    assert "电商场景键不匹配" in applicable
+    scope_match = semantics.split("private static bool ScopeTermMatches", 1)[1]
+    assert scope_match.index("if (IsCommerceScope(term))") < scope_match.index("var lower =")
+    assert "string.Equals(term, query.VerifiedCommerceScope, StringComparison.OrdinalIgnoreCase)" in scope_match
+    assert "commerce != null && commerce.HasStructuredOrder" in service
+    assert "query.VerifiedCommerceScope = CommerceContextService.BuildPolicyScopeToken(commerce)" in service
+    assert "ResolveWithCommerceContext(" in runtime
+    assert "contextualDecision.CanDirectReply = false" in runtime
 
 
 def test_v2_direct_reply_obeys_shared_commerce_authority_before_resolve():
@@ -121,7 +125,7 @@ def test_v2_direct_reply_obeys_shared_commerce_authority_before_resolve():
 def test_validator_only_promotes_verified_order_context_to_authoritative_evidence():
     text = read("src/Bot/ChromeNs/PreSendAnswerValidator.cs")
     validate = text[text.index("public static AnswerValidationResult Validate"):text.index("public static string BuildEvidenceText")]
-    assert validate.index("BuildState(seller, buyer, question)") < validate.index("BuildAuthoritativeEvidence(knowledge, state, approvedV2ContextEvidence)")
+    assert validate.index("BuildState(seller, buyer, question)") < validate.index("BuildAuthoritativeEvidence(state, approvedV2ContextEvidence)")
     evidence = text[text.index("private static string BuildAuthoritativeEvidence"):text.index("private static ConversationStateSnapshot BuildState")]
     assert "commerce != null && commerce.HasStructuredOrder" in evidence
     assert "购买阶段" in evidence

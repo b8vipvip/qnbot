@@ -259,6 +259,25 @@ namespace Bot.Knowledge
                 return false;
             }
 
+            // Commerce scenario keys are atomic evidence, not natural-language keywords.
+            // Evaluate all of them before bounded text matching (including late list entries).
+            var scopeExclusions = CommerceScopes(record.Exclusions);
+            var scopeRequirements = CommerceScopes(record.RequiredContext);
+            var scopeConditions = CommerceScopes(record.Conditions);
+            if (scopeRequirements.Concat(scopeConditions).Concat(scopeExclusions).Any()
+                && string.IsNullOrWhiteSpace(query.VerifiedCommerceScope))
+            {
+                reason = "缺少已核验的电商场景证据";
+                return false;
+            }
+            if (scopeExclusions.Any(x => ScopeTermMatches(x, query))
+                || scopeRequirements.Any(x => !ScopeTermMatches(x, query))
+                || (scopeConditions.Count > 0 && !scopeConditions.Any(x => ScopeTermMatches(x, query))))
+            {
+                reason = "电商场景键不匹配或命中排除条件";
+                return false;
+            }
+
             var exclusions = NormalizeScopeTerms(record.Exclusions);
             var excluded = exclusions.FirstOrDefault(x => ScopeTermMatches(x, query));
             if (!string.IsNullOrWhiteSpace(excluded))
@@ -291,7 +310,7 @@ namespace Bot.Knowledge
                 return false;
             }
 
-            var conditions = NormalizeScopeTerms(record.Conditions);
+            var conditions = NormalizeScopeTerms(record.Conditions).Where(x => !IsCommerceScope(x)).ToList();
             if (conditions.Count > 0 && !conditions.Any(x => ScopeTermMatches(x, query)))
             {
                 reason = "当前消息不满足适用条件";
@@ -351,10 +370,25 @@ namespace Bot.Knowledge
                 .ToList();
         }
 
+        private static bool IsCommerceScope(string term)
+        {
+            return (term ?? string.Empty).Trim().StartsWith("commerce_scope", StringComparison.OrdinalIgnoreCase);
+        }
+
+        private static List<string> CommerceScopes(IEnumerable<string> terms)
+        {
+            return (terms ?? Enumerable.Empty<string>()).Where(IsCommerceScope)
+                .Select(x => x.Trim()).Distinct(StringComparer.OrdinalIgnoreCase).ToList();
+        }
+
         private static bool ScopeTermMatches(string term, KnowledgeV2Query query)
         {
             term = (term ?? string.Empty).Trim();
             if (term.Length == 0 || query == null) return false;
+
+            if (IsCommerceScope(term))
+                return !string.IsNullOrWhiteSpace(query.VerifiedCommerceScope)
+                    && string.Equals(term, query.VerifiedCommerceScope, StringComparison.OrdinalIgnoreCase);
 
             var lower = term.ToLowerInvariant();
             if (lower.StartsWith("intent:") || lower.StartsWith("intent="))

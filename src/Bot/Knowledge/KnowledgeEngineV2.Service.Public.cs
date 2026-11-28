@@ -81,6 +81,12 @@ namespace Bot.Knowledge
             return ResolveInternal(seller, buyer, message, false, string.Empty, string.Empty, false);
         }
 
+        internal static KnowledgeV2Decision ResolveWithCommerceContext(
+            string seller, string buyer, string message, CommerceContextSnapshot commerce)
+        {
+            return ResolveInternal(seller, buyer, message, false, string.Empty, string.Empty, false, commerce);
+        }
+
         // Visual/OCR evidence enriches entity recall without becoming the buyer's question.
         // Intent, predicate, exact aliases, high-risk checks and working memory remain
         // derived only from the buyer's own message.
@@ -102,12 +108,13 @@ namespace Bot.Knowledge
             string buyer,
             string message,
             string evidenceText,
-            string evidenceSubject)
+            string evidenceSubject,
+            CommerceContextSnapshot commerce = null)
         {
             var hasCuratedImageKnowledge = !string.IsNullOrWhiteSpace(evidenceText)
                 && evidenceText.IndexOf("【已命中本店人工维护的图片知识】", StringComparison.Ordinal) >= 0;
             return ResolveInternal(
-                seller, buyer, message, false, evidenceText, evidenceSubject, hasCuratedImageKnowledge);
+                seller, buyer, message, false, evidenceText, evidenceSubject, hasCuratedImageKnowledge, commerce);
         }
 
         // Simulator-specific safety evaluation: retain every knowledge, conflict,
@@ -125,7 +132,8 @@ namespace Bot.Knowledge
             bool sandbox,
             string evidenceText,
             string evidenceSubject,
-            bool curatedImageEvidence)
+            bool curatedImageEvidence,
+            CommerceContextSnapshot commerce = null)
         {
             var total = Stopwatch.StartNew();
             var settings = GetSettings(seller);
@@ -150,6 +158,8 @@ namespace Bot.Knowledge
             var shop = ResolveShopRequired(seller);
             var memory = GetWorkingMemory(shop.ShopKey, seller, buyer);
             var query = KnowledgeEngineV2Semantics.Parse(message, memory);
+            if (commerce != null && commerce.HasStructuredOrder)
+                query.VerifiedCommerceScope = CommerceContextService.BuildPolicyScopeToken(commerce);
             // Persist only buyer-authored query semantics. OCR/menu labels must never
             // become the next turn's working-memory intent, predicate or subject.
             // An image-only message has no buyer-authored query to update memory with.
@@ -454,6 +464,15 @@ namespace Bot.Knowledge
         private static bool IsApprovedProductionMatch(KnowledgeV2Match match)
         {
             return KnowledgeV2AuthorityPolicy.IsProductionApproved(match == null ? null : match.Record);
+        }
+
+        // Context extraction reads the same committed in-memory snapshot as retrieval;
+        // the management API below still reads the full repository including tombstones.
+        internal static IEnumerable<KnowledgeV2Record> GetProductionContextRecords(string seller)
+        {
+            return GetSnapshot(seller).Records
+                .Where(KnowledgeV2AuthorityPolicy.IsProductionApproved)
+                .Where(x => !ShopReceptionPolicy.IsQuarantined(seller, x.Id, x.Title, x.Answer));
         }
 
         public static List<KnowledgeV2Record> GetRecords(string seller)
