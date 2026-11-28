@@ -262,7 +262,7 @@ def test_verified_human_evidence_is_deduplicated_across_different_device_record_
     assert "SameRecordContent(evidenceRecord, local)" in merge
     assert "AddCandidate(merged, mergedIds, record, record.Id)" in merge
     assert "AddCandidate(merged, mergedIds, local, local.Id)" in merge
-    assert "if (preserveLocalOnly)" in merge
+    assert "if (preserveLocalOnly || IsDeleteTombstone(local))" in merge
     # The deterministic human-evidence SourceId, not a random record ID, is the cross-device dedupe key.
     assert "return (record.SourceId ?? string.Empty).Trim();" in merge
 

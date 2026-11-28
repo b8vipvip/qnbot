@@ -39,7 +39,7 @@ def test_incremental_idempotent_save_and_hashes_use_v2_repository_only():
     assert "KnowledgeAiService.ContentHash" in V2
     assert "var existing = KnowledgeEngineV2Repository.LoadAll(seller)" in V2
     assert "var seen = new HashSet<string>" in V2
-    assert "KnowledgeEngineV2Repository.Save(seller, record)" in V2
+    assert "KnowledgeEngineV2Repository.TryAddHistoryImportRecord(seller, record)" in V2
     assert "KnowledgeEngineV2Service.Warm(seller)" in V2
     assert "BotFeatureStore.SaveKnowledgeBase" not in V2
     assert "SaveDeduped(parsed.Items)" not in V2
@@ -62,7 +62,8 @@ def test_json_fence_and_truncated_json_handling_are_shared_by_v2_ai_import():
     smart = (ROOT / "src/Bot/Knowledge/KnowledgeV2SmartImportService.cs").read_text(encoding="utf-8")
 
     assert "StripFence" in ai
-    assert "StripFence" in smart or "KnowledgeAiService.ParseAiKnowledgeResult" in smart
+    assert "StripCodeFence" in smart
+    assert "ExtractBalancedJson" in smart
     assert "可能是响应被截断" in ai or "可能是响应被截断" in smart
 
 def test_progress_fields_are_reported_from_v2_import_batches():
@@ -82,3 +83,14 @@ def test_windows_release_artifact_excludes_params_db():
     assert "/p:Configuration=Release" in WF and "/p:Platform=x64" in WF
     assert "Where-Object { $_.Name -ne 'params.db' }" in WF
     assert "package" in WF and "Bot.exe" in WF and "README-PARAMS.txt" in WF
+
+
+def test_smart_import_rechecks_cancellation_and_dedup_at_commit_boundary():
+    repository = (ROOT / "src/Bot/Knowledge/KnowledgeEngineV2.Repository.cs").read_text(encoding="utf-8-sig")
+    write = V2.split("foreach (var record in analyzed.Items)", 1)[1].split("Log.Info", 1)[0]
+    assert write.index("userToken.IsCancellationRequested") < write.index("TryAddHistoryImportRecord")
+    assert "record.SourceId = importId + \":\" + contentHash" in write
+    assert "KnowledgeEngineV2Repository.Save(seller, record)" not in write
+    method = repository.split("internal static bool TryAddHistoryImportRecord", 1)[1].split("internal static bool TrySaveEditorRecord", 1)[0]
+    assert method.index("lock (state.Sync)") < method.index("HasExplicitlyRemovedKnowledge") < method.index("state.Db.SaveOneRecord")
+    assert "KnowledgeAiService.ContentHash(existing.Title, existing.Answer)" in method

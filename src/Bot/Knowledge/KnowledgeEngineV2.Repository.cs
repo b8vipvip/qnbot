@@ -72,7 +72,7 @@ namespace Bot.Knowledge
             KnowledgeEngineV2Service.ApplyRecordUpdate(seller, record);
         }
 
-        // History imports are add-only. Check the committed corpus and deletion ledger
+        // AI imports (historical or explicit smart import) are add-only. Check committed data and deletion ledger
         // under the same lock as the insert, including concurrent imports/cloud applies.
         internal static bool TryAddHistoryImportRecord(string seller, KnowledgeV2Record record)
         {

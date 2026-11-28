@@ -5,6 +5,7 @@ using System;
 using System.Collections.Generic;
 using System.Diagnostics;
 using System.Linq;
+using System.Net.Http;
 using System.Threading;
 using System.Threading.Tasks;
 
@@ -97,6 +98,8 @@ namespace Bot.Knowledge
             {
                 for (var i = 0; i < batches.Count; i++)
                 {
+                    if (userToken.IsCancellationRequested)
+                        throw BuildCancelException(cancelSource == null ? SmartImportCancelSource.UserCancel : cancelSource(), i + 1, timeoutSeconds, batches[i].EndpointName);
                     var batch = batches[i];
                     var stopwatch = Stopwatch.StartNew();
                     ReportProgress(progress, batch, i + 1, batches.Count, result, stopwatch.ElapsedMilliseconds);
@@ -130,7 +133,9 @@ namespace Bot.Knowledge
                             catch (Exception ex)
                             {
                                 lastError = ex;
-                                if (attempt == 0 && IsRetryable(ex.Message))
+                                if (userToken.IsCancellationRequested)
+                                    throw BuildCancelException(cancelSource == null ? SmartImportCancelSource.UserCancel : cancelSource(), i + 1, timeoutSeconds, batch.EndpointName);
+                                if (attempt == 0 && (ex is HttpRequestException || IsRetryable(ex.Message)))
                                 {
                                     if (progress != null) progress("第 " + (i + 1) + " 批遇到临时错误，正在自动重试一次...");
                                     continue;
@@ -150,6 +155,8 @@ namespace Bot.Knowledge
                     result.AiGenerated += analyzed.Items.Count;
                     foreach (var record in analyzed.Items)
                     {
+                        if (userToken.IsCancellationRequested)
+                            throw BuildCancelException(cancelSource == null ? SmartImportCancelSource.UserCancel : cancelSource(), i + 1, timeoutSeconds, batch.EndpointName);
                         if (record == null || string.IsNullOrWhiteSpace(record.Title) || string.IsNullOrWhiteSpace(record.Answer))
                             continue;
                         var contentHash = KnowledgeAiService.ContentHash(record.Title, record.Answer);
@@ -159,9 +166,14 @@ namespace Bot.Knowledge
                             continue;
                         }
                         record.SourceType = "ai_smart_import";
-                        record.SourceId = importId;
+                        // Batch ID is audit provenance, not a unique record key.
+                        record.SourceId = importId + ":" + contentHash;
                         record.Enabled = true;
-                        KnowledgeEngineV2Repository.Save(seller, record);
+                        if (!KnowledgeEngineV2Repository.TryAddHistoryImportRecord(seller, record))
+                        {
+                            result.DuplicateSkipped++;
+                            continue;
+                        }
                         result.AddedItems.Add(record);
                         result.Added++;
                     }
@@ -317,6 +329,8 @@ namespace Bot.Knowledge
                 catch (Exception ex) { error = ex.Message; }
             }
             if (string.IsNullOrWhiteSpace(error)) error = "未找到可解析的 Knowledge V2 JSON";
+            if (string.IsNullOrWhiteSpace(ExtractBalancedJson(StripCodeFence(raw))))
+                error += "；可能是响应被截断";
             return false;
         }
 
