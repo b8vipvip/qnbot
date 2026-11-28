@@ -60,7 +60,13 @@ namespace Bot.ChromeNs
                         var capturedSeller = seller;
                         Task.Run(() =>
                         {
-                            try { KnowledgeEngineV2FeedbackService.Warm(capturedSeller); }
+                            try
+                            {
+                                var shop = ShopContextLocator.ResolveRuntimeBySeller(qn);
+                                if (shop == null || !shop.HasStableSellerId) return;
+                                using (ShopSettingsScope.Enter(shop))
+                                    KnowledgeEngineV2FeedbackService.Warm(capturedSeller);
+                            }
                             catch (Exception ex) { Log.ErrorWithMaxCount("Knowledge V2反馈缓存预热失败: " + ex.Message, 10); }
                         });
                     }

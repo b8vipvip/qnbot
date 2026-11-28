@@ -180,10 +180,10 @@ namespace Bot.Knowledge
             _grid.Columns.Add(Col("Subject", "Subject", 150));
             _grid.Columns.Add(Col("Predicate", "Predicate", 120));
             _grid.Columns.Add(Col("可信度", "ConfidenceText", 72));
-            _grid.Columns.Add(Col("使用", "UseCount", 58));
-            _grid.Columns.Add(Col("采纳", "AcceptedCount", 58));
-            _grid.Columns.Add(Col("纠正", "CorrectionCount", 58));
-            _grid.Columns.Add(Col("撤回", "WithdrawCount", 58));
+            _grid.Columns.Add(Col("历史使用", "UseCount", 58));
+            _grid.Columns.Add(Col("历史采纳", "AcceptedCount", 58));
+            _grid.Columns.Add(Col("历史纠正", "CorrectionCount", 58));
+            _grid.Columns.Add(Col("历史撤回", "WithdrawCount", 58));
             _grid.Columns.Add(Col("状态", "Status", 80));
             _grid.Columns.Add(Col("更新", "UpdatedAtText", 126));
             _grid.SelectionChanged += delegate

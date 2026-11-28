@@ -110,3 +110,23 @@ def test_feedback_observer_uses_weak_qn_identity_and_retryable_attachment():
     assert "var seller = qn.Seller" in attach
     assert "var seller = captured.Seller" not in attach
     assert "RuntimeHelpers.GetHashCode(qn)" not in attach
+
+
+def test_feedback_pending_keys_and_alias_search_are_shop_isolated():
+    source = read("src/Bot/Knowledge/KnowledgeEngineV2FeedbackService.cs")
+    assert "Pending[PendingKey(shop.ShopKey, buyer)]" in source
+    assert "string.Equals(x.ShopKey, shop.ShopKey, StringComparison.Ordinal)" in source
+    assert "matches.Count != 1" in source
+    assert "PendingKey(pending.ShopKey, pending.Buyer), pending" in source
+    assert "if (!RemovePending(pending)) return;" in source
+    assert "PendingKey(pending.Seller, pending.Buyer)" not in source
+
+def test_feedback_cache_build_and_event_write_share_repository_lock():
+    source = read("src/Bot/Knowledge/KnowledgeEngineV2FeedbackService.cs")
+    append = source.split("private static void AppendEvent(", 1)[1].split("private static ConcurrentDictionary<string, Aggregate> GetAggregates", 1)[0]
+    assert append.index("lock (state.Sync)") < append.index("state.Db.SaveOneRecord(row)") < append.index("ApplyEventToAggregate(cached.ByKnowledgeId, row)")
+    load = source.split("private static ConcurrentDictionary<string, Aggregate> GetAggregates", 1)[1].split("private static void ApplyEventToAggregate", 1)[0]
+    assert load.index("lock (state.Sync)") < load.index("state.Db.ReadRecords") < load.index("AggregateCaches[shop.ShopKey] = next")
+    ui = read("src/Bot/Knowledge/KnowledgeCenterV2QualityUi.cs")
+    assert "ShopContextLocator.ResolveRuntimeByShopKey(_shopKey)" in ui
+    assert "InShop(() => KnowledgeEngineV2FeedbackService.GetQualityItems" in ui

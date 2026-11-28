@@ -57,6 +57,7 @@ namespace Bot.Knowledge
         private sealed class PendingReply
         {
             public readonly object Sync = new object();
+            public string ShopKey;
             public string Seller;
             public string Buyer;
             public string KnowledgeId;
@@ -107,12 +108,14 @@ namespace Bot.Knowledge
             knowledgeId = Clean(knowledgeId);
             if (seller.Length == 0 || buyer.Length == 0 || knowledgeId.Length == 0) return;
 
+            var shop = ResolveShopRequired(seller);
             AppendEvent(seller, buyer, knowledgeId, success ? "sent" : "send_failed",
                 question, answer, success ? "direct_local_reply" : Clean(failureReason));
             if (!success) return;
 
-            Pending[PendingKey(seller, buyer)] = new PendingReply
+            Pending[PendingKey(shop.ShopKey, buyer)] = new PendingReply
             {
+                ShopKey = shop.ShopKey,
                 Seller = seller,
                 Buyer = buyer,
                 KnowledgeId = knowledgeId,
@@ -132,9 +135,9 @@ namespace Bot.Knowledge
 
             if (IsPositiveAcknowledgement(text))
             {
+                if (!RemovePending(pending)) return;
                 AppendEvent(pending.Seller, pending.Buyer, pending.KnowledgeId, "accepted",
                     pending.Question, pending.Answer, "buyer_positive:" + Truncate(text, 100));
-                RemovePending(pending);
                 return;
             }
 
@@ -173,9 +176,9 @@ namespace Bot.Knowledge
             }
             if (similarity >= 0.92)
             {
+                if (!RemovePending(pending)) return;
                 AppendEvent(pending.Seller, pending.Buyer, pending.KnowledgeId, "accepted",
                     pending.Question, pending.Answer, "manual_same_answer");
-                RemovePending(pending);
                 return;
             }
 
@@ -183,9 +186,9 @@ namespace Bot.Knowledge
             lock (pending.Sync) negative = pending.NegativeBuyerReaction || pending.WithdrawalRecorded;
             if (negative && similarity < 0.78)
             {
+                if (!RemovePending(pending)) return;
                 AppendEvent(pending.Seller, pending.Buyer, pending.KnowledgeId, "correction",
                     pending.Question, pending.Answer, "manual_reply:" + Truncate(text, 220));
-                RemovePending(pending);
             }
         }
 
@@ -333,11 +336,14 @@ namespace Bot.Knowledge
                 Evidence = Truncate(evidence, 500),
                 CreatedAtTicks = DateTime.Now.Ticks
             };
-            lock (state.Sync) state.Db.SaveOneRecord(row);
-
-            AggregateCache cached;
-            if (AggregateCaches.TryGetValue(shop.ShopKey, out cached) && cached != null && cached.ByKnowledgeId != null)
-                ApplyEventToAggregate(cached.ByKnowledgeId, row);
+            // Serialize writes with cold-cache construction and publication.
+            lock (state.Sync)
+            {
+                state.Db.SaveOneRecord(row);
+                AggregateCache cached;
+                if (AggregateCaches.TryGetValue(shop.ShopKey, out cached) && cached != null && cached.ByKnowledgeId != null)
+                    ApplyEventToAggregate(cached.ByKnowledgeId, row);
+            }
 
             if (Interlocked.Increment(ref _cleanupCounter) % 200 == 0)
             {
@@ -345,9 +351,11 @@ namespace Bot.Knowledge
                 {
                     var cutoff = DateTime.Now.AddDays(-180).Ticks;
                     lock (state.Sync)
+                    {
                         state.Db.Execute("delete from KnowledgeV2FeedbackEventRow where CreatedAtTicks < ?", cutoff);
-                    AggregateCache ignored;
-                    AggregateCaches.TryRemove(shop.ShopKey, out ignored);
+                        AggregateCache ignored;
+                        AggregateCaches.TryRemove(shop.ShopKey, out ignored);
+                    }
                 }
                 catch { }
             }
@@ -362,14 +370,19 @@ namespace Bot.Knowledge
                 return cached.ByKnowledgeId;
 
             var state = GetState(shop);
-            List<KnowledgeV2FeedbackEventRow> rows;
-            lock (state.Sync) rows = state.Db.ReadRecords<KnowledgeV2FeedbackEventRow>(null);
-            var result = new ConcurrentDictionary<string, Aggregate>(StringComparer.Ordinal);
-            foreach (var row in rows.Where(x => x != null && !string.IsNullOrWhiteSpace(x.KnowledgeId)))
-                ApplyEventToAggregate(result, row);
-            var next = new AggregateCache { ByKnowledgeId = result };
-            AggregateCaches[shop.ShopKey] = next;
-            return next.ByKnowledgeId;
+            lock (state.Sync)
+            {
+                if (AggregateCaches.TryGetValue(shop.ShopKey, out cached)
+                    && cached != null && cached.ByKnowledgeId != null)
+                    return cached.ByKnowledgeId;
+                var rows = state.Db.ReadRecords<KnowledgeV2FeedbackEventRow>(null);
+                var result = new ConcurrentDictionary<string, Aggregate>(StringComparer.Ordinal);
+                foreach (var row in rows.Where(x => x != null && !string.IsNullOrWhiteSpace(x.KnowledgeId)))
+                    ApplyEventToAggregate(result, row);
+                var next = new AggregateCache { ByKnowledgeId = result };
+                AggregateCaches[shop.ShopKey] = next;
+                return next.ByKnowledgeId;
+            }
         }
 
         private static void ApplyEventToAggregate(ConcurrentDictionary<string, Aggregate> target, KnowledgeV2FeedbackEventRow row)
@@ -412,9 +425,11 @@ namespace Bot.Knowledge
         private static ShopContext ResolveShopRequired(string seller)
         {
             var current = ShopSettingsScope.Current;
-            if (current != null) return current;
-            var shop = ShopContextLocator.ResolveBySellerNick(Clean(seller));
-            if (shop == null) throw new InvalidOperationException("Knowledge V2 feedback无法确定当前店铺身份。");
+            var shop = current ?? ShopContextLocator.ResolveBySellerNick(Clean(seller));
+            if (shop == null || !shop.HasStableSellerId || string.IsNullOrWhiteSpace(shop.ShopKey)
+                || (!DirectOrderIdentityResolver.IdentityEquals(shop.SellerNick, seller)
+                    && !DirectOrderIdentityResolver.IdentityEquals(shop.DisplayName, seller)))
+                throw new InvalidOperationException("Knowledge V2 feedback无法确定当前店铺身份。");
             return shop;
         }
 
@@ -423,12 +438,16 @@ namespace Bot.Knowledge
             pending = null;
             seller = Clean(seller);
             buyer = Clean(buyer);
-            if (!Pending.TryGetValue(PendingKey(seller, buyer), out pending) || pending == null)
+            var shop = ResolveShopRequired(seller);
+            if (!Pending.TryGetValue(PendingKey(shop.ShopKey, buyer), out pending) || pending == null)
             {
-                pending = Pending.Values.FirstOrDefault(x => x != null
+                var matches = Pending.Values.Where(x => x != null
+                    && string.Equals(x.ShopKey, shop.ShopKey, StringComparison.Ordinal)
                     && string.Equals(x.Seller, seller, StringComparison.Ordinal)
-                    && BuyerIdentityAliasService.AreEquivalent(seller, x.Buyer, buyer));
-                if (pending == null) return false;
+                    && BuyerIdentityAliasService.AreEquivalent(seller, x.Buyer, buyer))
+                    .Take(2).ToList();
+                if (matches.Count != 1) return false;
+                pending = matches[0];
             }
             if (pending.SentAt < DateTime.Now.AddMinutes(-3))
             {
@@ -439,22 +458,20 @@ namespace Bot.Knowledge
             return true;
         }
 
-        private static void RemovePending(PendingReply pending)
+        private static bool RemovePending(PendingReply pending)
         {
-            if (pending == null) return;
-            PendingReply ignored;
-            Pending.TryRemove(PendingKey(pending.Seller, pending.Buyer), out ignored);
+            if (pending == null) return false;
+            // Compare-and-remove: an old acknowledgement must never remove a newer reply.
+            return ((ICollection<KeyValuePair<string, PendingReply>>)Pending).Remove(
+                new KeyValuePair<string, PendingReply>(PendingKey(pending.ShopKey, pending.Buyer), pending));
         }
 
         private static void CleanupPending()
         {
             if (Pending.Count < 200) return;
             var cutoff = DateTime.Now.AddMinutes(-5);
-            foreach (var key in Pending.Where(x => x.Value == null || x.Value.SentAt < cutoff).Select(x => x.Key).Take(100).ToList())
-            {
-                PendingReply ignored;
-                Pending.TryRemove(key, out ignored);
-            }
+            foreach (var pair in Pending.Where(x => x.Value == null || x.Value.SentAt < cutoff).Take(100).ToList())
+                ((ICollection<KeyValuePair<string, PendingReply>>)Pending).Remove(pair);
         }
 
         private static bool IsPositiveAcknowledgement(string value)
@@ -472,9 +489,10 @@ namespace Bot.Knowledge
             return tokens.Any(x => compact.IndexOf(x, StringComparison.OrdinalIgnoreCase) >= 0);
         }
 
-        private static string PendingKey(string seller, string buyer)
+        private static string PendingKey(string shopKey, string buyer)
         {
-            return Clean(seller) + "|" + Clean(buyer);
+            shopKey = Clean(shopKey);
+            return shopKey.Length + ":" + shopKey + Clean(buyer);
         }
 
         private static string Compact(string value)
