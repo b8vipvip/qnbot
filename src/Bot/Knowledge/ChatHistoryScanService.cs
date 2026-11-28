@@ -526,7 +526,9 @@ namespace Bot.Knowledge
                             }
                             read = checkpoint.ArchivedMessages;
                             if (options.LearnKnowledge)
-                                evidence.RecordCommittedLearning(buyer, turns.Count, pairCount, referenced, supplemented, nonReusable);
+                                evidence.RecordCommittedLearning(buyer, turns.Count, pairCount, referenced, supplemented, nonReusable,
+                                    buyerTurns.Select(x => string.IsNullOrWhiteSpace(x.MessageKey)
+                                        ? "history:" + buyer + "|" + x.Time.Ticks + "|" + x.Text : x.MessageKey));
                         }
                         evidence.Contact(buyer, true, count, "history_read");
                         Log.Info("[BuyerQuestions] history_scan_contact_complete run="
