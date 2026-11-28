@@ -51,7 +51,8 @@ def test_history_result_is_written_directly_to_v2_with_evidence_gated_publicatio
     repository = read("src/Bot/Knowledge/KnowledgeEngineV2.Repository.cs")
 
     for marker in [
-        "KnowledgeEngineV2Semantics.NormalizeType",
+        '? "business_fact"',
+        "&& !hasUnverifiedScope",
         "KnowledgeEngineV2Semantics.NormalizeIntent",
         "KnowledgeEngineV2Semantics.NormalizePredicate",
         "KnowledgeEngineV2Repository.LoadAll",
