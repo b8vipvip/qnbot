@@ -72,6 +72,14 @@ $productQuestion = '商品ID:12345678 是否支持'
 Assert-Equal ($unverified.Invoke($null, @($productQuestion, '支持', ''))) $true 'unsupported product claim'
 Assert-Equal ($unverified.Invoke($null, @($productQuestion, 'A支持，B不支持', ''))) $true 'mixed unsupported product claims'
 Assert-Equal ($unverified.Invoke($null, @($productQuestion, '无法确认是否支持，请提供型号', ''))) $false 'clarification without claim'
+$scopedPositive = "V2知识1：`n问题：是否支持`n答案：支持`n商品ID：12345678`n"
+$unrelated = "V2知识1：`n问题：如何付款`n答案：请查看页面`n商品ID：12345678`n"
+Assert-Equal ($unverified.Invoke($null, @($productQuestion, '支持', $scopedPositive))) $false 'approved capability matches exact product'
+Assert-Equal ($unverified.Invoke($null, @($productQuestion, '支持', $unrelated))) $true 'unrelated approved answer cannot authorize capability'
+Assert-Equal ($unverified.Invoke($null, @($productQuestion, '不支持', $scopedPositive))) $true 'wrong direction blocked'
+Assert-Equal ($unverified.Invoke($null, @($productQuestion, '商品ID:87654321 支持', $scopedPositive))) $true 'generated new product not authorized'
+Assert-Equal ($unverified.Invoke($null, @('商品ID:12345678 商品ID:87654321 是否支持', '支持', $scopedPositive))) $true 'partial scope not sufficient'
+
 Assert-Equal ($promise.Invoke($null, @('我马上给您退款'))) $true 'unauthorized transactional promise'
 Assert-Equal ($promise.Invoke($null, @('请提供订单号核实退款情况'))) $false 'refund clarification'
 $left = [Activator]::CreateInstance($recordType)
