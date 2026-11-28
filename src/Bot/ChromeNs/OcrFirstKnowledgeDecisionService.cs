@@ -399,6 +399,9 @@ namespace Bot.ChromeNs
                             ? "server-ocr,knowledge-v2-evidence"
                             : "server-ocr,visual-understanding,knowledge-v2"),
                     MatchedVisualKnowledgeId = visualMatch == null ? string.Empty : visualMatch.RuleId,
+                MatchedVisualRuleId = visualMatch == null ? string.Empty : visualMatch.RuleId,
+                MatchedVisualRuleFingerprint = visualMatch == null ? string.Empty : visualMatch.RuleFingerprint,
+                MatchedVisualRuleOcrText = ocr.Text,
                     MatchedImageKnowledgeId = imageKnowledgeMatch == null ? string.Empty : imageKnowledgeMatch.KnowledgeId,
                     MatchedImageKnowledgeFingerprint = imageKnowledgeMatch == null ? string.Empty : imageKnowledgeMatch.EvidenceFingerprint,
                     ImageKnowledgeScore = imageKnowledgeMatch == null ? 0d : imageKnowledgeMatch.Score,
@@ -445,6 +448,9 @@ namespace Bot.ChromeNs
                     ? "server-ocr,image-knowledge,knowledge-v2"
                     : "server-ocr,visual-understanding,knowledge-v2",
                 MatchedVisualKnowledgeId = visualMatch == null ? string.Empty : "ocr-direct-knowledge-v2:" + visualMatch.RuleId,
+                MatchedVisualRuleId = visualMatch == null ? string.Empty : visualMatch.RuleId,
+                MatchedVisualRuleFingerprint = visualMatch == null ? string.Empty : visualMatch.RuleFingerprint,
+                MatchedVisualRuleOcrText = ocr.Text,
                 MatchedImageKnowledgeId = imageKnowledgeMatch == null ? string.Empty : imageKnowledgeMatch.KnowledgeId,
                     MatchedImageKnowledgeFingerprint = imageKnowledgeMatch == null ? string.Empty : imageKnowledgeMatch.EvidenceFingerprint,
                 ImageKnowledgeScore = imageKnowledgeMatch == null ? 0d : imageKnowledgeMatch.Score,
@@ -482,6 +488,9 @@ namespace Bot.ChromeNs
                     ? "server-ocr,image-knowledge"
                     : (match == null ? "server-ocr" : "server-ocr,visual-understanding"),
                 MatchedVisualKnowledgeId = match == null ? string.Empty : match.RuleId,
+                MatchedVisualRuleId = match == null ? string.Empty : match.RuleId,
+                MatchedVisualRuleFingerprint = match == null ? string.Empty : match.RuleFingerprint,
+                MatchedVisualRuleOcrText = ocr.Text,
                 MatchedImageKnowledgeId = imageKnowledgeMatch == null ? string.Empty : imageKnowledgeMatch.KnowledgeId,
                     MatchedImageKnowledgeFingerprint = imageKnowledgeMatch == null ? string.Empty : imageKnowledgeMatch.EvidenceFingerprint,
                 ImageKnowledgeScore = imageKnowledgeMatch == null ? 0d : imageKnowledgeMatch.Score,
