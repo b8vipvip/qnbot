@@ -291,7 +291,7 @@ namespace Bot.Knowledge
             // Operator-reviewed direct replies take precedence at the exact question
             // boundary; confidence observations never delay an explicit manual save.
             // Other semantically similar questions continue through normal safety ranking.
-            var manualExactMatches = rankedMatches.Where(IsApprovedProductionMatch)
+            var manualExactMatches = allProductionMatches
                 .Where(x => x != null
                     && x.Record != null
                     && string.Equals((x.Record.SourceType ?? "").Trim(),
@@ -345,8 +345,8 @@ namespace Bot.Knowledge
                 && !highRisk
                 && standaloneSafe
                 && best.Record.Enabled
+                && best.ConfidenceScore >= minConfidence
                 && (approvedExact || (best.Score >= threshold
-                    && best.ConfidenceScore >= minConfidence
                     && (best.AliasScore >= 0.94 || best.PredicateScore >= 0.99)
                     && (effectiveMargin >= 0.08 || best.AliasScore >= 0.98)));
             decision.SelectedMatch = decision.CanDirectReply ? best : null;
@@ -361,13 +361,15 @@ namespace Bot.Knowledge
             return decision;
         }
 
-        private static bool IsEligibleProductionMatch(KnowledgeV2Match match, KnowledgeV2Query query)
+        internal static bool IsEligibleProductionMatch(KnowledgeV2Match match, KnowledgeV2Query query)
         {
             if (!IsApprovedProductionMatch(match) || query == null) return false;
             // Numeric qualifiers in a buyer question must be backed by a saved
             // wording, not by a generic predicate score or punctuation folding.
             // Product IDs independently proven in the structured scope are excluded.
             if (!HasCompatibleQuestionNumbers(match.Record, query)) return false;
+            string reason;
+            if (!KnowledgeEngineV2Semantics.IsApplicable(match.Record, query, out reason)) return false;
             if (match == null || match.Record == null
                 || !KnowledgeV2AuthorityPolicy.IsAutoPublishedHumanEvidenceSource(match.Record.SourceType))
                 return true;
@@ -379,6 +381,22 @@ namespace Bot.Knowledge
                 .Concat(new[] { match.Record.Title })
                 .Any(alias => ExactQuestionMatches(alias, query.Original));
             return exactAlias || IsStrongAutoPublishedHumanEvidenceSimilarMatch(match, query);
+        }
+
+        // Context/conditional paths must not turn the debugging display list
+        // into an alternate source of authority.
+        internal static bool HasContextConflict(IEnumerable<KnowledgeV2Match> matches)
+        {
+            return HasAnswerDisagreement(matches.Select(x => x.Record).ToList());
+        }
+
+        internal static bool IsEligibleContextMatch(KnowledgeV2Match match, KnowledgeV2Query query)
+        {
+            return IsEligibleProductionMatch(match, query)
+                && !string.Equals(match.Record.RiskLevel, "high", StringComparison.OrdinalIgnoreCase)
+                && !string.Equals(match.Record.RiskLevel, "critical", StringComparison.OrdinalIgnoreCase)
+                && !KnowledgeEngineV2Semantics.IsHighRisk(match.Record.Answer)
+                && !(match.Record.RequiredContext ?? new List<string>()).Any(ConditionalBusinessAdviceService.IsEvidenceRequirement);
         }
 
         private static bool IsStrongManualReviewedSimilarMatch(

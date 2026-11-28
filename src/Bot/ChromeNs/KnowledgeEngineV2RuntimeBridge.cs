@@ -780,8 +780,7 @@ namespace Bot.ChromeNs
             var matches = (decision.Matches ?? new System.Collections.Generic.List<KnowledgeV2Match>())
                 .Where(match => match != null && match.Record != null
                     && Bot.Knowledge.KnowledgeV2AuthorityPolicy.IsProductionApproved(match.Record)
-                    && !string.Equals(match.Record.RiskLevel, "high", StringComparison.OrdinalIgnoreCase)
-                    && !KnowledgeEngineV2Semantics.IsHighRisk(match.Record.Answer)
+                    && KnowledgeEngineV2Service.IsEligibleContextMatch(match, decision.Query)
                     && match.Score >= 0.52
                     && match.ConfidenceScore >= 0.68
                     && (match.AliasScore >= 0.42
@@ -793,6 +792,9 @@ namespace Bot.ChromeNs
                 .Take(3)
                 .ToList();
             if (matches.Count == 0) return string.Empty;
+            // A weaker match omitted from the direct selection can still conflict
+            // with another context match. Do not hand contradictory facts to AI.
+            if (KnowledgeEngineV2Service.HasContextConflict(matches)) return string.Empty;
 
             var sb = new StringBuilder();
             sb.Append("\n\n【Knowledge Center V2已批准知识：仅作为上下文证据】\n")
@@ -817,9 +819,10 @@ namespace Bot.ChromeNs
                     .Append("；Predicate：").Append(SafeContext(record.Predicate, 60)).Append("\n")
                     .Append("Entities：").Append(SafeContext(string.Join("、", record.Entities ?? new System.Collections.Generic.List<string>()), 160)).Append("\n")
                     .Append("Aliases：").Append(SafeContext(string.Join("、", (record.Aliases ?? new System.Collections.Generic.List<string>()).Take(5)), 180)).Append("\n")
-                    .Append("适用条件：").Append(SafeContext(string.Join("；", record.Conditions ?? new System.Collections.Generic.List<string>()), 160)).Append("\n")
-                    .Append("必要上下文：").Append(SafeContext(string.Join("；", record.RequiredContext ?? new System.Collections.Generic.List<string>()), 160)).Append("\n")
-                    .Append("排除条件：").Append(SafeContext(string.Join("；", record.Exclusions ?? new System.Collections.Generic.List<string>()), 160)).Append("\n")
+                    .Append("商品ID：").Append(string.Join("；", record.ProductIds ?? new System.Collections.Generic.List<string>())).Append("\n")
+                    .Append("适用条件：").Append(string.Join("；", record.Conditions ?? new System.Collections.Generic.List<string>())).Append("\n")
+                    .Append("必要上下文：").Append(string.Join("；", record.RequiredContext ?? new System.Collections.Generic.List<string>())).Append("\n")
+                    .Append("排除条件：").Append(string.Join("；", record.Exclusions ?? new System.Collections.Generic.List<string>())).Append("\n")
                     .Append("相关度：").Append(matches[i].Score.ToString("0.00"))
                     .Append("；可信度：").Append(matches[i].ConfidenceScore.ToString("0.00")).Append("\n");
             }

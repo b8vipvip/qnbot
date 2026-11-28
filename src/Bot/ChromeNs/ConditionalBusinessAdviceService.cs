@@ -361,7 +361,8 @@ namespace Bot.ChromeNs
                 .OrderByDescending(x => x.Score))
             {
                 var record = match.Record;
-                if (!KnowledgeV2AuthorityPolicy.IsProductionApproved(record)) continue;
+                if (!KnowledgeV2AuthorityPolicy.IsProductionApproved(record)
+                    || !KnowledgeEngineV2Service.IsEligibleProductionMatch(match, decision.Query)) continue;
                 var afterSaleQuestion = string.Equals(record.Intent, "after_sale", StringComparison.OrdinalIgnoreCase)
                     && (string.Equals(record.Predicate, "refund_policy", StringComparison.OrdinalIgnoreCase)
                         || string.Equals(record.Predicate, "refund_advice", StringComparison.OrdinalIgnoreCase));

@@ -1947,10 +1947,8 @@ namespace Bot.Knowledge
             record.Exclusions = NormalizeList(record.Exclusions, 20);
             record.RequiredContext = NormalizeList(record.RequiredContext, 20);
             record.ProductIds = NormalizeList(record.ProductIds, 20);
-            record.Authority = double.IsNaN(record.Authority) || double.IsInfinity(record.Authority) || record.Authority <= 0
-                ? 0.90 : Clamp(record.Authority);
-            record.Confidence = double.IsNaN(record.Confidence) || double.IsInfinity(record.Confidence) || record.Confidence <= 0
-                ? 0.80 : Clamp(record.Confidence);
+            record.Authority = Clamp(record.Authority);
+            record.Confidence = Clamp(record.Confidence);
             if (record.CreatedAt == DateTime.MinValue) record.CreatedAt = DateTime.Now;
             record.UpdatedAt = DateTime.Now;
             // Only explicit evidence/approval paths may establish verification.

@@ -68,6 +68,8 @@ namespace Bot.Knowledge
         {
             return record != null
                 && record.Enabled
+                && record.Authority > 0 && record.Authority <= 1
+                && record.Confidence > 0 && record.Confidence <= 1
                 && string.Equals(record.Status, "active", StringComparison.OrdinalIgnoreCase)
                 && !IsCandidate(record);
         }
@@ -90,8 +92,8 @@ namespace Bot.Knowledge
             if (string.Equals(record.Type, "learning_candidate", StringComparison.OrdinalIgnoreCase)
                 || string.IsNullOrWhiteSpace(record.Type))
                 record.Type = "business_fact";
-            record.Authority = Math.Max(record.Authority, 0.90);
-            record.Confidence = Math.Max(record.Confidence, 0.90);
+            // Provenance alone cannot raise an explicitly lowered score.
+            // Only the actual verification/promotion write may do that.
             // Reading a legacy record must not invent a new verification time or change its fingerprint.
         }
 
@@ -106,8 +108,8 @@ namespace Bot.Knowledge
             {
                 record.Type = "business_fact";
             }
-            record.Authority = Math.Max(record.Authority, 0.98);
-            record.Confidence = Math.Max(record.Confidence, 0.94);
+            // Provenance alone cannot raise an explicitly lowered score.
+            // Only the actual verification/promotion write may do that.
             // Reading a legacy record must not invent a new verification time or change its fingerprint.
         }
     }
