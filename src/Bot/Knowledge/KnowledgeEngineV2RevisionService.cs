@@ -370,6 +370,27 @@ namespace Bot.Knowledge
             return true;
         }
 
+        internal static bool HasCommittedCandidateOutcome(string seller, string candidateId, string action, string reason)
+        {
+            if (string.IsNullOrWhiteSpace(candidateId)) return false;
+            var shop = ResolveShopRequired(seller);
+            using (ShopSettingsScope.Enter(shop))
+            lock (OperationLocks.GetOrAdd(shop.ShopKey, _ => new object()))
+            {
+                RecoverCommittedCandidates(seller);
+                var row = FindRow(seller, candidateId);
+                if (row == null) return false;
+                if (action == "revision_apply")
+                    return row.Status == "applied"
+                        && KnowledgeEngineV2Repository.GetCommittedRevisionCandidateReceipts(seller)
+                            .ContainsKey(row.Id + "\n" + row.KnowledgeId);
+                if (action == "revision_reject")
+                    return row.Status == "rejected" && row.ResolutionNote ==
+                        (string.IsNullOrWhiteSpace(reason) ? "人工复核驳回。" : reason.Trim());
+                return false;
+            }
+        }
+
         public static bool RejectCandidate(string seller, string candidateId, string reason, out string error)
         {
             var shop = ResolveShopRequired(seller);
