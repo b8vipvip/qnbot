@@ -473,7 +473,7 @@ namespace Bot.ChromeNs
             double similarity = 0;
             try { similarity = KnowledgeEngineV2Semantics.TextSimilarity(botAnswer, manualAnswer); }
             catch { similarity = Normalize(botAnswer) == Normalize(manualAnswer) ? 1 : 0; }
-            if (similarity >= 0.92)
+            if (similarity >= 0.92 && KnowledgeEngineV2Service.AnswerFactsCompatible(botAnswer, manualAnswer))
             {
                 MessageProcessingTraceService.RecordLearningComparison(
                     seller,
@@ -534,7 +534,8 @@ namespace Bot.ChromeNs
 
             if (!shouldLearn
                 || (action != "add" && action != "update")
-                || confidence < 0.95
+                || double.IsNaN(confidence) || double.IsInfinity(confidence)
+                || confidence < 0.95 || confidence > 1.0
                 || !CanLearn(question, manualAnswer)
                 // The model's normalized question/answer are review metadata only. The
                 // durable write below deliberately stores the actual buyer wording and

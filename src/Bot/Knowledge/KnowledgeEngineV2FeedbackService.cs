@@ -174,11 +174,11 @@ namespace Bot.Knowledge
             var similarity = KnowledgeEngineV2Semantics.TextSimilarity(pending.Answer, text);
             // Identical seller text may be a delayed Bot echo at any age.
             // Only buyer acknowledgements can establish acceptance here.
-            if (similarity >= 0.92) return;
+            if (similarity >= 0.92 && KnowledgeEngineV2Service.AnswerFactsCompatible(pending.Answer, text)) return;
 
             bool negative;
             lock (pending.Sync) negative = pending.NegativeBuyerReaction || pending.WithdrawalRecorded;
-            if (negative && similarity < 0.78)
+            if (negative && (similarity < 0.78 || !KnowledgeEngineV2Service.AnswerFactsCompatible(pending.Answer, text)))
             {
                 if (!RemovePending(pending)) return;
                 AppendEvent(pending.Seller, pending.Buyer, pending.KnowledgeId, "correction",

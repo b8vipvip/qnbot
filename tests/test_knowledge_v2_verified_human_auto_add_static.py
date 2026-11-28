@@ -438,7 +438,7 @@ def test_auto_published_human_evidence_answers_strongly_similar_questions_withou
         "private static bool IsSafeStandaloneLocalDirect(", 1
     )[0]
 
-    production = public.split("var productionMatches =", 1)[1].split(
+    production = public.split("var allProductionMatches =", 1)[1].split(
         "// Operator-reviewed", 1
     )[0]
     eligibility = public.split("private static bool IsEligibleProductionMatch(", 1)[1].split(

@@ -231,6 +231,11 @@ namespace Bot.Knowledge
                 && (leftDirection < 0 || rightDirection < 0);
         }
 
+        internal static bool AnswerFactsCompatible(string left, string right)
+        {
+            return !HasAnswerPolarityConflict(left, right) && SameAnswerNumbers(left, right);
+        }
+
         private static bool AnswersEquivalent(string left, string right)
         {
             // Similar strings can have opposite meaning or different quantities:

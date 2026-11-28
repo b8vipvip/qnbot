@@ -93,5 +93,5 @@ def test_manual_reviewed_answer_supports_safe_semantic_paraphrases():
     assert "match.IntentScore < 0.99" in helper
     assert "match.EntityScore >= 0.66 || subjectSimilarity >= 0.82" in helper
     assert "query.ContextDependent" in helper
-    assert "decision.HasConflict = manualExactConflict || (manualExact == null && HasConflict(best, second))" in service
+    assert "allProductionMatches.Any(x => !ReferenceEquals(x, best) && HasConflict(best, x))" in service
 

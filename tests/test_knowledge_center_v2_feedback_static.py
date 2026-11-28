@@ -23,7 +23,7 @@ def test_feedback_loop_uses_explicit_evidence_and_ignores_fast_bot_echo():
     assert '"buyer_negative"' in feedback
     assert '"manual_reply:"' in feedback
     assert '"withdrawal"' in feedback
-    assert "if (similarity >= 0.92) return;" in feedback
+    assert "if (similarity >= 0.92 && KnowledgeEngineV2Service.AnswerFactsCompatible" in feedback
     assert "manual_same_answer" not in feedback
     assert "IsAfterSend(pending, messageTime)" in feedback
     assert "BuyerIdentityAliasService.AreEquivalent" in feedback
@@ -140,3 +140,9 @@ def test_feedback_restore_is_shop_bound_idempotent_and_invalidates_cache():
     assert "state.Db.SaveRecordsInTransaction(additions)" in restore
     assert "AggregateCaches.TryRemove(shop.ShopKey" in restore
     assert "messageTime >= pending.SentAt" in source
+
+def test_manual_correction_does_not_ignore_opposite_or_numeric_answers_at_high_similarity():
+    source = read("src/Bot/ChromeNs/KnowledgeLearningService.cs")
+    assert "KnowledgeEngineV2Service.AnswerFactsCompatible(botAnswer, manualAnswer)" in source
+    assert "double.IsNaN(confidence) || double.IsInfinity(confidence)" in source
+    assert "confidence < 0.95 || confidence > 1.0" in source

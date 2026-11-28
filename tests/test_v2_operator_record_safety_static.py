@@ -18,7 +18,7 @@ def test_v2_record_operations_pin_shop_and_bulk_delete_commits_only_after_all_ca
     assert method.index("lock (state.Sync)") < method.index("EditorRecordFingerprint(record), pair.Value") < method.index("state.Db.SaveRecordsInTransaction(writes)")
     assert 'record.Status = "deleted"' in method
     assert "PreviousJson = before" in method
-    assert method.index("state.Db.SaveRecordsInTransaction(writes)") < method.index("ApplyRecordDelete")
+    assert method.index("state.Db.SaveRecordsInTransaction(writes)") < method.index("ReplaceSnapshot(seller, null)")
 
 def test_candidate_approval_changes_authority_and_rejects_stale_or_deleted_records():
     code = read("src/Bot/Knowledge/KnowledgeEngineV2.Service.Public.cs")
