@@ -1577,6 +1577,8 @@ namespace Bot.Knowledge
                     {
                         Token = pair.EvidenceToken,
                         EvidenceType = "historical_human_reply",
+                        QuestionText = pair.Question,
+                        AnswerText = pair.Answer,
                         QuestionMessageIds = pair.QuestionMessageIds.ToList(),
                         AnswerMessageIds = pair.AnswerMessageIds.ToList(),
                         ContextMessageIds = pair.ContextMessageIds.ToList()

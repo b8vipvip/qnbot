@@ -56,5 +56,5 @@ def test_existing_reviewed_answer_path_is_durable_deduplicated_and_immediate():
     assert 'KnowledgeEngineV2Semantics.Compact(x.Title)' in KNOWLEDGE
     assert 'record.SourceType = "manual_reviewed_direct";' in KNOWLEDGE
     assert "SaveRecordsInTransaction(new List<object> { ToRow(record), revision });" in KNOWLEDGE
-    assert "MirrorOneToLegacy(shop, record);" in KNOWLEDGE
+    assert "MirrorOneToLegacy" not in KNOWLEDGE
     assert "KnowledgeEngineV2Service.ApplyRecordUpdate(seller, record);" in KNOWLEDGE

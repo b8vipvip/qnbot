@@ -19,6 +19,9 @@ namespace Bot.Knowledge
     {
         public string Token { get; set; }
         public string EvidenceType { get; set; }
+        // Local scan text, never provided by the model as evidence.
+        public string QuestionText { get; set; }
+        public string AnswerText { get; set; }
         public List<string> QuestionMessageIds { get; set; }
         public List<string> AnswerMessageIds { get; set; }
         public List<string> ContextMessageIds { get; set; }

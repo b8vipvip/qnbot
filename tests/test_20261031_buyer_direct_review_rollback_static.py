@@ -61,13 +61,13 @@ def test_review_and_rollback_are_bound_to_exact_knowledge_revision():
     assert 'Action = "buyer_direct_apply"' in apply
     assert "SaveRecordsInTransaction(new List<object> { ToRow(applied), revision })" in apply
     assert "previous == null ? \"\" : JsonConvert.SerializeObject(previous)" in apply
-    assert "MirrorOneToLegacy(shop, applied)" in apply
+    assert "MirrorOneToLegacy" not in apply
     rollback = repo.split("public static bool TryRollbackBuyerDirect(",1)[1].split(
         "public static bool TryCorrectBotAnswer(",1)[0]
     assert 'latest.Action != "buyer_direct_apply"' in rollback
     assert "current.UpdatedAt.Ticks != applied.UpdatedAt.Ticks" in rollback
     assert 'Action = "buyer_direct_rollback"' in rollback
-    assert "MirrorDeleteToLegacy(shop, knowledgeId)" in rollback
+    assert "MirrorDeleteToLegacy" not in rollback
     assert "KnowledgeEngineV2Service.ApplyRecordDelete(seller, knowledgeId)" in rollback
     assert "BuyerMessageArchiveService.Rollback(_seller, item.AppliedRevision)" in source(
         "src/Bot/Knowledge/BuyerMessageManagementPage.cs")

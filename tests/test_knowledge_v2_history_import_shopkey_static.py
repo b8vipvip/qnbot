@@ -68,3 +68,19 @@ def test_history_import_uses_exact_buyer_and_human_message_ids_and_excludes_bot_
     assert "chat_history_unverified_candidate" in importer
     assert "question_message_ids" in importer and "answer_message_ids" in importer
 
+
+
+def test_history_promotion_checks_actual_question_and_answer_not_just_valid_tokens():
+    source = read("src/Bot/Knowledge/ChatHistoryScanService.cs")
+    importer = read("src/Bot/Knowledge/KnowledgeV2HistoryImportService.cs")
+    assert "QuestionText = pair.Question" in source
+    assert "AnswerText = pair.Answer" in source
+    assert "evidence.All(x => MatchesSourceText(title, x.QuestionText)" in importer
+    assert "MatchesSourceText(answer, x.AnswerText)" in importer
+    assert "var autoPublish = evidenceValid && !risk && !modelCandidate" in importer
+    assert "&& !parsed.ContextDependent" in importer
+    assert "record.ShortAnswer = autoPublish ? answer" in importer
+    assert "record.Aliases = autoPublish ? new List<string> { title }" in importer
+    assert "record.Enabled = autoPublish" in importer
+    assert 'record.Status = autoPublish ? "active" : "candidate"' in importer
+    assert "StringComparison.Ordinal" in importer.split("private static bool MatchesSourceText(", 1)[1].split("private static List<string> Clean(", 1)[0]

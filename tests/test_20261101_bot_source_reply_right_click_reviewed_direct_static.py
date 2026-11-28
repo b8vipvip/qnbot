@@ -54,6 +54,6 @@ def test_manual_direct_does_not_overwrite_product_scoped_knowledge():
     assert 'record.SourceType = "manual_reviewed_direct";' in method
     assert 'KnowledgeEngineV2GovernanceAuditService.TryAppendAction(' in method
     assert "SaveRecordsInTransaction(new List<object> { ToRow(record), revision });" in method
-    assert "MirrorOneToLegacy(shop, record);" in method
+    assert "MirrorOneToLegacy" not in method
     assert "KnowledgeEngineV2Service.ApplyRecordUpdate(seller, record);" in method
     assert "MessageRecordId = (sourceMessageId ?? string.Empty).Trim()" in method
