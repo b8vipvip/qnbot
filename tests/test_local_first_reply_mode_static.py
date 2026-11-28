@@ -71,7 +71,7 @@ def test_ai_first_keeps_approved_v2_knowledge_as_context_and_does_not_direct_sen
     direct_send = route.index("SendTextWithRetryAsync")
     assert guard < direct_send
     assert "var aiFirstContext = BuildContextPromptAddon(decision);" in route
-    assert "return KnowledgeV2RuntimeResult.Continue(aiFirstContext, decision);" in route
+    assert "return KnowledgeV2RuntimeResult.Continue(aiFirstContext, decision).WithContextDecision(decision);" in route
     assert "KnowledgeV2RuntimeResult.HandledResult()" in route
     assert "OfflineFallbackDecision" in runtime
 
