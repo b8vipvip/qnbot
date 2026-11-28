@@ -575,6 +575,9 @@ namespace Bot.ChromeNs
                             Log.Info("AI上下文使用的Knowledge V2记录已变更，阻止发送旧答案");
                             return false;
                         }
+                        if (!PreSendAnswerValidator.AllowsUnresolvedKnowledgeReply(
+                            knowledgeV2Result == null ? null : knowledgeV2Result.ContextDecision, answer))
+                            return false;
                         string safeText, outputReason;
                         if (!BuyerReplyOutputGuard.TryNormalizeForBuyer(answer, out safeText, out outputReason))
                             return false;
