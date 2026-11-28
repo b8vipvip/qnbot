@@ -496,6 +496,7 @@ def _apply_command_results(client_id: int, results: List[Dict[str, Any]]) -> Non
         error = _safe(result.get("error"), 1000)
         result_json = result.get("result") if isinstance(result.get("result"), dict) else {}
         with _cp.db() as conn:
+            conn.execute("BEGIN IMMEDIATE")
             row = conn.execute(
                 "SELECT command_type,payload_json,status FROM bot_commands WHERE id=? AND client_id=?",
                 (command_id, client_id),

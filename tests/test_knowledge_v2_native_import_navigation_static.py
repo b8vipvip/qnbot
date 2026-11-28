@@ -12,7 +12,8 @@ def test_history_chat_is_a_left_navigation_page():
     history = read("src/Bot/Knowledge/ChatHistoryScanWindow.cs")
     assert 'Nav("历史聊天整理", () => new KnowledgeV2ChatHistoryPage(_owner, _seller))' in ui
     assert "internal sealed class KnowledgeV2ChatHistoryPage : UserControl, IKnowledgeV2Refreshable" in history
-    assert "PromoteHistoryImport(_seller, _shopKey, scan.ImportResult)" in history
+    assert "options.LearnKnowledge = true" in history
+    assert "ScanBuyerMessagesAsync" in history
 
 
 def test_smart_import_requests_current_v2_schema_directly():
@@ -66,7 +67,8 @@ def test_history_result_is_written_directly_to_v2_with_evidence_gated_publicatio
         "chat_history_unverified_candidate",
     ]:
         assert marker in promotion
-    assert "PromoteHistoryImport(_seller, _shopKey, scan.ImportResult)" in history
+    assert "options.LearnKnowledge = true" in history
+    assert "ScanBuyerMessagesAsync" in history
     assert "BotFeatureStore.SaveKnowledgeBase" not in promotion
     assert "MirrorOneToLegacy" not in repository
     assert not (ROOT / "src/Bot/Knowledge/KnowledgeV2LegacyDeltaImportService.cs").exists()

@@ -29,7 +29,8 @@ def test_history_chat_organizer_is_native_v2_and_uses_evidence_gated_promotion()
     assert "new ChatHistoryScanWindow" not in operator
     assert "InjectHistoryButton" not in operator
     assert "KnowledgeV2ChatHistoryPage" in page
-    assert "PromoteHistoryImport(_seller, _shopKey, scan.ImportResult)" in page
+    assert "options.LearnKnowledge = true" in page
+    assert "ScanBuyerMessagesAsync" in page
     assert "ai_auto_learned_human_evidence" in importer
     assert "chat_history_unverified_candidate" in importer
     assert "SourceEvidenceByToken" in importer or "SourceEvidenceByToken" in read("src/Bot/Knowledge/KnowledgeAiService.cs")

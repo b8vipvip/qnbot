@@ -138,6 +138,9 @@ namespace Bot.Knowledge
             var add = Btn("新增知识", 86); add.Click += delegate { NewRecord(); };
             var save = Btn("保存", 68); save.Click += delegate { SaveCurrent(); };
             var delete = Btn("删除所选", 88); delete.Click += delegate { DeleteCurrent(); };
+            var enableSelected = Btn("启用所选", 88); enableSelected.Click += delegate { SetSelectedEnabled(true); };
+            var disableSelected = Btn("停用所选", 88); disableSelected.Click += delegate { SetSelectedEnabled(false); };
+            toolbar.Children.Add(enableSelected); toolbar.Children.Add(disableSelected);
             var selectAll = Btn("全选当前", 88); selectAll.Click += delegate { _grid.SelectAll(); };
             var deselect = Btn("取消全选", 88); deselect.Click += delegate { _grid.UnselectAll(); };
             toolbar.Children.Add(refresh); toolbar.Children.Add(add); toolbar.Children.Add(save); toolbar.Children.Add(delete);
@@ -516,6 +519,27 @@ namespace Bot.Knowledge
                     if (t.IsFaulted) MessageBox.Show(_owner, "删除失败：" + t.Exception.GetBaseException().Message);
                     else if (!t.Result) MessageBox.Show(_owner, "知识已发生变化，整批未删除，请刷新后重试。");
                     else { _selected = null; RefreshView(); }
+                })));
+        }
+
+        private void SetSelectedEnabled(bool enabled)
+        {
+            if (_recordSaving) return;
+            var expected = _grid.SelectedItems.Cast<KnowledgeV2Record>()
+                .Where(x => x != null && !string.IsNullOrWhiteSpace(x.Id))
+                .GroupBy(x => x.Id, StringComparer.Ordinal).Select(g => g.First())
+                .ToDictionary(x => x.Id, KnowledgeEngineV2Repository.EditorRecordFingerprint, StringComparer.Ordinal);
+            if (expected.Count == 0) return;
+            if (MessageBox.Show(_owner, (enabled ? "启用" : "停用") + "所选 " + expected.Count + " 条知识？",
+                "批量知识操作", MessageBoxButton.YesNo, MessageBoxImage.Question) != MessageBoxResult.Yes) return;
+            _recordSaving = true;
+            Task.Run(() => InShop(() => KnowledgeEngineV2Repository.TrySetEditorRecordsEnabled(_seller, expected, enabled)))
+                .ContinueWith(t => Dispatcher.BeginInvoke(new Action(() =>
+                {
+                    _recordSaving = false;
+                    if (t.IsFaulted) MessageBox.Show(_owner, "批量操作失败：" + t.Exception.GetBaseException().Message);
+                    else if (!t.Result) MessageBox.Show(_owner, "存在并发修改、已删除知识或未审核候选；整批未修改。");
+                    RefreshView();
                 })));
         }
 

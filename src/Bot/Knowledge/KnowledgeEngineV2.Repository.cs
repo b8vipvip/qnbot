@@ -1531,6 +1531,42 @@ namespace Bot.Knowledge
             return true;
         }
 
+        internal static bool TrySetEditorRecordsEnabled(string seller, IDictionary<string, string> expected, bool enabled)
+        {
+            if (expected == null || expected.Count == 0) return false;
+            var state = GetState(ResolveShopRequired(seller));
+            EnsureSchemaInitialized(state);
+            lock (state.Sync)
+            {
+                var writes = new List<object>();
+                foreach (var pair in expected)
+                {
+                    var row = state.Db.ReadOneRecord<KnowledgeV2RecordRow>(x => x.Id == pair.Key);
+                    var record = row == null ? null : FromRow(row);
+                    if (record == null || string.Equals(record.Status, "deleted", StringComparison.OrdinalIgnoreCase)
+                        || string.IsNullOrEmpty(pair.Value) || EditorRecordFingerprint(record) != pair.Value) return false;
+                    if (enabled && (record.Type == "learning_candidate"
+                        || (record.SourceType ?? string.Empty).IndexOf("candidate", StringComparison.OrdinalIgnoreCase) >= 0
+                        || (record.Status != "active" && record.Status != "disabled"))) return false;
+                    var before = JsonConvert.SerializeObject(record);
+                    record.Enabled = enabled;
+                    if (enabled) record.Status = "active";
+                    else if (record.Status == "active") record.Status = "disabled";
+                    record.UpdatedAt = DateTime.Now;
+                    writes.Add(ToRow(record));
+                    writes.Add(new KnowledgeV2ManualEditRevisionRow
+                    {
+                        Id = Guid.NewGuid().ToString("N"), KnowledgeId = record.Id,
+                        MessageRecordId = "knowledge-center-bulk-status", Action = enabled ? "enable" : "disable",
+                        PreviousJson = before, CurrentJson = JsonConvert.SerializeObject(record), CreatedAtTicks = DateTime.Now.Ticks
+                    });
+                }
+                state.Db.SaveRecordsInTransaction(writes);
+            }
+            KnowledgeEngineV2Service.ReplaceSnapshot(seller, null);
+            return true;
+        }
+
         public static bool Delete(string seller, string id)
         {
             if (string.IsNullOrWhiteSpace(id)) return false;

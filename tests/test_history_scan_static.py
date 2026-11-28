@@ -12,7 +12,8 @@ def test_history_scan_button_and_options():
     window = text("src/Bot/Knowledge/ChatHistoryScanWindow.cs")
     assert 'Nav("历史聊天整理", () => new KnowledgeV2ChatHistoryPage(_owner, _seller))' in shell
     assert 'MakeButton("开始整理", 100, Start_Click)' in window
-    assert "PromoteHistoryImport(_seller, _shopKey, scan.ImportResult)" in window
+    assert "options.LearnKnowledge = true" in window
+    assert "ScanBuyerMessagesAsync" in window
     assert "全部扫描" in window
     assert "按时间段扫描" in window
     assert "DatePicker" in window

@@ -336,6 +336,8 @@ namespace Bot.Knowledge
 
             var beforeState = KnowledgeEngineV2GovernanceAuditService.DescribeRecord(record);
             record.Answer = row.ProposedAnswer.Trim();
+            // A stale short answer must not keep serving the exact fact being corrected.
+            record.ShortAnswer = record.Answer;
             record.LastVerifiedAt = DateTime.Now;
             if (!KnowledgeEngineV2Repository.TrySaveEditorRecord(seller, record, currentFingerprint, "revision-candidate:" + row.Id))
             {

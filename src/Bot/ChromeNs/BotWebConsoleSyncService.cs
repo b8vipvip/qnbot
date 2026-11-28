@@ -114,6 +114,8 @@ namespace Bot.ChromeNs
             }
         });
 
+        internal static string LocalKnowledgeDeviceId { get { return KnowledgeDeviceId.Value; } }
+
         private sealed class KnowledgeOperation
         {
             public string Claim;
@@ -1160,6 +1162,7 @@ namespace Bot.ChromeNs
                     return new JObject { ["checkpoint_id"] = scan.ResumeCheckpointId, ["run_id"] = scan.RunId,
                         ["contacts"] = scan.ScannedContacts, ["total_contacts"] = scan.ContactCount, ["messages"] = scan.MessageCount,
                         ["failed"] = scan.FailedContacts, ["observed_turns"] = scan.ObservedTurns,
+                        ["previously_completed_contacts"] = scan.PreviouslyCompletedContacts,
                         ["learn_knowledge"] = scanOptions.LearnKnowledge, ["analyzed_pairs"] = scan.AnalyzedHumanPairs,
                         ["model_referenced_pairs"] = scan.ModelReferencedPairs, ["published"] = scan.PublishedKnowledge,
                         ["candidates"] = scan.CandidateKnowledge, ["duplicate_skipped"] = scan.DuplicateKnowledge,
