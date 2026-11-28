@@ -1186,10 +1186,7 @@ namespace Bot.ChromeNs
                         {
                             // We have proof of dispatch but not of its outcome.
                             // Never re-execute a possibly committed mutation.
-                            result = Result(id, false, "客户端重启中断任务，执行结果未知；请查看原设备断点或知识修订状态后重试。", new JObject());
-                            result["claim"] = claim;
-                            result["journal_scope"] = scope;
-                            result["phase"] = "interrupted";
+                            result = RecoverInterruptedKnowledgeOperation(state, id, result, scope, claim);
                             WriteKnowledgeJournal(path, scope, result);
                         }
                         state.PendingCommandResults[id] = result;
@@ -1200,6 +1197,71 @@ namespace Bot.ChromeNs
                     Log.ErrorWithMaxCount("知识操作结果恢复失败：" + ex.GetType().Name, 10);
                 }
             }
+        }
+
+        private static JObject RecoverInterruptedKnowledgeOperation(
+            ShopWebState state, long id, JObject receipt, string scope, string claim)
+        {
+            var recovered = new JObject();
+            var completed = false;
+            var action = (string)receipt["action"];
+            var checkpointId = (string)receipt["checkpoint_id"];
+            var runId = (string)receipt["run_id"];
+            if ((action == "history_scan" || action == "history_resume")
+                && !string.IsNullOrWhiteSpace(checkpointId) && !string.IsNullOrWhiteSpace(runId))
+            {
+                try
+                {
+                    var shop = state.Shop;
+                    if (shop != null && shop.HasStableSellerId)
+                    {
+                        using (ShopSettingsScope.Enter(shop))
+                        {
+                            var checkpoint = BuyerHistoryScanCheckpointStore.ReadBoundRun(
+                                shop.SellerNick, checkpointId, runId);
+                            if (checkpoint != null)
+                            {
+                                // The checkpoint is encrypted, shop-bound and owned by
+                                // this exact run. Never use a different "latest" scan.
+                                completed = checkpoint.State == "completed"
+                                    && checkpoint.Contacts.Count > 1
+                                    && checkpoint.Completed.Count == checkpoint.Contacts.Count;
+                                recovered = new JObject
+                                {
+                                    ["checkpoint_id"] = checkpoint.Id,
+                                    ["run_id"] = checkpoint.LastRunId,
+                                    ["checkpoint_state"] = checkpoint.State,
+                                    ["contacts"] = checkpoint.Completed.Count,
+                                    ["total_contacts"] = checkpoint.Contacts.Count,
+                                    ["archived_messages"] = checkpoint.ArchivedMessages,
+                                    ["observed_turns"] = checkpoint.ObservedTurns,
+                                    ["analyzed_pairs"] = checkpoint.AnalyzedHumanPairs,
+                                    ["model_referenced_pairs"] = checkpoint.ModelReferencedPairs,
+                                    ["supplemented_pairs"] = checkpoint.SupplementedPairs,
+                                    ["non_reusable_pairs"] = checkpoint.NonReusablePairs,
+                                    ["published"] = checkpoint.PublishedKnowledge,
+                                    ["candidates"] = checkpoint.CandidateKnowledge,
+                                    ["duplicate_skipped"] = checkpoint.DuplicateKnowledge,
+                                    ["learn_knowledge"] = checkpoint.LearnKnowledge,
+                                    ["recovered_from_checkpoint"] = true,
+                                    ["coverage_verified"] = false,
+                                    ["coverage_warning"] = "恢复已发现联系人断点，不代表已证明全店历史消息覆盖。"
+                                };
+                            }
+                        }
+                    }
+                }
+                catch (Exception ex)
+                {
+                    Log.ErrorWithMaxCount("知识操作断点证据复核失败：" + ex.GetType().Name, 10);
+                }
+            }
+            var result = Result(id, completed, completed ? string.Empty
+                : "客户端重启中断任务；仅恢复已核实的原任务断点，不自动重复执行知识修订或回滚。", recovered);
+            result["claim"] = claim;
+            result["journal_scope"] = scope;
+            result["phase"] = completed ? "completed" : "interrupted";
+            return result;
         }
 
         private static void StartKnowledgeOperation(ShopWebState state, long id, JObject payload, string journalScope)
@@ -1223,6 +1285,7 @@ namespace Bot.ChromeNs
                 receipt["phase"] = "started";
                 receipt["claim"] = claim;
                 receipt["journal_scope"] = journalScope;
+                receipt["action"] = (string)payload["action"];
                 WriteKnowledgeJournal(path, journalScope, receipt);
             }
             catch
@@ -1305,6 +1368,15 @@ namespace Bot.ChromeNs
                         scanOptions.EndTime = checkpoint.EndTime;
                         scanOptions.ResumeCheckpointId = checkpoint.Id;
                     }
+                    scanOptions.OnCheckpointBound = (checkpointId, runId) =>
+                    {
+                        // Persist the association before business mutations. A
+                        // failed binding must abort instead of losing recovery proof.
+                        var receipt = ReadKnowledgeJournal(job.JournalPath, job.JournalScope);
+                        receipt["checkpoint_id"] = checkpointId;
+                        receipt["run_id"] = runId;
+                        WriteKnowledgeJournal(job.JournalPath, job.JournalScope, receipt);
+                    };
                     var scan = await new ChatHistoryScanService().ScanBuyerMessagesAsync(seller, scanOptions,
                         p =>
                         {
