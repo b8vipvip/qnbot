@@ -59,7 +59,7 @@ namespace Bot.ChromeNs
         };
 
         private static readonly Regex ConcreteNumberRegex = new Regex(
-            @"(?<!\d)\d+(?:\.\d+)?\s*(?:元|块|天|小时|分钟|秒|次|台|个|件|年|月|个月|工作日|%|折)(?![\dA-Za-z])",
+            @"(?<![\d.])\d+(?:\.\d+)?\s*(?:工作日|个月|小时|分钟|元|块|天|秒|次|台|个|件|年|月|%|折)(?![\dA-Za-z])",
             RegexOptions.Compiled | RegexOptions.IgnoreCase);
 
         public static AnswerValidationResult Validate(
@@ -85,6 +85,7 @@ namespace Bot.ChromeNs
             var compactAnswer = Compact(answer);
             var state = BuildState(seller, buyer, question);
             var authoritativeEvidence = BuildAuthoritativeEvidence(state, approvedV2ContextEvidence);
+            var verifiedStatusEvidence = BuildVerifiedStatusEvidence(state);
 
             if (MachinePhrases.Any(x => compactAnswer.Contains(Compact(x))))
             {
@@ -109,7 +110,7 @@ namespace Bot.ChromeNs
             var unsupportedNumbers = ConcreteNumberRegex.Matches(answer)
                 .Cast<Match>()
                 .Select(x => x.Value.Trim())
-                .Where(x => !ContainsEvidence(authoritativeEvidence, x))
+                .Where(x => !ContainsNumericEvidence(authoritativeEvidence, x))
                 .Distinct(StringComparer.OrdinalIgnoreCase)
                 .Take(5)
                 .ToList();
@@ -128,7 +129,7 @@ namespace Bot.ChromeNs
             }
 
             var unsupportedStatus = ConcreteStatusClaims
-                .Where(x => compactAnswer.Contains(Compact(x)) && !ContainsEvidence(authoritativeEvidence, x))
+                .Where(x => compactAnswer.Contains(Compact(x)) && !ContainsEvidence(verifiedStatusEvidence, x))
                 .Take(4)
                 .ToList();
             if (unsupportedStatus.Count > 0)
@@ -187,7 +188,11 @@ namespace Bot.ChromeNs
             ConversationStateSnapshot state,
             string approvedV2ContextEvidence)
         {
-            var sb = new StringBuilder(BuildEvidenceText(approvedV2ContextEvidence));
+            // Prompt metadata (questions, aliases, confidence, conditions and product IDs)
+            // is not an assertion of a price or promise. Keep only actual answer lines.
+            var sb = new StringBuilder(StorePromptProfileService.GetStandardPrompt() ?? string.Empty);
+            foreach (Match match in Regex.Matches(approvedV2ContextEvidence ?? string.Empty, @"(?m)^答案：([^\r\n]+)"))
+                sb.Append("\n").Append(match.Groups[1].Value);
             var commerce = state == null ? null : state.CommerceContext;
             if (commerce != null && commerce.HasStructuredOrder)
             {
@@ -206,7 +211,25 @@ namespace Bot.ChromeNs
                 if (!string.Equals(commerce.FulfillmentType, "unknown", StringComparison.OrdinalIgnoreCase))
                     sb.Append("履约类型：").Append(commerce.FulfillmentTypeDisplay).Append("\n");
             }
-            return Compact(sb.ToString());
+            return sb.ToString();
+        }
+
+        private static string BuildVerifiedStatusEvidence(ConversationStateSnapshot state)
+        {
+            var commerce = state == null ? null : state.CommerceContext;
+            // Generic policy/FAQ text and buyer messages cannot prove a live order
+            // action. Only the current structured order status can support a claim.
+            if (commerce == null || !commerce.HasStructuredOrder) return string.Empty;
+            return Compact(commerce.TradeStatus);
+        }
+
+        internal static bool ContainsNumericEvidence(string evidence, string claim)
+        {
+            var expected = ConcreteNumberRegex.Match(claim ?? string.Empty);
+            if (!expected.Success || expected.Length != (claim ?? string.Empty).Length) return false;
+            var token = Regex.Replace(expected.Value, @"\s+", string.Empty);
+            return ConcreteNumberRegex.Matches(evidence ?? string.Empty).Cast<Match>()
+                .Any(x => string.Equals(Regex.Replace(x.Value, @"\s+", string.Empty), token, StringComparison.OrdinalIgnoreCase));
         }
 
         private static ConversationStateSnapshot BuildState(string seller, string buyer, string question)
@@ -292,11 +315,15 @@ namespace Bot.ChromeNs
         private static int DetectPolarity(string value)
         {
             var compact = Compact(value);
-            var negative = CountAny(compact, "不支持", "不能", "不可以", "无法", "不通用", "不可用", "不行", "没有");
-            var positive = CountAny(compact, "支持", "可以", "能用", "能够", "可用", "通用", "没问题");
-            if (negative > positive) return -1;
-            if (positive > negative) return 1;
-            return 0;
+            // Match negative alternatives first, consuming the entire phrase so
+            // "不支持" cannot also count as positive "支持". Mixed claims have
+            // no single polarity (e.g. A supports it but B does not).
+            var matches = Regex.Matches(compact,
+                @"(?<negative>不支持|不能用|不能够|不能|不可以|无法|不通用|不可用|不行|没有)|(?<positive>支持|可以|能用|能够|可用|通用|没问题)");
+            var negative = matches.Cast<Match>().Any(x => x.Groups["negative"].Success);
+            var positive = matches.Cast<Match>().Any(x => x.Groups["positive"].Success);
+            if (negative == positive) return 0;
+            return negative ? -1 : 1;
         }
 
         private static bool HasHighRiskUnsupportedClaim(string answer, string authoritativeEvidence)
@@ -306,7 +333,7 @@ namespace Bot.ChromeNs
             {
                 var compactTerm = Compact(term);
                 if (!compactAnswer.Contains(compactTerm)) continue;
-                if (authoritativeEvidence.Contains(compactTerm)) continue;
+                if (ContainsEvidence(authoritativeEvidence, term)) continue;
                 if (Regex.IsMatch(compactAnswer,
                     @"(可以|会|将|已经|已|一定|保证|同意|为您|给您).{0,8}" + Regex.Escape(compactTerm)
                     + @"|" + Regex.Escape(compactTerm) + @".{0,8}(成功|完成|到账|通过|可以)"))
@@ -337,7 +364,7 @@ namespace Bot.ChromeNs
         private static bool ContainsEvidence(string compactEvidence, string value)
         {
             var compactValue = Compact(value);
-            return compactValue.Length > 0 && compactEvidence.Contains(compactValue);
+            return compactValue.Length > 0 && Compact(compactEvidence).Contains(compactValue);
         }
 
         private static bool ContainsAny(string value, params string[] terms)
