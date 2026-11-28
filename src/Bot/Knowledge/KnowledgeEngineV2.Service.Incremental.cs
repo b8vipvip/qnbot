@@ -23,38 +23,52 @@ namespace Bot.Knowledge
             var shop = ResolveShop(seller);
             if (shop == null) return;
 
-            Snapshot current;
-            if (!Snapshots.TryGetValue(shop.ShopKey, out current) || current == null)
-            {
-                // A manual answer save must be immediately retrievable on the next buyer
-                // message. Build the cold snapshot now from the just-committed SQLite row
-                // instead of waiting for a later buyer request to queue background warmup.
-                Warm(seller);
-                return;
-            }
+            RefreshCommittedRecord(seller, shop.ShopKey, record.Id);
+        }
 
-            lock (BuildLocks.GetOrAdd(shop.ShopKey, _ => new object()))
+        private static void RefreshCommittedRecord(string seller, string shopKey, string id)
+        {
+            lock (BuildLocks.GetOrAdd(shopKey, _ => new object()))
             {
-                if (!Snapshots.TryGetValue(shop.ShopKey, out current) || current == null) return;
+                Snapshot current;
+                if (!Snapshots.TryGetValue(shopKey, out current) || current == null)
+                {
+                    Warm(seller);
+                    return;
+                }
+                // Never publish the caller's possibly stale post-commit payload.
+                // Read SQLite while holding the same lock used by cold/bulk builds.
+                var record = KnowledgeEngineV2Repository.LoadCommittedRecord(seller, id);
+                if (record != null) record = KnowledgeV2AuthorityPolicy.NormalizeForRead(record);
                 var next = CloneSnapshot(current);
                 var index = next.Records.FindIndex(x => x != null
-                    && string.Equals(x.Id, record.Id, StringComparison.Ordinal));
+                    && string.Equals(x.Id, id, StringComparison.Ordinal));
+                var indexable = record != null && record.Enabled
+                    && !string.Equals(record.Status, "disabled", StringComparison.OrdinalIgnoreCase)
+                    && !string.Equals(record.Status, "deleted", StringComparison.OrdinalIgnoreCase);
                 if (index >= 0)
                 {
-                    RemoveRecordFromIndexes(next, next.Records[index], index);
-                    next.Records[index] = Clone(record);
+                    var previous = next.Records[index];
+                    RemoveRecordFromIndexes(next, previous, index);
+                    var replacement = Clone(record) ?? Clone(previous);
+                    if (record == null)
+                    {
+                        replacement.Enabled = false;
+                        replacement.Status = "deleted";
+                    }
+                    next.Records[index] = replacement;
                 }
-                else if (record.Enabled)
+                else if (indexable)
                 {
                     index = next.Records.Count;
                     next.Records.Add(Clone(record));
                 }
 
-                if (record.Enabled && index >= 0)
+                if (indexable && index >= 0)
                     AddRecordToIndexes(next, next.Records[index], index);
 
                 next.BuiltAt = DateTime.Now;
-                Snapshots[shop.ShopKey] = next;
+                Snapshots[shopKey] = next;
             }
         }
 
@@ -68,27 +82,7 @@ namespace Bot.Knowledge
             var shop = ResolveShop(seller);
             if (shop == null) return;
 
-            Snapshot current;
-            if (!Snapshots.TryGetValue(shop.ShopKey, out current) || current == null) return;
-
-            lock (BuildLocks.GetOrAdd(shop.ShopKey, _ => new object()))
-            {
-                if (!Snapshots.TryGetValue(shop.ShopKey, out current) || current == null) return;
-                var next = CloneSnapshot(current);
-                var index = next.Records.FindIndex(x => x != null
-                    && string.Equals(x.Id, id, StringComparison.Ordinal));
-                if (index < 0) return;
-
-                var existing = next.Records[index];
-                RemoveRecordFromIndexes(next, existing, index);
-                var tombstone = Clone(existing) ?? new KnowledgeV2Record();
-                tombstone.Id = id;
-                tombstone.Enabled = false;
-                tombstone.Status = "deleted";
-                next.Records[index] = tombstone;
-                next.BuiltAt = DateTime.Now;
-                Snapshots[shop.ShopKey] = next;
-            }
+            RefreshCommittedRecord(seller, shop.ShopKey, id);
         }
 
         /// <summary>
@@ -100,12 +94,17 @@ namespace Bot.Knowledge
         {
             var shop = ResolveShop(seller);
             if (shop == null) return;
-            var enabled = (records ?? Enumerable.Empty<KnowledgeV2Record>())
-                .Where(x => x != null && x.Enabled)
-                .Select(Clone)
-                .ToList();
             lock (BuildLocks.GetOrAdd(shop.ShopKey, _ => new object()))
             {
+                // A bulk/cloud callback can arrive after a newer local edit.
+                // Rebuild from the committed repository, never the old caller list.
+                var enabled = KnowledgeEngineV2Repository.LoadAll(seller)
+                    .Where(x => x != null)
+                    .Select(KnowledgeV2AuthorityPolicy.NormalizeForRead)
+                    .Where(x => x != null && x.Enabled
+                        && !string.Equals(x.Status, "disabled", StringComparison.OrdinalIgnoreCase)
+                        && !string.Equals(x.Status, "deleted", StringComparison.OrdinalIgnoreCase))
+                    .ToList();
                 Snapshots[shop.ShopKey] = BuildSnapshot(shop.ShopKey, enabled);
             }
         }
