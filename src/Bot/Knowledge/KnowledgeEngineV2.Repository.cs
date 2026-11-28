@@ -109,7 +109,7 @@ namespace Bot.Knowledge
 
         // A knowledge editor may remain open across a learning or cloud-sync update.
         // Use the exact record fingerprint, not a wall-clock timestamp, to reject stale writes.
-        internal static bool TrySaveEditorRecord(string seller, KnowledgeV2Record record, string expectedFingerprint, string revisionSource = null)
+        internal static bool TrySaveEditorRecord(string seller, KnowledgeV2Record record, string expectedFingerprint, string revisionSource = null, string operationReceipt = null)
         {
             if (record == null || string.IsNullOrWhiteSpace(record.Id)) return false;
             var shop = ResolveShopRequired(seller);
@@ -132,7 +132,7 @@ namespace Bot.Knowledge
                 }
                 if (!string.IsNullOrEmpty(revisionSource) && row != null)
                 {
-                    state.Db.SaveRecordsInTransaction(new List<object>
+                    var writes = new List<object>
                     {
                         ToRow(record),
                         new KnowledgeV2ManualEditRevisionRow
@@ -142,9 +142,16 @@ namespace Bot.Knowledge
                             PreviousJson = JsonConvert.SerializeObject(FromRow(row)),
                             CurrentJson = JsonConvert.SerializeObject(record), CreatedAtTicks = DateTime.Now.Ticks
                         }
-                    });
+                    };
+                    var receipt = RemoteMutationReceipt(operationReceipt, "revision_apply");
+                    if (receipt != null) writes.Add(receipt);
+                    state.Db.SaveRecordsInTransaction(writes);
                 }
-                else state.Db.SaveOneRecord(ToRow(record));
+                else
+                {
+                    if (!string.IsNullOrEmpty(operationReceipt)) return false;
+                    state.Db.SaveOneRecord(ToRow(record));
+                }
             }
             KnowledgeEngineV2Service.ApplyRecordUpdate(seller, record);
             return true;
