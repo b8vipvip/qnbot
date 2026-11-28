@@ -120,7 +120,7 @@ def test_v2_direct_reply_obeys_shared_commerce_authority_before_resolve():
     assert "Knowledge Engine V2已让出终态直答权" in text
     contextual = text[resolve:text.index("KnowledgeV2Decision decision;", resolve)]
     assert "contextualDecision.CanDirectReply = false" in contextual
-    assert "return KnowledgeV2RuntimeResult.Continue(commercePrompt);" in contextual
+    assert "return KnowledgeV2RuntimeResult.Continue(commercePrompt).WithContextDecision(contextualDecision);" in contextual
     assert "OrderGuidanceDeliveryGuard.TryGetLatestOrderSnapshot" not in text[gate:resolve]
 
 
