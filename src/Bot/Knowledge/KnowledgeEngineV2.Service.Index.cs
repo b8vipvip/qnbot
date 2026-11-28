@@ -177,7 +177,7 @@ namespace Bot.Knowledge
             var intent = string.Equals(query.Intent, record.Intent, StringComparison.OrdinalIgnoreCase) ? 1.0
                 : (query.Intent == "general" || record.Intent == "general" ? 0.35 : 0.0);
             var entity = EntitySimilarity(query.Entities, RecordEntities(record));
-            var feedbackAdjustment = KnowledgeEngineV2FeedbackService.GetQualityAdjustment(seller, record.Id);
+            var feedbackAdjustment = KnowledgeEngineV2FeedbackService.GetQualityAdjustment(seller, record.Id, record.Answer);
             var confidence = Clamp(record.Confidence * 0.72 + record.Authority * 0.28 + feedbackAdjustment);
             var score = Clamp(predicate * 0.34 + entity * 0.25 + intent * 0.17 + alias * 0.16 + confidence * 0.08);
             if (alias >= 0.98) score = Math.Max(score, 0.97);
