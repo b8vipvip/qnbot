@@ -450,3 +450,10 @@ def test_cloud_three_way_merge_keeps_independent_same_id_edits_and_persists_reco
     assert merge.index("if (cloudDeleted && !localDeleted)") < merge.index("if (cloudUnchanged && !localUnchanged)")
     assert "duplicate.SourceId=local.Id;" in merge
     assert "AddUnique(merged,mergedIds,duplicate)" in merge
+
+def test_steady_state_cloud_checkpoint_does_not_rehash_and_concurrent_demotion_wins():
+    service = read("src/Bot/Knowledge/KnowledgeV2CloudSyncService.cs")
+    assert "state.BaselinePersisted && state.Revision==Math.Max(0,targetRevision)" in service
+    assert "state.BaselinePersisted=true;" in service
+    assert "if (!local.Enabled && cloud.Enabled)" in service
+    assert "merged[index]=inactive" in service

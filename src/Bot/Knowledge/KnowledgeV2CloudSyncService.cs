@@ -68,6 +68,7 @@ namespace Bot.Knowledge
             public int Revision;
             public string Fingerprint = string.Empty;
             public Dictionary<string,string> RecordBaseline = new Dictionary<string,string>(StringComparer.Ordinal);
+            public bool BaselinePersisted;
             public string ShopRef = string.Empty;
             public DateTime? LastAttemptUtc;
             public DateTime? LastSuccessUtc;
@@ -514,13 +515,20 @@ namespace Bot.Knowledge
                 string baselineJson;
                 store.TryGetString(BaselineKey,out baselineJson);
                 var baseline = new Dictionary<string,string>(StringComparer.Ordinal);
+                var baselinePersisted = false;
                 if (!string.IsNullOrWhiteSpace(baselineJson))
                 {
                     try
                     {
                         var stored = JObject.Parse(baselineJson);
-                        if ((string)stored["fingerprint"] == fingerprint && (int?)stored["revision"] == revision)
-                            baseline = (stored["records"]?.ToObject<Dictionary<string,string>>() ?? baseline);
+                        if ((string)stored["fingerprint"] == fingerprint && (int?)stored["revision"] == revision
+                            && stored["records"] is JObject)
+                        {
+                            baseline = stored["records"].ToObject<Dictionary<string,string>>();
+                            baselinePersisted = baseline != null && baseline.All(x => !string.IsNullOrWhiteSpace(x.Key)
+                                && x.Value != null && x.Value.Length == 64);
+                            if (!baselinePersisted) baseline = new Dictionary<string,string>(StringComparer.Ordinal);
+                        }
                     }
                     catch (JsonException)
                     {
@@ -533,6 +541,7 @@ namespace Bot.Knowledge
                     Revision=Math.Max(0,revision),
                     Fingerprint=fingerprint??string.Empty,
                     RecordBaseline=baseline,
+                    BaselinePersisted=baselinePersisted,
                     ShopRef=MyWebSocketServer.RuntimeAcceptanceDiagnosticRef("shop",shop.ShopKey),
                     LastCloudFingerprintPrefix=FingerprintPrefix(fingerprint??string.Empty),
                     LastStatus="loaded"
@@ -546,6 +555,11 @@ namespace Bot.Knowledge
             if(state==null) throw new ArgumentNullException(nameof(state));
             var revision=Math.Max(0,targetRevision).ToString();
             var fingerprint=targetFingerprint??string.Empty;
+            // Steady-state polling should not serialize thousands of record hashes
+            // or rewrite shop settings every ten seconds.
+            lock(state.SyncRoot)
+                if (state.BaselinePersisted && state.Revision==Math.Max(0,targetRevision)
+                    && string.Equals(state.Fingerprint,fingerprint,StringComparison.Ordinal)) return;
             var baseline=RecordBaseline(baselineRecords);
             var baselineJson=new JObject { ["revision"]=Math.Max(0,targetRevision), ["fingerprint"]=fingerprint,
                 ["records"]=JObject.FromObject(baseline) }.ToString(Formatting.None);
@@ -576,6 +590,7 @@ namespace Bot.Knowledge
                 state.Revision=Math.Max(0,targetRevision);
                 state.Fingerprint=targetFingerprint??string.Empty;
                 state.RecordBaseline=baseline;
+                state.BaselinePersisted=true;
             }
         }
 
@@ -713,6 +728,19 @@ namespace Bot.Knowledge
                             if (newEvidence.Length>0) recordsByHumanEvidence[newEvidence]=replacement;
                             continue;
                         }
+                    }
+                    // Concurrent demotion and edit must never leave the edited
+                    // answer active against an explicit stop on another device.
+                    if (!local.Enabled && cloud.Enabled)
+                    {
+                        AddCandidate(merged, mergedIds, cloud, id);
+                        var inactive=CloneRecord(local);
+                        var index=merged.IndexOf(cloud);
+                        if (index>=0) merged[index]=inactive;
+                        cloudById[id]=inactive;
+                        var oldEvidence=AutoPublishedEvidenceKey(cloud);
+                        if (oldEvidence.Length>0) recordsByHumanEvidence[oldEvidence]=inactive;
+                        continue;
                     }
                     AddCandidate(merged, mergedIds, local, id);
                     continue;

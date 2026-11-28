@@ -481,7 +481,7 @@ def test_windows_cloud_sync_recovers_missing_tombstone_snapshot_from_cloud():
     assert 'root["sync_warning"] as JObject' in sync
     assert '["code"], "missing_tombstones"' in sync
     assert '["code"], "cloud_delete_wins"' in sync
-    assert "MergeCloudAndLocal(records, latestLocal, preserveLocalOnly: true)" in recovery
+    assert "MergeCloudAndLocal(records, latestLocal, preserveLocalOnly: true, baseline: state.RecordBaseline)" in recovery
     assert "Backup(shop, latestLocal, cloudRevision)" in recovery
     assert recovery.index("Backup(shop, latestLocal, cloudRevision)") < recovery.index("TryReplaceAllIfUnchanged")
     assert "local_changed_during_tombstone_recovery" in recovery
