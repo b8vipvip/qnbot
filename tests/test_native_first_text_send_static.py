@@ -28,7 +28,7 @@ def test_text_send_routes_through_native_first_pipeline_before_legacy_uia():
 def test_native_send_never_guesses_undocumented_imsdk_send_api_or_uses_enter():
     native = read("src/Bot/ChromeNs/QNRpa.NativeSend.cs")
 
-    assert "EvaluateExpressionAsync" in native
+    assert "EvaluatePinnedSendExpressionAsync" in native
     assert "__QNBOT_DOM_SEND__:clicked:" in native
     assert "intelligentservice.SendSmartTipMsg" not in native
     assert "imsdk.invoke" not in native
@@ -108,8 +108,8 @@ def test_dom_send_is_pinned_to_the_verified_authoritative_shop_session():
         native.index("private async Task<bool> TryTriggerSendViaCdpDomAsync"):
         native.index("private bool TryPostSafeMainSendMouseMessage")
     ]
-    assert "sourceClient.EvaluateExpressionAsync" in dom
-    assert "_qn.CDP.EvaluateExpressionAsync" not in dom
+    assert "sourceClient.EvaluatePinnedSendExpressionAsync" in dom
+    assert "_qn.CDP.EvaluatePinnedSendExpressionAsync" not in dom
 
 
 def test_native_send_treats_missing_draft_after_physical_action_as_indeterminate():
@@ -144,14 +144,14 @@ def test_timed_out_physical_send_action_never_falls_through_to_second_click():
     native = read("src/Bot/ChromeNs/QNRpa.NativeSend.cs")
     uia = read("src/Bot/ChromeNs/QNRpa.cs")
     hwnd = native.index("var hwndPosted = await RunUiActionAsync")
-    hwnd_guard = native.index("if (!hwndPosted && LastSendWasIndeterminate) return false;", hwnd)
+    hwnd_guard = native.index("if (!hwndPosted && (LastSendWasIndeterminate || LastSendWasCancelled)) return false;", hwnd)
     hwnd_fallback = native.index("if (!await HasExpectedDraftFastAsync(text, 900)", hwnd_guard)
     safe = native.index("var safeUiaInvoked = await RunUiActionAsync", hwnd_fallback)
-    safe_guard = native.index("if (!safeUiaInvoked && LastSendWasIndeterminate) return false;", safe)
+    safe_guard = native.index("if (!safeUiaInvoked && (LastSendWasIndeterminate || LastSendWasCancelled)) return false;", safe)
     assert hwnd < hwnd_guard < hwnd_fallback < safe < safe_guard
 
     click = uia.index("var clicked = await RunUiActionAsync")
-    click_guard = uia.index("if (!clicked && LastSendWasIndeterminate) return false;", click)
+    click_guard = uia.index("if (!clicked && (LastSendWasIndeterminate || LastSendWasCancelled)) return false;", click)
     assert click < click_guard
     assert "SetSendIndeterminate(\"发送主按钮坐标点击后确认\"" in uia
     assert "SetSendIndeterminate(\"发送按钮左侧UIA安全调用后确认\"" in uia
