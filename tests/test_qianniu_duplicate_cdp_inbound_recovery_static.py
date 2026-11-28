@@ -446,7 +446,7 @@ def test_direct_cdpcclient_dispatch_cannot_bypass_shopkey_identity_transition_ga
     # WebSocket changes accounts. Revalidate ownership after acquiring the gate and
     # immediately before sending; only identity probes may read a retired page.
     assert "if (!allowRetiredIdentityRead && !HasCurrentShopAuthority())" in execute
-    assert execute.index("!HasCurrentShopAuthority()") < execute.index("_webSocketSession.Send(")
+    assert execute.index("!HasCurrentShopAuthority()") < execute.index("socket.Send(")
     identity_probe = client[
         client.index("private async Task<T> InvokeShopIdentity"):
         client.index("public async Task<LocalUserResponse> GetCurrentUser")

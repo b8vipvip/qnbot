@@ -771,6 +771,13 @@ def test_revision_convergence_requires_two_registered_persisted_matching_receipt
     prove("b"*32,"0"*64)
     assert module.web_revision_sync_status({"id":1})["verified_devices"]==1
     prove("b"*32,digest)
-    assert module.web_revision_sync_status({"id":1})["two_device_nonempty_convergence"]
-    send(model(rows=[dict(row,Id="d"*32)]),None,"shop-a")
-    assert not module.web_revision_sync_status({"id":1})["two_device_nonempty_convergence"]
+    proof=module.web_revision_sync_status({"id":1})
+    assert proof["two_device_nonempty_convergence"]
+    assert proof["revision_history_digest"]==digest
+    assert proof["revision_highwater"]==cursor
+    assert proof["revision_action_counts"]=={"apply":1}
+    send(model(rows=[dict(row,Id="d"*32,Action="rollback")]),None,"shop-a")
+    next_proof=module.web_revision_sync_status({"id":1})
+    assert not next_proof["two_device_nonempty_convergence"]
+    assert next_proof["revision_history_digest"]!=digest
+    assert next_proof["revision_action_counts"]=={"apply":1,"rollback":1}

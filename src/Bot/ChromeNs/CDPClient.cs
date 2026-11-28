@@ -447,7 +447,8 @@ namespace Bot.ChromeNs
         private async Task<string> SendExecuteAndWaitCoreAsync(
             string cmd, string desc, bool allowRetiredIdentityRead = false,
             int gateWaitTimeoutMs = ExecuteGateWaitTimeoutMs,
-            int responseTimeoutMs = InvokeTimeoutMs)
+            int responseTimeoutMs = InvokeTimeoutMs,
+            Func<Action, bool> dispatchFence = null)
         {
             var gateAcquired = false;
             var effectiveGateWaitTimeoutMs = Math.Max(
@@ -498,7 +499,25 @@ namespace Bot.ChromeNs
                 _requestWaiters.Enqueue(requestCompletion);
                 try
                 {
-                    _webSocketSession.Send(JsonConvert.SerializeObject(new { method = "execute", expression = cmd }));
+                    var socket = _webSocketSession;
+                    bool issued = false;
+                    Action send = () =>
+                    {
+                        // Session invalidation or reassignment can occur while
+                        // waiting on the corpus fence. Do not use a mutable route.
+                        if (dispatchFence != null && (socket == null || !ReferenceEquals(socket, _webSocketSession)
+                            || IsInvalidated || IsShopIdentityRetired || !HasCurrentShopAuthority())) return;
+                        socket.Send(JsonConvert.SerializeObject(new { method = "execute", expression = cmd }));
+                        issued = true;
+                    };
+                    if (dispatchFence == null) send();
+                    else if (!dispatchFence(send) || !issued)
+                    {
+                        TaskCompletionSource<string> rejected;
+                        _requestWaiters.TryDequeue(out rejected);
+                        if (rejected != null) rejected.TrySetCanceled();
+                        return "__QNBOT_SEND_FENCE_REJECTED__";
+                    }
                 }
                 catch (Exception ex)
                 {
@@ -535,6 +554,22 @@ namespace Bot.ChromeNs
             {
                 if (gateAcquired) _executeGate.Release();
             }
+        }
+
+        // Physical sends must remain pinned to the verified page. The fence
+        // executes after the CDP serialization gate, immediately at transport
+        // dispatch; checking only before waiting on the gate is insufficient.
+        internal Task<string> EvaluatePinnedSendExpressionAsync(string expression, string description,
+            Func<Action, bool> dispatchFence)
+        {
+            if (dispatchFence == null) return Task.FromResult("__QNBOT_SEND_FENCE_REJECTED__");
+            return SendExecuteAndWaitCoreAsync(expression, description, dispatchFence: dispatchFence);
+        }
+
+        internal Task<string> SendPinnedTimiMsgAsync(string userId, string smartTip, Func<Action, bool> dispatchFence)
+        {
+            var cmd = $@"imsdk.invoke('intelligentservice.SendSmartTipMsg',{JsonConvert.SerializeObject(new { userId, smartTip })})";
+            return EvaluatePinnedSendExpressionAsync(cmd, "Invoke:intelligentservice.SendSmartTipMsg", dispatchFence);
         }
 
         internal Task<string> EvaluateExpressionAsync(string expression, string description)

@@ -42,7 +42,7 @@ async function v2BulkApply(action){
 $("knowledgeV2BulkDisable").onclick=()=>v2BulkApply("disable");
 $("knowledgeV2BulkEnable").onclick=()=>v2BulkApply("enable");
 $("knowledgeV2BulkDelete").onclick=()=>v2BulkApply("delete");
-const v2Ops={id:null,epoch:0,timer:null,busy:false,checkpoint:null,checkpointDevice:null,task:null};
+const v2Ops={id:null,epoch:0,timer:null,busy:false,checkpoint:null,checkpointDevice:null,task:null,revisionProof:null};
 const v2OpsBase="/api/bot-web/knowledge-v2/operations";
 const v2OpsActive=s=>["pending","running","cancel_requested"].includes(s);
 const v2OpsLabels={history_status:"读取历史断点",history_scan:"历史扫描",history_resume:"继续扫描",revision_generate:"生成修订候选",revision_list:"修订候选",revision_apply:"应用修订",revision_reject:"驳回修订",conflict_list:"事实冲突",conflict_resolve:"解决冲突",rollback_list:"可回滚修订",rollback:"回滚修订"};
@@ -52,7 +52,8 @@ function resetV2Operations(){
   v2Ops.epoch++;clearTimeout(v2Ops.timer);v2Ops.id=null;v2Ops.task=null;v2Ops.busy=false;v2Ops.checkpoint=null;v2Ops.checkpointDevice=null;
   v2BulkIds.clear();v2BulkRevision=null;state.knowledgeV2LoadToken++;state.knowledgeV2=[];state.knowledgeV2Revision=0;state.knowledgeV2Feedback=null;
   $("v2OpsResult").replaceChildren();$("v2OpsTaskList").replaceChildren();$("v2OpsDevice").replaceChildren(new Option("请选择 Windows 设备",""));
-  v2OpsHint("请选择设备。");$("v2OpsFeedbackProof").textContent="等待双设备反馈同步核验";updateV2OpsControls();
+  v2OpsHint("请选择设备。");$("v2OpsFeedbackProof").textContent="等待双设备反馈同步核验";
+  v2Ops.revisionProof=null;$("v2OpsRevisionProof").textContent="等待双设备修订历史核验";$("v2OpsExportProof").disabled=true;updateV2OpsControls();
 }
 function updateV2OpsControls(){
   const busy=v2Ops.busy||v2OpsActive(v2Ops.task?.status);
@@ -65,8 +66,12 @@ $("v2OpsDevice").onchange=()=>{v2Ops.checkpoint=null;v2Ops.checkpointDevice=null
 async function loadV2Operations(){
   const epoch=v2Ops.epoch;
   try{
-    const [devices,history]=await Promise.all([api("/api/bot-web/knowledge-v2/devices"),api(v2OpsBase)]);
+    const [devices,history,revisionProof]=await Promise.all([api("/api/bot-web/knowledge-v2/devices"),api(v2OpsBase),
+      api("/api/bot-web/knowledge-v2/revision-sync-status").catch(()=>null)]);
     if(epoch!==v2Ops.epoch)return;
+    v2Ops.revisionProof=revisionProof;
+    $("v2OpsRevisionProof").textContent=revisionProof?"修订历史云端 "+revisionProof.server_revision_count+" 条 · 最近5分钟已核验设备 "+revisionProof.verified_devices+" 台 · "+(revisionProof.two_device_nonempty_convergence?"两台设备非空修订历史一致":"尚无两台设备非空一致性证据"):"修订历史核验暂不可用";
+    $("v2OpsExportProof").disabled=!revisionProof;
     const chosen=$("v2OpsDevice").value;
     const proof=$("v2OpsFeedbackProof");
     if(proof)proof.textContent="反馈事件云端 "+(devices.server_feedback_event_count??0)+" 条 · 最近90秒已核验设备 "+(devices.verified_devices??0)+" 台 · "+(devices.two_device_nonempty_convergence?"两台设备非空反馈事件集一致":"尚无两台设备非空一致性证据");
@@ -82,6 +87,20 @@ async function loadV2Operations(){
     updateV2OpsControls();
   }catch(err){if(epoch===v2Ops.epoch)v2OpsHint("设备/任务读取失败："+err.message)}
 }
+$("v2OpsExportProof").onclick=async()=>{
+  const epoch=v2Ops.epoch;
+  try{
+    const proof=await api("/api/bot-web/knowledge-v2/revision-sync-status");
+    if(epoch!==v2Ops.epoch)return;
+    // Export only aggregate verification and opaque server-issued device references,
+    // not any knowledge, shop identity, buyer message or authentication data.
+    const blob=new Blob([JSON.stringify(proof,null,2)],{type:"application/json"});
+    const url=URL.createObjectURL(blob),a=document.createElement("a");
+    a.href=url;a.download="knowledge-v2-revision-proof-"+Date.now()+".json";a.click();
+    setTimeout(()=>URL.revokeObjectURL(url),1000);
+    await loadV2Operations();
+  }catch(err){if(epoch===v2Ops.epoch)toast("修订凭证导出失败："+err.message)}
+};
 function v2OpsCard(title,lines,buttons=[]){
   const card=document.createElement("article");card.className="knowledge-card";
   const h=document.createElement("h4");h.textContent=title;card.append(h);

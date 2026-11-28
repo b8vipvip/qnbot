@@ -397,14 +397,14 @@ def test_final_guard_is_carried_to_the_last_moment_of_each_qianniu_physical_send
     assert "SendTextAsync(string buyer, string text, Func<bool> preSendGuard = null)" in qnrpa
     assert "OpenAndSendText(buyer, text, shopKey, manualBypassConsumed, preSendGuard)" in qnrpa
     assert "manualTakeoverCheck, preSendGuard" in qnrpa
-    assert "IsPreSendGuardSatisfied(preSendGuard, \"UIA坐标发送\")" in qnrpa
-    assert "IsPreSendGuardSatisfied(preSendGuard, \"UIA主按钮回退\")" in qnrpa
+    assert 'DispatchPhysicalSend(preSendGuard, "UIA坐标发送"' in qnrpa
+    assert 'DispatchPhysicalSend(preSendGuard, "UIA主按钮回退"' in qnrpa
 
     assert "Func<bool> manualTakeoverCheck, Func<bool> preSendGuard)" in native
-    assert "IsPreSendGuardSatisfied(preSendGuard, \"CDP页面发送\")" in native
-    assert "IsPreSendGuardSatisfied(preSendGuard, \"HWND安全发送\")" in native
-    assert native.index("IsPreSendGuardSatisfied(preSendGuard, \"HWND安全发送\")") < native.index("var moved = PostMessage(target, WmMouseMove")
-    assert "IsPreSendGuardSatisfied(preSendGuard, \"安全UIA发送\")" in native
+    assert 'CreatePhysicalSendFence(preSendGuard, "CDP页面发送")' in native
+    assert 'DispatchPhysicalSend(preSendGuard, "HWND安全发送"' in native
+    assert native.index('DispatchPhysicalSend(preSendGuard, "HWND安全发送"') < native.index("moved = PostMessage(target, WmMouseMove")
+    assert "TryInvokeCachedSendButtonNow(preSendGuard)" in native
     assert "manualTakeoverCheck, preSendGuard).ConfigureAwait(false)" in native
 
 def test_premerge_fixed_replies_recheck_manual_takeover_and_turn_relevance_on_every_send_attempt():
@@ -678,3 +678,19 @@ def test_bot_flow_test_reads_bot_master_switch_only_after_entering_verified_shop
     assert shop < scope < master < generation
     assert "if (!Params.Robot.CanUseRobotReal)" in source
     assert "目标店铺的Bot总开关已停用" in source
+
+
+def test_corpus_fence_rechecks_at_physical_dispatch_after_cdp_queue():
+    repo = read("src/Bot/Knowledge/KnowledgeEngineV2.Repository.cs")
+    create = repo.split("internal static Func<Action, bool> CreateSendDispatchFence", 1)[1].split("internal static long GetCorpusVersion", 1)[0]
+    assert create.index("Interlocked.Read(ref state.CorpusVersion)") < create.index("if (!validate())")
+    assert create.index("Monitor.TryEnter(state.Sync, 250)") < create.index("state.CorpusVersion != version") < create.index("dispatch();", create.index("state.CorpusVersion != version"))
+    assert "finally { Monitor.Exit(state.Sync); }" in create
+    cdp = read("src/Bot/ChromeNs/CDPClient.cs")
+    core = cdp.split("private async Task<string> SendExecuteAndWaitCoreAsync(", 1)[1].split("internal Task<string> EvaluateExpressionAsync", 1)[0]
+    assert core.index("_executeGate.WaitAsync") < core.index("dispatchFence(send)") < core.index("Task.WhenAny")
+    assert "__QNBOT_SEND_FENCE_REJECTED__" in core
+    assert "return SendExecuteAndWaitCoreAsync(expression, description, dispatchFence: dispatchFence)" in core
+    native = read("src/Bot/ChromeNs/QNRpa.NativeSend.cs")
+    assert "if (!domTriggered && (LastSendWasCancelled || LastSendWasIndeterminate)) return false;" in native
+    assert 'response.IndexOf("__QNBOT_DOM_SEND__:not_found"' in native

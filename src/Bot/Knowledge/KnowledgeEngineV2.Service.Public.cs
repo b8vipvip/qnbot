@@ -621,18 +621,53 @@ namespace Bot.Knowledge
                 if (items.Count < 2) continue;
                 var factKeys = items.ToDictionary(x => x.Id, KnowledgeEngineV2Semantics.FactKey, StringComparer.Ordinal);
                 if (factKeys.Values.Distinct(StringComparer.Ordinal).Count() < 2) continue;
-                var answerGroups = items.GroupBy(x => KnowledgeEngineV2Semantics.Compact(x.Answer)
-                    + "|" + string.Join(",", NumericTokens(x.Answer))).ToList();
-                if (answerGroups.Count < 2) continue;
-                foreach (var leftGroup in answerGroups)
-                foreach (var rightGroup in answerGroups.SkipWhile(x => !ReferenceEquals(x, leftGroup)).Skip(1))
+                var answerKeys = items.Select(x => KnowledgeEngineV2Semantics.Compact(x.Answer)
+                    + "|" + string.Join(",", NumericTokens(x.Answer))).ToArray();
+                if (answerKeys.Distinct(StringComparer.Ordinal).Count() < 2) continue;
+                // Disjoint products cannot contradict one another. Index by
+                // structured product scope instead of forming the Cartesian
+                // product of every pair of different answers in a title bucket.
+                var products = items.Select(x => KnowledgeEngineV2Semantics.NormalizeProductIds(x.ProductIds)).ToArray();
+                var productIndex = new Dictionary<string, List<int>>(StringComparer.OrdinalIgnoreCase);
+                var unbound = new List<int>();
+                for (var i = 0; i < items.Count; i++)
                 {
-                    if (AnswerFactsCompatible(leftGroup.First().Answer, rightGroup.First().Answer)) continue;
-                    foreach (var left in leftGroup)
-                    foreach (var right in rightGroup)
+                    if (products[i].Count == 0) unbound.Add(i);
+                    foreach (var product in products[i])
                     {
+                        List<int> bucket;
+                        if (!productIndex.TryGetValue(product, out bucket))
+                            productIndex[product] = bucket = new List<int>();
+                        bucket.Add(i);
+                    }
+                }
+                var compatibility = new Dictionary<Tuple<string, string>, bool>();
+                for (var i = 0; i < items.Count; i++)
+                {
+                    IEnumerable<int> candidates;
+                    if (products[i].Count == 0) candidates = Enumerable.Range(i + 1, items.Count - i - 1);
+                    else
+                    {
+                        var overlapping = new HashSet<int>(unbound.Where(j => j > i));
+                        foreach (var product in products[i])
+                            overlapping.UnionWith(productIndex[product].Where(j => j > i));
+                        candidates = overlapping.OrderBy(j => j);
+                    }
+                    var left = items[i];
+                    foreach (var j in candidates)
+                    {
+                        var right = items[j];
                         if (factKeys[left.Id] == factKeys[right.Id]
+                            || answerKeys[i] == answerKeys[j]
                             || !KnowledgeEngineV2Semantics.ProductScopesOverlap(left, right)) continue;
+                        var pair = Tuple.Create(left.Answer ?? string.Empty, right.Answer ?? string.Empty);
+                        bool compatible;
+                        if (!compatibility.TryGetValue(pair, out compatible))
+                        {
+                            compatible = AnswerFactsCompatible(left.Answer, right.Answer);
+                            if (compatibility.Count < 2048) compatibility[pair] = compatible;
+                        }
+                        if (compatible) continue;
                         var ids = new[] { left.Id, right.Id }.OrderBy(x => x, StringComparer.Ordinal);
                         var key = "scope-review:" + string.Join("|", ids);
                         if (!seen.Add(key)) continue;

@@ -2,6 +2,7 @@
 using BotLib.Wpf.Extensions;
 using BotLib;
 using Bot.ShopScope;
+using Bot.Knowledge;
 using FlaUI.Core.AutomationElements;
 using FlaUI.UIA3;
 using System;
@@ -532,7 +533,7 @@ namespace Bot.ChromeNs
             return false;
         }
 
-        private bool TryClickCachedSendButtonNow()
+        private bool TryClickCachedSendButtonNow(Func<bool> preSendGuard = null)
         {
             _lastSendButtonCoordinateClickRejected = false;
             if (_sendMessageButton == null && _sendMessageButtonRect.IsEmpty) return false;
@@ -568,8 +569,8 @@ namespace Bot.ChromeNs
                 Log.Info("发送主按钮左侧区域坐标点击: seller=" + SellerNick
                     + ", rect=" + rect.Left + "," + rect.Top + "," + rect.Width + "x" + rect.Height
                     + ", click=" + x + "," + y + ", arrowGuard=" + arrowGuard);
-                FlaUI.Core.Input.Mouse.Click(new System.Drawing.Point { X = x, Y = y });
-                return true;
+                return DispatchPhysicalSend(preSendGuard, "UIA坐标发送",
+                    () => FlaUI.Core.Input.Mouse.Click(new System.Drawing.Point { X = x, Y = y }));
             }
             catch (Exception ex)
             {
@@ -581,7 +582,7 @@ namespace Bot.ChromeNs
             }
         }
 
-        private bool TryInvokeCachedSendButtonNow()
+        private bool TryInvokeCachedSendButtonNow(Func<bool> preSendGuard = null)
         {
             if (_sendMessageButton == null || uia3Automation == null) return false;
             try
@@ -611,10 +612,11 @@ namespace Bot.ChromeNs
 
                 for (var depth = 0; candidate != null && depth < 7; depth++)
                 {
-                    if (TryInvokeSafeMainSendCandidate(candidate, splitRect, x, y, arrowGuard))
+                    if (TryInvokeSafeMainSendCandidate(candidate, splitRect, x, y, arrowGuard, preSendGuard))
                     {
                         return true;
                     }
+                    if (LastSendWasCancelled || LastSendWasIndeterminate) return false;
                     try { candidate = candidate.Parent; }
                     catch { candidate = null; }
                 }
@@ -623,10 +625,11 @@ namespace Bot.ChromeNs
                 {
                     foreach (var child in _sendMessageButton.FindAllDescendants())
                     {
-                        if (TryInvokeSafeMainSendCandidate(child, splitRect, x, y, arrowGuard))
+                        if (TryInvokeSafeMainSendCandidate(child, splitRect, x, y, arrowGuard, preSendGuard))
                         {
                             return true;
                         }
+                        if (LastSendWasCancelled || LastSendWasIndeterminate) return false;
                     }
                 }
                 catch (Exception ex)
@@ -653,7 +656,7 @@ namespace Bot.ChromeNs
             System.Drawing.Rectangle splitRect,
             int safeX,
             int safeY,
-            int arrowGuard)
+            int arrowGuard, Func<bool> preSendGuard)
         {
             if (!IsSafeMainSendInvokeCandidate(candidate, splitRect, safeX, safeY, arrowGuard))
             {
@@ -665,7 +668,8 @@ namespace Bot.ChromeNs
                 var rect = candidate.BoundingRectangle;
                 var name = candidate.Name ?? string.Empty;
                 var automationId = candidate.AutomationId ?? string.Empty;
-                candidate.AsButton().Invoke();
+                if (!DispatchPhysicalSend(preSendGuard, "UIA主按钮回退", () => candidate.AsButton().Invoke()))
+                    return false;
                 Log.Info("已通过左侧主发送UIA子控件执行发送: seller=" + SellerNick
                     + ", name=" + name + ", automationId=" + automationId
                     + ", rect=" + rect.Left + "," + rect.Top + "," + rect.Width + "x" + rect.Height);
@@ -754,11 +758,10 @@ namespace Bot.ChromeNs
                     return false;
                 }
                 var clicked = await RunUiActionAsync(
-                    () => IsPreSendGuardSatisfied(preSendGuard, "UIA坐标发送")
-                        && TryClickCachedSendButtonNow(),
+                    () => TryClickCachedSendButtonNow(preSendGuard),
                     "发送主按钮坐标点击",
                     UiActionTimeoutMs).ConfigureAwait(false);
-                if (!clicked && LastSendWasIndeterminate) return false;
+                if (!clicked && (LastSendWasIndeterminate || LastSendWasCancelled)) return false;
                 if (clicked)
                 {
                     var confirmed = await WaitForTextSendConfirmedAsync(
@@ -791,13 +794,12 @@ namespace Bot.ChromeNs
                     return false;
                 }
                 var invoked = await RunUiActionAsync(
-                    () => IsPreSendGuardSatisfied(preSendGuard, "UIA主按钮回退")
-                        && TryInvokeCachedSendButtonNow(),
+                    () => TryInvokeCachedSendButtonNow(preSendGuard),
                     "发送按钮左侧UIA安全调用",
                     UiActionTimeoutMs).ConfigureAwait(false);
                 if (!invoked)
                 {
-                    if (LastSendWasIndeterminate) return false;
+                    if (LastSendWasIndeterminate || LastSendWasCancelled) return false;
                     SetSendFailure("发送按钮UIA回退", "坐标输入被系统拒绝且未找到安全主发送UIA子控件（已禁止整块分裂按钮Invoke）");
                     return false;
                 }
@@ -959,6 +961,40 @@ namespace Bot.ChromeNs
                 }
             });
             return isok;
+        }
+
+        private Func<Action, bool> CreatePhysicalSendFence(Func<bool> preSendGuard, string stage)
+        {
+            try
+            {
+                var fence = KnowledgeEngineV2Repository.CreateSendDispatchFence(
+                    ResolveShopKeyForDeliveryWatchdog(),
+                    preSendGuard == null ? (Func<bool>)null : () => IsPreSendGuardSatisfied(preSendGuard, stage));
+                if (fence != null) return fence;
+            }
+            catch (Exception ex)
+            {
+                Log.Info("发送版本栅栏建立失败: " + ex.GetType().Name);
+            }
+            SetSendCancellation(stage, "无法确认当前知识版本或业务状态，禁止发送与重试");
+            return null;
+        }
+
+        private bool DispatchPhysicalSend(Func<bool> preSendGuard, string stage, Action dispatch)
+        {
+            var fence = CreatePhysicalSendFence(preSendGuard, stage);
+            if (fence == null) return false;
+            try
+            {
+                if (fence(dispatch)) return true;
+            }
+            catch (Exception ex)
+            {
+                SetSendIndeterminate(stage, "物理发送动作状态不确定，禁止重复发送: " + ex.GetType().Name);
+                return false;
+            }
+            SetSendCancellation(stage, "发送期间知识版本已变化或写入正在进行，禁止发送与重试");
+            return false;
         }
 
         private bool IsPreSendGuardSatisfied(Func<bool> preSendGuard, string stage)

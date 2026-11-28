@@ -324,8 +324,16 @@ def web_revision_sync_status(client=Depends(bot_web_console._web_client)):
     from datetime import datetime,timezone,timedelta
     client_id=int(client["id"])
     with _cp.db() as conn:
+        # The exported counts, digest, device receipts and highwater must
+        # all describe one consistent read snapshot, not overlapping syncs.
+        conn.execute("BEGIN")
         shop_key=_feedback_binding(conn,client_id)
-        count,digest,_=_revision_digest(conn,client_id,shop_key)
+        count,digest,highwater=_revision_digest(conn,client_id,shop_key)
+        action_counts={}
+        for row in conn.execute("""SELECT row_json FROM bot_knowledge_v2_revision_history
+            WHERE client_id=? AND shop_key=?""",(client_id,shop_key)):
+            action=json.loads(row["row_json"]).get("Action","")
+            action_counts[action]=action_counts.get(action,0)+1
         rows=conn.execute("""SELECT d.device_id,d.last_seen_at,r.row_count,r.digest,r.verified,r.received_at
             FROM bot_knowledge_v2_devices d LEFT JOIN bot_knowledge_v2_revision_receipts r
             ON d.client_id=r.client_id AND d.shop_key=r.shop_key AND d.device_id=r.device_id
@@ -342,7 +350,9 @@ def web_revision_sync_status(client=Depends(bot_web_console._web_client)):
             and fresh(r["received_at"]) and fresh(r["last_seen_at"])),
         "receipt_at":r["received_at"]} for r in rows]
     verified=sum(1 for item in items if item["verified"])
-    return {"server_revision_count":count,"verified_devices":verified,
+    return {"server_revision_count":count,"revision_history_digest":digest,
+        "revision_highwater":highwater,"revision_action_counts":action_counts,
+        "verified_devices":verified,"collected_at":datetime.now(timezone.utc).isoformat(),
         "two_device_nonempty_convergence":count>0 and verified>=2,"items":items}
 
 @router.get("/api/bot-web/knowledge-v2/feedback")

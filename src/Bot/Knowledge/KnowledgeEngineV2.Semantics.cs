@@ -394,7 +394,7 @@ namespace Bot.Knowledge
                 || a.Intersect(b, StringComparer.OrdinalIgnoreCase).Any();
         }
 
-        private static List<string> NormalizeProductIds(IEnumerable<string> values)
+        internal static List<string> NormalizeProductIds(IEnumerable<string> values)
         {
             return (values ?? Enumerable.Empty<string>())
                 .Where(x => !string.IsNullOrWhiteSpace(x))
@@ -428,10 +428,125 @@ namespace Bot.Knowledge
                 .Select(x => x.Trim()).Distinct(StringComparer.OrdinalIgnoreCase).ToList();
         }
 
+        // Explicit, bounded condition grammar. Existing flat lists keep their
+        // OR (Conditions) / AND (RequiredContext) / deny (Exclusions) semantics.
+        // Unknown is not false, so "!X" requires explicit evidence of absence.
+        private sealed class ScopeExpressionParser
+        {
+            private readonly string[] tokens;
+            private readonly KnowledgeV2Query query;
+            private int pos;
+            private bool invalid;
+
+            public ScopeExpressionParser(string expression, KnowledgeV2Query value)
+            {
+                query = value;
+                if (expression.Length > 1024) { tokens = new string[0]; invalid = true; return; }
+                tokens = Regex.Split(expression, @"(&&|\|\||!|\(|\)|并且|或者)")
+                    .Select(x => x.Trim()).Where(x => x.Length > 0).ToArray();
+                if (tokens.Length > 64) invalid = true;
+            }
+
+            public bool? Evaluate()
+            {
+                if (invalid) return null;
+                var result = Or(0);
+                return invalid || pos != tokens.Length ? (bool?)null : result;
+            }
+
+            private bool Take(string token)
+            {
+                if (pos >= tokens.Length || tokens[pos] != token) return false;
+                pos++;
+                return true;
+            }
+
+            private bool? Or(int depth)
+            {
+                var left = And(depth);
+                while (Take("||") || Take("或者"))
+                {
+                    var right = And(depth);
+                    left = left == true || right == true ? true : left == false && right == false ? (bool?)false : null;
+                }
+                return left;
+            }
+
+            private bool? And(int depth)
+            {
+                var left = Unary(depth);
+                while (Take("&&") || Take("并且"))
+                {
+                    var right = Unary(depth);
+                    left = left == false || right == false ? false : left == true && right == true ? (bool?)true : null;
+                }
+                return left;
+            }
+
+            private bool? Unary(int depth)
+            {
+                if (depth > 16 || pos >= tokens.Length) { invalid = true; return null; }
+                if (Take("!"))
+                {
+                    var inner = Unary(depth + 1);
+                    return inner.HasValue ? (bool?)!inner.Value : null;
+                }
+                if (Take("("))
+                {
+                    var inner = Or(depth + 1);
+                    if (!Take(")")) invalid = true;
+                    return inner;
+                }
+                var atom = tokens[pos++];
+                if (atom == ")" || atom == "&&" || atom == "||" || atom == "并且" || atom == "或者"
+                    || atom.StartsWith("expr:", StringComparison.OrdinalIgnoreCase)
+                    || ConditionalBusinessAdviceService.IsEvidenceRequirement(atom))
+                { invalid = true; return null; }
+                if (IsCommerceScope(atom))
+                    return string.IsNullOrWhiteSpace(query.VerifiedCommerceScope) ? (bool?)null
+                        : string.Equals(atom, query.VerifiedCommerceScope, StringComparison.OrdinalIgnoreCase);
+                if (Regex.IsMatch(atom, @"^(?:intent|predicate|subject|entity|product)[:=]", RegexOptions.IgnoreCase))
+                    return ScopeTermMatches(atom, query, true) ? (bool?)true : null;
+                return ExplicitConditionEvidence(query.Original, atom);
+            }
+        }
+
+        private static bool? ExplicitConditionEvidence(string text, string term)
+        {
+            var source = Regex.Replace(text ?? string.Empty, @"\s+", string.Empty);
+            var expected = Regex.Replace(term ?? string.Empty, @"\s+", string.Empty);
+            if (expected.Length == 0) return null;
+            var positive = false;
+            var negative = false;
+            foreach (Match sentence in Regex.Matches(source, @"[^，,。；;！？!?\r\n]+[！？!?]?"))
+            {
+                var clause = sentence.Value;
+                if (Regex.IsMatch(clause, @"如果|假如|假设|是否|能否|有没有|不确定|不知道|想确认|[？?]$|吗[！!。]?$|么[！!。]?$")) continue;
+                foreach (Match hit in Regex.Matches(clause, Regex.Escape(expected), RegexOptions.IgnoreCase))
+                {
+                    var prefix = clause.Substring(0, hit.Index);
+                    var suffix = clause.Substring(hit.Index + hit.Length);
+                    if (Regex.IsMatch(prefix, @"(?:并非|不是|没有|尚未|未曾|不含|不具备|不支持|不使用|未|无|没|不)(?:有|开通|安装|购买|启用|绑定|激活)?$")
+                        || Regex.IsMatch(suffix, @"^(?:还|尚|仍|现在|目前)?(?:没有|尚未|未开通|未购买|未安装|未启用|未绑定|未激活|不具备|不存在|已取消|已失效|已过期)"))
+                        negative = true;
+                    else if (HasAffirmativeTerm(clause, expected))
+                        positive = true;
+                }
+            }
+            return positive == negative ? (bool?)null : positive;
+        }
+
         private static bool ScopeTermMatches(string term, KnowledgeV2Query query, bool requireAffirmative = false)
         {
             term = (term ?? string.Empty).Trim();
             if (term.Length == 0 || query == null) return false;
+
+            if (term.StartsWith("expr:", StringComparison.OrdinalIgnoreCase))
+            {
+                var value = new ScopeExpressionParser(term.Substring(5), query).Evaluate();
+                // Exclusion is fail-closed even when its expression is unknown.
+                return requireAffirmative ? value == true : value != false;
+            }
 
             if (IsCommerceScope(term))
                 return !string.IsNullOrWhiteSpace(query.VerifiedCommerceScope)

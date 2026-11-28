@@ -244,4 +244,111 @@ Assert-Equal ($merged.Count) 2 'both conflicting variants retained'
 Assert-Equal (@($merged | Where-Object { $_.Enabled }).Count) 0 'no arbitrary active cloud winner'
 Assert-Equal (@($merged | Where-Object { $_.Id -eq 'stable-cloud-id' }).Count) 1 'stable ID retained'
 
+
+# Three-valued conditions: lack of evidence cannot satisfy explicit negation.
+$record = [Activator]::CreateInstance($recordType)
+$record.RequiredContext = [System.Collections.Generic.List[string]]@('expr: (会员 || VIP资格) && !限时活动')
+$query = $parse.Invoke($null, [object[]]@('我有会员，没有限时活动', $null))
+Assert-Equal ($applicable.Invoke($null, [object[]]@($record,$query,''))) $true 'AND OR explicit negative'
+$query = $parse.Invoke($null, [object[]]@('我有会员', $null))
+Assert-Equal ($applicable.Invoke($null, [object[]]@($record,$query,''))) $false 'unknown is not negative'
+$query = $parse.Invoke($null, [object[]]@('我有VIP资格，没有限时活动', $null))
+Assert-Equal ($applicable.Invoke($null, [object[]]@($record,$query,''))) $true 'configured synonym alternative'
+$query = $parse.Invoke($null, [object[]]@('我有会员，限时活动已开启', $null))
+Assert-Equal ($applicable.Invoke($null, [object[]]@($record,$query,''))) $false 'positive negated condition'
+$record.RequiredContext = [System.Collections.Generic.List[string]]@('expr: 会员 && (VIP资格')
+Assert-Equal ($applicable.Invoke($null, [object[]]@($record,$query,''))) $false 'malformed expression fails closed'
+$record.RequiredContext.Clear()
+$record.Exclusions = [System.Collections.Generic.List[string]]@('expr: 限时活动')
+$query = $parse.Invoke($null, [object[]]@('我有会员', $null))
+Assert-Equal ($applicable.Invoke($null, [object[]]@($record,$query,''))) $false 'unknown exclusion fails closed'
+
+# Exercise the actual synchronous dispatch critical section on independent threads.
+Add-Type -TypeDefinition @'
+using System;
+using System.Reflection;
+using System.Threading;
+using System.Threading.Tasks;
+public static class QnBotCorpusFenceRaceTest
+{
+    public static void Run(object state, FieldInfo syncField, FieldInfo versionField, MethodInfo mark, MethodInfo dispatch)
+    {
+        var sync = syncField.GetValue(state);
+        long version = (long)versionField.GetValue(state);
+        int invoked = 0;
+        Action action = () => Interlocked.Increment(ref invoked);
+        mark.Invoke(null, new object[] { state, "newer" });
+        if ((bool)dispatch.Invoke(null, new object[] { state, version, action }) || invoked != 0)
+            throw new Exception("stale version reached physical dispatch");
+        version = (long)versionField.GetValue(state);
+        using (var entered = new ManualResetEventSlim())
+        using (var release = new ManualResetEventSlim())
+        {
+            var writer = Task.Run(() => {
+                lock (sync) {
+                    mark.Invoke(null, new object[] { state, "concurrent" });
+                    entered.Set();
+                    if (!release.Wait(5000)) throw new Exception("writer wait timed out");
+                }
+            });
+            try {
+                if (!entered.Wait(5000)) throw new Exception("writer did not enter");
+                if ((bool)dispatch.Invoke(null, new object[] { state, version, action }) || invoked != 0)
+                    throw new Exception("active mutation allowed physical dispatch");
+            } finally { release.Set(); writer.GetAwaiter().GetResult(); }
+        }
+        version = (long)versionField.GetValue(state);
+        using (var attempted = new ManualResetEventSlim())
+        using (var acquired = new ManualResetEventSlim())
+        {
+            Task writer = null;
+            Action send = () => {
+                Interlocked.Increment(ref invoked);
+                writer = Task.Run(() => {
+                    attempted.Set();
+                    lock (sync) { acquired.Set(); mark.Invoke(null, new object[] { state, "after-dispatch" }); }
+                });
+                if (!attempted.Wait(5000) || acquired.Wait(50))
+                    throw new Exception("writer entered during synchronous dispatch");
+            };
+            try {
+                if (!(bool)dispatch.Invoke(null, new object[] { state, version, send }) || invoked != 1)
+                    throw new Exception("current version did not dispatch exactly once");
+            } finally { if (writer != null) writer.GetAwaiter().GetResult(); }
+            if (!acquired.IsSet) throw new Exception("writer not released after dispatch");
+        }
+    }
+}
+'@
+[QnBotCorpusFenceRaceTest]::Run($state, $stateType.GetField('Sync'), $version, $mark, $repoType.GetMethod('TryDispatchAtVersion',$flags))
+Write-Host 'Concurrent corpus mutation / synchronous physical dispatch fence passed.'
+
+# Governance workload: 10,000 distinct product scopes with identical questions,
+# alternating answers. Only the extra overlapping record may create a conflict.
+$govern = $service.GetMethod('GetConflictsForRecords', $flags)
+$governRecords = [Activator]::CreateInstance($listType)
+for ($i = 0; $i -lt 10000; $i++) {
+    $entry = New-CloudRecord $(if ($i % 2 -eq 0) {'支持'} else {'不支持'})
+    $entry.Id = 'gov-' + $i.ToString('D5')
+    $entry.Title = '是否支持此功能'
+    $entry.ProductIds = [System.Collections.Generic.List[string]]@([string](30000000 + $i))
+    $governRecords.Add($entry)
+}
+$governArgs = [object[]]::new(1)
+$governArgs[0] = $governRecords
+$watch = [Diagnostics.Stopwatch]::StartNew()
+$result = $govern.Invoke($null, $governArgs)
+Assert-Equal ($result.Count) 0 'disjoint scopes never conflict'
+$disjointMs = $watch.Elapsed.TotalMilliseconds
+$entry = New-CloudRecord '不支持'
+$entry.Id = 'gov-overlap'
+$entry.Title = '是否支持此功能'
+$entry.ProductIds = [System.Collections.Generic.List[string]]@('30000000','40000000')
+$governRecords.Add($entry)
+$watch.Restart()
+$result = $govern.Invoke($null, $governArgs)
+Assert-Equal (@($result | Where-Object {$_.RequiresScopeReview}).Count) 1 'overlapping contradictory scope retained'
+Write-Host ("Knowledge V2 conflict benchmark: records={0}; disjoint_ms={1:N1}; overlap_ms={2:N1}" -f $governRecords.Count,$disjointMs,$watch.Elapsed.TotalMilliseconds)
+Assert-Equal ($disjointMs -lt 10000) $true '10k disjoint governance budget'
+
 Write-Host 'Knowledge V2 compiled fact and scope regression cases passed.'

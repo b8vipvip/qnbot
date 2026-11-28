@@ -46,6 +46,35 @@ namespace Bot.Knowledge
             Interlocked.Increment(ref state.CorpusVersion);
         }
 
+        // Capture BEFORE the existing business guard. Never call a guard under
+        // the repository monitor: guards may acquire index-build or UI locks.
+        // The returned fence serializes only the synchronous external dispatch
+        // with local SQLite mutations, not the remote response/echo wait.
+        internal static Func<Action, bool> CreateSendDispatchFence(string shopKey, Func<bool> validate)
+        {
+            if (validate == null) return dispatch => { dispatch(); return true; };
+            var shop = ShopContextLocator.ResolveRuntimeByShopKey(shopKey);
+            if (shop == null || !shop.HasStableSellerId
+                || !string.Equals(shop.ShopKey, shopKey, StringComparison.Ordinal)) return null;
+            var state = GetState(shop);
+            var version = Interlocked.Read(ref state.CorpusVersion);
+            if (!validate()) return null;
+            return dispatch => TryDispatchAtVersion(state, version, dispatch);
+        }
+
+        private static bool TryDispatchAtVersion(RepositoryState state, long version, Action dispatch)
+        {
+            // Fail closed rather than queue a stale answer behind a long write.
+            if (!Monitor.TryEnter(state.Sync, 250)) return false;
+            try
+            {
+                if (state.CorpusVersion != version) return false;
+                dispatch();
+                return true;
+            }
+            finally { Monitor.Exit(state.Sync); }
+        }
+
         internal static long GetCorpusVersion(string seller)
         {
             var state = GetState(ResolveShopRequired(seller));
