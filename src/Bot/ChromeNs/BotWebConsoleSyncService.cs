@@ -1269,7 +1269,8 @@ namespace Bot.ChromeNs
                             ? KnowledgeEngineV2Repository.HasRemoteMutationReceipt(
                                 shop.SellerNick, RemoteMutationKey(scope, id, claim, action), action)
                             : KnowledgeEngineV2RevisionService.HasCommittedCandidateOutcome(
-                                shop.SellerNick, (string)receipt["candidate_id"], action, (string)receipt["reason"]);
+                                shop.SellerNick, (string)receipt["candidate_id"], action, (string)receipt["reason"],
+                                RemoteMutationKey(scope, id, claim, action));
                         if (completed)
                             recovered = new JObject { ["applied"] = true, ["recovered_from_committed_receipt"] = true };
                     }
@@ -1434,9 +1435,10 @@ namespace Bot.ChromeNs
                 case "revision_apply":
                 case "revision_reject":
                     string revisionError;
+                    var revisionReceipt = RemoteMutationKey(job.JournalScope, commandId, job.Claim, action);
                     bool ok = action == "revision_apply"
-                        ? KnowledgeEngineV2RevisionService.ApplyCandidate(seller, (string)payload["candidate_id"], out revisionError)
-                        : KnowledgeEngineV2RevisionService.RejectCandidate(seller, (string)payload["candidate_id"], (string)payload["reason"], out revisionError);
+                        ? KnowledgeEngineV2RevisionService.ApplyCandidate(seller, (string)payload["candidate_id"], out revisionError, revisionReceipt)
+                        : KnowledgeEngineV2RevisionService.RejectCandidate(seller, (string)payload["candidate_id"], (string)payload["reason"], out revisionError, revisionReceipt);
                     if (!ok) throw new InvalidOperationException(revisionError);
                     return new JObject { ["applied"] = true };
                 case "conflict_list":
