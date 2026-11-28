@@ -843,6 +843,10 @@ namespace Bot.ChromeNs
 
         internal static bool IsContextKnowledgeCurrent(string seller, string shopKey, KnowledgeV2RuntimeResult result)
         {
+            if (result != null && result.ContextDecision != null
+                && !string.IsNullOrWhiteSpace(result.ContextDecision.SnapshotGeneration)
+                && !KnowledgeEngineV2Service.IsDecisionSnapshotCurrent(seller, result.ContextDecision))
+                return false;
             if (result == null || string.IsNullOrEmpty(result.ContextPromptAddon)
                 || result.ContextPromptAddon.IndexOf("【Knowledge Center V2已批准知识：仅作为上下文证据】", StringComparison.Ordinal) < 0)
                 return true;
@@ -851,6 +855,7 @@ namespace Bot.ChromeNs
                 || !string.Equals(shop.ShopKey, shopKey, StringComparison.Ordinal)
                 || !string.Equals(shop.SellerNick, seller, StringComparison.Ordinal)
                 || result.ContextDecision == null || result.ContextDecision.Query == null
+                || !KnowledgeEngineV2Service.IsDecisionSnapshotCurrent(seller, result.ContextDecision)
                 || !KnowledgeEngineV2Service.IsEnabled(seller))
                 return false;
             var matches = GetContextMatches(result.ContextDecision);
@@ -889,6 +894,8 @@ namespace Bot.ChromeNs
                 || !string.Equals(shop.ShopKey, shopKey, StringComparison.Ordinal)
                 || !string.Equals(shop.SellerNick, seller, StringComparison.Ordinal)
                 || decision == null || !decision.CanDirectReply
+                || (!string.IsNullOrWhiteSpace(decision.SnapshotGeneration)
+                    && !KnowledgeEngineV2Service.IsDecisionSnapshotCurrent(seller, decision))
                 || !KnowledgeV2AuthorityPolicy.IsProductionApproved(record)
                 || string.IsNullOrWhiteSpace(record.Id)
                 || !string.Equals((record.Answer ?? string.Empty).Trim(), decision.Answer, StringComparison.Ordinal))
