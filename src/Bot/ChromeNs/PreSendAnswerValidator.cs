@@ -366,7 +366,6 @@ namespace Bot.ChromeNs
             return Regex.IsMatch(Compact(answer),
                 @"(?:我|我们|这边|客服)(?:会|将|马上|立即|现在|可以|给您|帮您|为您){1,4}(?:退款|退货|赔偿|补偿|发货|充值|解封)|(?:给您|帮您|为您)(?:直接|马上|立即|自动)?(?:退款|赔偿|补偿|解封)");
         }
-        }
 
         private static bool HasKnowledgeContradiction(
             string answer,
