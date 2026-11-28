@@ -1,3 +1,4 @@
+using Bot.Knowledge;
 ﻿using Bot.ChromeNs;
 using DbEntity.Response;
 using DbEntity;
@@ -163,8 +164,18 @@ namespace Bot.ChromeNs
                     return false;
                 }
 
-                if (!IsPreSendGuardSatisfied(preSendGuard, "旧版接口发送"))
+                Func<Action, bool> dispatchFence;
+                try
+                {
+                    dispatchFence = KnowledgeEngineV2Repository.CreateSendDispatchFence(shop.ShopKey,
+                        preSendGuard == null ? (Func<bool>)null : () => IsPreSendGuardSatisfied(preSendGuard, "旧版接口发送"));
+                }
+                catch { dispatchFence = null; }
+                if (dispatchFence == null)
+                {
+                    rpa.SetSendCancellation("旧版接口发送", "知识版本或业务状态无法确认");
                     return false;
+                }
 
                 var seller = Seller == null ? string.Empty : (Seller.Nick ?? string.Empty).Trim();
                 var now = DateTime.Now;
@@ -173,7 +184,24 @@ namespace Bot.ChromeNs
                     force: true, shopKey: shop.ShopKey);
                 try
                 {
-                    client.SendTimiMsg(buyer, text);
+                    var response = await client.SendPinnedTimiMsgAsync(buyer, text, dispatch =>
+                    {
+                        if (!ReferenceEquals(CDP, client) || client.IsInvalidated || client.IsShopIdentityRetired
+                            || !server.IsAuthoritativeShopSession(shop.ShopKey, client.SessionId)) return false;
+                        return dispatchFence(dispatch);
+                    }).ConfigureAwait(false);
+                    if (response == "__QNBOT_SEND_FENCE_REJECTED__")
+                    {
+                        SendDeliveryWatchdog.CancelPending(seller, buyer, text, "旧版发送版本复核拒绝", shop.ShopKey);
+                        rpa.SetSendCancellation("旧版接口发送", "知识或会话已变更，禁止重试");
+                        return false;
+                    }
+                    if (string.IsNullOrWhiteSpace(response))
+                    {
+                        SendDeliveryWatchdog.EnsurePending(seller, buyer, text, shop.ShopKey);
+                        rpa.SetSendCancellation("旧版接口发送结果不确定", "未取得可靠接口响应，等待卖家回显，禁止重试");
+                        return false;
+                    }
                 }
                 catch (Exception ex)
                 {
