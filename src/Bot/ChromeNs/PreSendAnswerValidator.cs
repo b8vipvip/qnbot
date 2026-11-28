@@ -145,6 +145,13 @@ namespace Bot.ChromeNs
                 result.Issues.Add("生成答案与高可信知识或事实约束的支持/不支持结论相反");
             }
 
+            var unsupportedRisk = HasHighRiskUnsupportedClaim(answer, authoritativeEvidence);
+            if (unsupportedRisk)
+                result.Issues.Add("回复包含无事实依据的高风险业务承诺");
+            var unauthorizedTransaction = HasTransactionalPromise(answer);
+            if (unauthorizedTransaction)
+                result.Issues.Add("回复承诺代买家执行订单或售后操作，但当前只是客服回答而非已授权的业务执行");
+
             if (result.Issues.Count == 0)
             {
                 Log.Info("发送前答案校验通过: seller=" + Safe(seller, 60)
@@ -154,7 +161,7 @@ namespace Bot.ChromeNs
 
             var highRisk = unsupportedAbsolute.Count > 0
                 || unsupportedStatus.Count > 0
-                || HasHighRiskUnsupportedClaim(answer, authoritativeEvidence)
+                || unsupportedRisk || unauthorizedTransaction
                 || HasKnowledgeContradiction(answer, approvedV2ContextEvidence);
             if (highRisk || secondAttempt)
             {
@@ -313,27 +320,51 @@ namespace Bot.ChromeNs
                 return false;
             if (Regex.IsMatch(evidence ?? string.Empty, @"(?m)^答案：[^\r\n]+"))
                 return false;
-            var polarity = DetectPolarity(answer);
-            // Questions/uncertainty are not factual compatibility assertions.
-            var compact = Compact(answer);
-            if (Regex.IsMatch(compact, @"无法确认|不能确认|暂不确定|不确定是否|请问.{0,16}(是否|能否|支持)"))
-                return false;
-            return polarity != 0;
+            return ProductAssertionPolarities(answer).Any();
+        }
+
+        private static IEnumerable<int> ProductAssertionPolarities(string answer)
+        {
+            // Split before removing punctuation: uncertainty about one product
+            // must not authorize an unsupported statement about another.
+            foreach (var raw in Regex.Split(answer ?? string.Empty, @"[，,。；;！？!?\r\n]+"))
+            {
+                var clause = Compact(raw);
+                if (clause.Length == 0) continue;
+                if (Regex.IsMatch(clause, @"^(请问|麻烦确认|需要确认|需要核实|请提供|请补充|暂不确定|目前无法确认|无法确认|不能确认|不确定是否|暂时无法确认)")
+                    && !Regex.IsMatch(clause, @"但|不过|然而|并且|同时"))
+                    continue;
+                // Uncertainty which follows an explicitly named product.
+                if (Regex.IsMatch(clause, @"(无法确认|不能确认|暂不确定|不确定是否).{0,12}(支持|兼容|能用|可用)")
+                    && !Regex.IsMatch(clause, @"但|不过|然而|并且|同时"))
+                    continue;
+                foreach (Match m in Regex.Matches(clause,
+                    @"(?<negative>不支持|不兼容|不能用|不可用|不通用|无法使用)|(?<positive>支持|兼容|能用|可用|通用|可以使用|能够使用)"))
+                    yield return m.Groups["negative"].Success ? -1 : 1;
+            }
+        }
+
+        internal static bool HasTransactionalPromise(string answer)
+        {
+            // Static shop FAQ or an OCR screenshot cannot authorize a new
+            // irreversible transaction. Actual execution has a separate ledger.
+            return Regex.IsMatch(Compact(answer),
+                @"(?:我|我们|这边|客服)(?:会|将|马上|立即|现在|可以|给您|帮您|为您){1,4}(?:退款|退货|赔偿|补偿|发货|充值|解封)|(?:给您|帮您|为您)(?:直接|马上|立即|自动)?(?:退款|赔偿|补偿|解封)");
+        }
         }
 
         private static bool HasKnowledgeContradiction(
             string answer,
             string approvedV2ContextEvidence)
         {
-            // V2 context is already restricted to approved, normal-risk records and ordered
-            // by relevance. Use the top selected answer as the factual polarity boundary.
-            var v2Answer = Regex.Match(
-                approvedV2ContextEvidence ?? string.Empty,
-                @"(?m)^答案：([^\r\n]+)");
-            if (!v2Answer.Success) return false;
-            var expectedV2 = DetectPolarity(v2Answer.Groups[1].Value);
-            var actualAnswer = DetectPolarity(answer);
-            return expectedV2 != 0 && actualAnswer != 0 && expectedV2 != actualAnswer;
+            // Only compare explicit capability assertions. For a unanimous
+            // approved answer set, any contrary clause is a contradiction,
+            // even if another clause of the generated answer agrees.
+            var expected = Regex.Matches(approvedV2ContextEvidence ?? string.Empty, @"(?m)^答案：([^\r\n]+)")
+                .Cast<Match>().SelectMany(x => ProductAssertionPolarities(x.Groups[1].Value))
+                .Distinct().ToList();
+            if (expected.Count != 1) return false;
+            return ProductAssertionPolarities(answer).Any(x => x != expected[0]);
         }
 
         private static int DetectPolarity(string value)
