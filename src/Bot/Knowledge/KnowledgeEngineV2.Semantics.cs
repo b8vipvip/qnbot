@@ -394,7 +394,7 @@ namespace Bot.Knowledge
                 || a.Intersect(b, StringComparer.OrdinalIgnoreCase).Any();
         }
 
-        private static List<string> NormalizeProductIds(IEnumerable<string> values)
+        internal static List<string> NormalizeProductIds(IEnumerable<string> values)
         {
             return (values ?? Enumerable.Empty<string>())
                 .Where(x => !string.IsNullOrWhiteSpace(x))
