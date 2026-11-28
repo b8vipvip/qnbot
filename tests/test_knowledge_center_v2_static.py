@@ -51,7 +51,7 @@ def test_v2_edits_use_atomic_incremental_snapshot_updates():
     assert 'AddRecordToIndexes' in incremental
     assert 'Snapshots[shopKey] = next;' in incremental
     refresh = incremental[incremental.index("private static void RefreshCommittedRecord"):incremental.index("internal static void ApplyRecordDelete")]
-    assert refresh.index("lock (BuildLocks.GetOrAdd(shopKey") < refresh.index("KnowledgeEngineV2Repository.LoadCommittedRecord(seller, id)") < refresh.index("Snapshots[shopKey] = next;")
+    assert refresh.index("lock (BuildLocks.GetOrAdd(shopKey") < refresh.index("KnowledgeEngineV2Repository.LoadCommittedRecordForSnapshot(seller, id, out version, out mutationId)") < refresh.index("Snapshots[shopKey] = next;")
     assert "KnowledgeV2AuthorityPolicy.NormalizeForRead(record)" in refresh
     assert "RefreshCommittedRecord(seller, shop.ShopKey, record.Id)" in incremental
     assert "internal static KnowledgeV2Record LoadCommittedRecord" in repo
@@ -69,7 +69,7 @@ def test_v2_disable_delete_and_bulk_replace_keep_snapshot_hot():
     assert 'BuildSnapshot(shop.ShopKey, enabled)' in incremental
     assert 'if (indexable && index >= 0)' in incremental
     replace = incremental[incremental.index("internal static void ReplaceSnapshot"):incremental.index("private static Snapshot CloneSnapshot")]
-    assert replace.index("lock (BuildLocks.GetOrAdd(shop.ShopKey") < replace.index("KnowledgeEngineV2Repository.LoadAll(seller)") < replace.index("BuildSnapshot(shop.ShopKey, enabled)")
+    assert replace.index("lock (BuildLocks.GetOrAdd(shop.ShopKey") < replace.index("KnowledgeEngineV2Repository.LoadSnapshotCorpus(seller, out version)") < replace.index("BuildSnapshot(shop.ShopKey, enabled)")
     assert "records ?? Enumerable.Empty" not in replace
     assert 'else KnowledgeEngineV2Service.Invalidate(seller);' not in repo
 
