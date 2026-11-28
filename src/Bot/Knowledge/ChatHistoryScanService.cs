@@ -1502,9 +1502,9 @@ namespace Bot.Knowledge
             if (shop != null && shop.HasStableSellerId)
             {
                 var loginId = message.loginid == null ? string.Empty : (message.loginid.targetId ?? string.Empty).Trim();
-                var sellerEndpoint = string.Equals(CleanNick(message.fromid.nick), CleanNick(seller), StringComparison.Ordinal)
-                    ? message.fromid : message.toid;
-                var endpointId = (sellerEndpoint.targetId ?? string.Empty).Trim();
+                var endpointId = string.Equals(CleanNick(message.fromid.nick), CleanNick(seller), StringComparison.Ordinal)
+                    ? (message.fromid.targetId ?? string.Empty).Trim()
+                    : (message.toid.targetId ?? string.Empty).Trim();
                 if ((!string.IsNullOrEmpty(loginId) && !string.Equals(loginId, shop.SellerId, StringComparison.Ordinal))
                     || (!string.IsNullOrEmpty(endpointId) && !string.Equals(endpointId, shop.SellerId, StringComparison.Ordinal)))
                 {
