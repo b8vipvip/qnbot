@@ -16,6 +16,7 @@ namespace Bot.Knowledge
             public string ShopKey;
             public DateTime BuiltAt;
             public readonly string Generation = Guid.NewGuid().ToString("N");
+            public long CorpusVersion;
             public List<KnowledgeV2Record> Records;
             public Dictionary<string, HashSet<int>> Exact;
             public Dictionary<string, HashSet<int>> Intent;
@@ -49,7 +50,8 @@ namespace Bot.Knowledge
             var shop = ResolveShop(seller);
             Snapshot current;
             return shop != null && Snapshots.TryGetValue(shop.ShopKey, out current)
-                && current != null && string.Equals(current.Generation, decision.SnapshotGeneration, StringComparison.Ordinal);
+                && current != null && current.CorpusVersion == KnowledgeEngineV2Repository.GetCorpusVersion(seller)
+                && string.Equals(current.Generation, decision.SnapshotGeneration, StringComparison.Ordinal);
         }
 
         public static bool IsSnapshotReady(string seller)
