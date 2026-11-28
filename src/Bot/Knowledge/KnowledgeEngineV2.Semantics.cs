@@ -29,6 +29,12 @@ namespace Bot.Knowledge
                 WorkingMemoryReason = string.Empty
             };
             query.Subject = ResolveSubject(message, query.Entities);
+            // A generic device/feature mentioned in a demonstrative follow-up
+            // does not independently identify the product being discussed.
+            if (memory != null && memory.UpdatedAt >= DateTime.Now.AddMinutes(-45)
+                && ContextCue.IsMatch(query.Normalized) && !query.Entities.Any(IsProductEntity)
+                && (memory.ProductEvidenceConflict || (memory.Entities ?? new List<string>()).Any(IsProductEntity)))
+                query.ContextDependent = true;
 
             if (query.ContextDependent && memory != null && memory.UpdatedAt >= DateTime.Now.AddMinutes(-45))
             {
