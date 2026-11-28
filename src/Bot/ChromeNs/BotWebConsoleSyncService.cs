@@ -1445,7 +1445,8 @@ namespace Bot.ChromeNs
                     var records = KnowledgeEngineV2Repository.LoadAll(seller);
                     return new JObject { ["fingerprint"] = KnowledgeEngineV2Repository.ComputeCloudSyncFingerprint(records),
                         ["items"] = JArray.FromObject(KnowledgeEngineV2Service.GetConflictsForRecords(records).Take(100)
-                            .Select(x => new { x.FactKey, x.Subject, x.Predicate, Records = x.Records.Select(y => new { y.Id, y.Title, y.Answer }) })) };
+                            .Select(x => new { x.FactKey, x.Subject, x.Predicate, x.RequiresScopeReview, x.ResolutionMode,
+                                Records = x.Records.Select(y => new { y.Id, y.Title, y.Answer, y.ProductIds, y.Conditions, y.RequiredContext, y.Exclusions }) })) };
                 case "conflict_resolve":
                     if (!KnowledgeEngineV2Service.TryResolveConflict(seller, (string)payload["fingerprint"],
                         (string)payload["fact_key"], (string)payload["knowledge_id"], (string)payload["reason"] == "candidate",
