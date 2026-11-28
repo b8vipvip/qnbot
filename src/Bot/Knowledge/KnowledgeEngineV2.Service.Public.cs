@@ -206,7 +206,7 @@ namespace Bot.Knowledge
             // become the next turn's working-memory intent, predicate or subject.
             // An image-only message has no buyer-authored query to update memory with.
             // Preserve the previous subject instead of replacing it with an empty parse.
-            if (message.Length > 0)
+            if (!sandbox && message.Length > 0)
                 UpdateWorkingMemory(shop.ShopKey, seller, buyer, query);
             if (hasEvidence)
             {
@@ -297,8 +297,7 @@ namespace Bot.Knowledge
                     && string.Equals((x.Record.SourceType ?? "").Trim(),
                         "manual_reviewed_direct", StringComparison.OrdinalIgnoreCase)
                     && (x.Record.Aliases ?? new List<string>()).Concat(new[] { x.Record.Title })
-                        .Any(a => string.Equals(KnowledgeEngineV2Semantics.Compact(a),
-                            query.Normalized, StringComparison.Ordinal)))
+                        .Any(a => ExactQuestionMatches(a, query.Original)))
                 .ToList();
             var manualExactConflict = manualExactMatches.Count > 1;
             var manualExact = manualExactConflict ? null : manualExactMatches.FirstOrDefault();
@@ -364,7 +363,11 @@ namespace Bot.Knowledge
 
         private static bool IsEligibleProductionMatch(KnowledgeV2Match match, KnowledgeV2Query query)
         {
-            if (!IsApprovedProductionMatch(match)) return false;
+            if (!IsApprovedProductionMatch(match) || query == null) return false;
+            // Numeric qualifiers in a buyer question must be backed by a saved
+            // wording, not by a generic predicate score or punctuation folding.
+            // Product IDs independently proven in the structured scope are excluded.
+            if (!HasCompatibleQuestionNumbers(match.Record, query)) return false;
             if (match == null || match.Record == null
                 || !KnowledgeV2AuthorityPolicy.IsAutoPublishedHumanEvidenceSource(match.Record.SourceType))
                 return true;
@@ -374,10 +377,7 @@ namespace Bot.Knowledge
             // production fallback bypass the stronger human-evidence retrieval gate.
             var exactAlias = (match.Record.Aliases ?? new List<string>())
                 .Concat(new[] { match.Record.Title })
-                .Any(alias => string.Equals(
-                    KnowledgeEngineV2Semantics.Compact(alias),
-                    query == null ? string.Empty : query.Normalized,
-                    StringComparison.Ordinal));
+                .Any(alias => ExactQuestionMatches(alias, query.Original));
             return exactAlias || IsStrongAutoPublishedHumanEvidenceSimilarMatch(match, query);
         }
 
@@ -470,7 +470,9 @@ namespace Bot.Knowledge
             if (close.Count < 2) return false;
             foreach (var candidate in close.Where(x => !ReferenceEquals(x, best)))
             {
-                if (!candidate.Record.Enabled || string.Equals(candidate.Record.RiskLevel, "high", StringComparison.OrdinalIgnoreCase) || KnowledgeEngineV2Semantics.IsHighRisk(candidate.Record.Answer)) return false;
+                if (!candidate.Record.Enabled || string.Equals(candidate.Record.RiskLevel, "high", StringComparison.OrdinalIgnoreCase)
+                    || string.Equals(candidate.Record.RiskLevel, "critical", StringComparison.OrdinalIgnoreCase)
+                    || KnowledgeEngineV2Semantics.IsHighRisk(candidate.Record.Answer)) return false;
                 if (!SameConsensusScope(best.Record, candidate.Record)) return false;
                 if (!AnswersEquivalent(best.Record.Answer, candidate.Record.Answer)) return false;
             }
@@ -536,7 +538,12 @@ namespace Bot.Knowledge
 
         internal static List<KnowledgeV2Conflict> GetConflictsForRecords(IEnumerable<KnowledgeV2Record> records)
         {
-            return records.Where(KnowledgeV2AuthorityPolicy.IsProductionApproved).GroupBy(KnowledgeEngineV2Semantics.FactKey).Where(g => !string.IsNullOrWhiteSpace(g.Key) && g.Count() > 1).Select(g => new KnowledgeV2Conflict { FactKey = g.Key, Subject = g.First().Subject, Predicate = g.First().Predicate, Records = g.ToList() }).Where(x => HasAnswerDisagreement(x.Records)).ToList();
+            return records.Where(KnowledgeV2AuthorityPolicy.IsProductionApproved)
+                .GroupBy(KnowledgeEngineV2Semantics.FactKey)
+                .Where(g => !string.IsNullOrWhiteSpace(g.Key) && g.Count() > 1)
+                .Select(g => new KnowledgeV2Conflict { FactKey = g.Key, Subject = g.First().Subject, Predicate = g.First().Predicate,
+                    Records = g.Where(x => g.Any(y => !ReferenceEquals(x, y) && IsMeaningfulConflictPair(x, y))).ToList() })
+                .Where(x => HasAnswerDisagreement(x.Records)).ToList();
         }
 
         internal static bool TryResolveConflict(string seller, string expectedFingerprint, string factKey, string selectedId, bool asCandidate)
@@ -545,8 +552,13 @@ namespace Bot.Knowledge
             if (string.IsNullOrWhiteSpace(expectedFingerprint) ||
                 KnowledgeEngineV2Repository.ComputeCloudSyncFingerprint(records) != expectedFingerprint) return false;
             var conflict = GetConflictsForRecords(records).SingleOrDefault(x => x.FactKey == factKey);
-            if (conflict == null || !conflict.Records.Any(x => x.Id == selectedId)) return false;
-            foreach (var record in conflict.Records.Where(x => x.Id != selectedId))
+            var selected = conflict == null ? null : conflict.Records.FirstOrDefault(x => x.Id == selectedId);
+            if (selected == null) return false;
+            var conflicting = conflict.Records.Where(x => x.Id != selectedId && IsMeaningfulConflictPair(selected, x)).ToList();
+            if (conflicting.Count == 0) return false;
+            // A fact-key bucket can contain unrelated procedures or disjoint
+            // conflicts. Preserve every record that does not contradict the selection.
+            foreach (var record in conflicting)
             {
                 record.Enabled = false;
                 record.Status = asCandidate ? "candidate" : "disabled";

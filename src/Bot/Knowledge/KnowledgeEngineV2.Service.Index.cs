@@ -133,7 +133,8 @@ namespace Bot.Knowledge
             }
             var alias = (record.Aliases ?? new List<string>()).Concat(new[] { record.Title })
                 .Where(x => !string.IsNullOrWhiteSpace(x))
-                .Select(x => KnowledgeEngineV2Semantics.TextSimilarity(query.Original, x))
+                .Select(x => SameAnswerNumbers(query.Original, x)
+                    ? KnowledgeEngineV2Semantics.TextSimilarity(query.Original, x) : 0)
                 .DefaultIfEmpty(0).Max();
             var predicate = string.Equals(query.Predicate, record.Predicate, StringComparison.OrdinalIgnoreCase) ? 1.0
                 : (query.Predicate == "general" || record.Predicate == "general" ? 0.30 : 0.0);
@@ -204,9 +205,8 @@ namespace Bot.Knowledge
         {
             if (left == null || right == null) return false;
             var exactQuestion = (left.Aliases ?? new List<string>()).Concat(new[] { left.Title })
-                .Select(KnowledgeEngineV2Semantics.Compact).Where(x => x.Length > 0)
-                .Intersect((right.Aliases ?? new List<string>()).Concat(new[] { right.Title })
-                    .Select(KnowledgeEngineV2Semantics.Compact), StringComparer.Ordinal).Any();
+                .Any(a => (right.Aliases ?? new List<string>()).Concat(new[] { right.Title })
+                    .Any(b => ExactQuestionMatches(a, b)));
             if (!exactQuestion && !string.Equals(KnowledgeEngineV2Semantics.FactKey(left),
                 KnowledgeEngineV2Semantics.FactKey(right), StringComparison.Ordinal)) return false;
             if (AnswersEquivalent(left.Answer, right.Answer)) return false;
@@ -214,6 +214,7 @@ namespace Bot.Knowledge
             // conclusions cannot be resolved safely by ranking alone.
             if (exactQuestion) return true;
 
+            if (!SameAnswerNumbers(left.Title, right.Title)) return false;
             var questionSimilarity = KnowledgeEngineV2Semantics.TextSimilarity(left.Title, right.Title);
             if (questionSimilarity < 0.72) return false;
             if (questionSimilarity >= 0.86 && !SameAnswerNumbers(left.Answer, right.Answer)) return true;
@@ -245,12 +246,38 @@ namespace Bot.Knowledge
                 && KnowledgeEngineV2Semantics.TextSimilarity(left, right) >= 0.68;
         }
 
+        private static IEnumerable<string> NumericTokens(string value)
+        {
+            // Preserve signs, decimal points and multi-part versions, unlike Compact.
+            const string pattern = @"[+\-−]?\d+(?:[.,]\d+)*";
+            return Regex.Matches(value ?? string.Empty, pattern).Cast<Match>().Select(x => x.Value);
+        }
+
         private static bool SameAnswerNumbers(string left, string right)
         {
-            const string pattern = @"\d+(?:[.,]\d+)?";
-            var a = Regex.Matches(left ?? string.Empty, pattern).Cast<Match>().Select(x => x.Value);
-            var b = Regex.Matches(right ?? string.Empty, pattern).Cast<Match>().Select(x => x.Value);
-            return a.SequenceEqual(b, StringComparer.Ordinal);
+            return NumericTokens(left).SequenceEqual(NumericTokens(right), StringComparer.Ordinal);
+        }
+
+        private static bool ExactQuestionMatches(string left, string right)
+        {
+            var key = KnowledgeEngineV2Semantics.Compact(left);
+            return key.Length > 0 && key == KnowledgeEngineV2Semantics.Compact(right) && SameAnswerNumbers(left, right);
+        }
+
+        private static bool HasCompatibleQuestionNumbers(KnowledgeV2Record record, KnowledgeV2Query query)
+        {
+            if (record == null || query == null) return false;
+            var bound = new HashSet<string>((record.ProductIds ?? new List<string>())
+                .Select(x => (x ?? string.Empty).Trim())
+                .Select(x => x.StartsWith("product:", StringComparison.OrdinalIgnoreCase) ? x.Substring(8) : x),
+                StringComparer.OrdinalIgnoreCase);
+            var verifiedProducts = new HashSet<string>((query.Entities ?? new List<string>())
+                .Where(x => x.StartsWith("product:", StringComparison.OrdinalIgnoreCase))
+                .Select(x => x.Substring(8)).Where(bound.Contains), StringComparer.OrdinalIgnoreCase);
+            var numbers = NumericTokens(query.Original).Where(x => !verifiedProducts.Contains(x)).ToList();
+            return (record.Aliases ?? new List<string>()).Concat(new[] { record.Title })
+                .Any(alias => !string.IsNullOrWhiteSpace(alias) && numbers.SequenceEqual(
+                    NumericTokens(alias).Where(x => !verifiedProducts.Contains(x)), StringComparer.Ordinal));
         }
 
         private static double EntitySimilarity(IEnumerable<string> left, IEnumerable<string> right)
@@ -291,15 +318,24 @@ namespace Bot.Knowledge
 
         private static KnowledgeV2WorkingMemory GetWorkingMemory(string shopKey, string seller, string buyer)
         {
+            if (string.IsNullOrWhiteSpace(buyer)) return null;
             KnowledgeV2WorkingMemory memory;
-            if (Working.TryGetValue(WorkingKey(shopKey, seller, buyer), out memory)
-                && memory != null && memory.UpdatedAt >= DateTime.Now.AddMinutes(-45)) return memory;
-            return null;
+            if (!Working.TryGetValue(WorkingKey(shopKey, seller, buyer), out memory) || memory == null) return null;
+            lock (memory)
+            {
+                if (memory.UpdatedAt < DateTime.Now.AddMinutes(-45)) return null;
+                return new KnowledgeV2WorkingMemory
+                {
+                    Seller = memory.Seller, Buyer = memory.Buyer, Subject = memory.Subject,
+                    Predicate = memory.Predicate, Intent = memory.Intent, UpdatedAt = memory.UpdatedAt,
+                    Entities = (memory.Entities ?? new List<string>()).ToList()
+                };
+            }
         }
 
         private static void UpdateWorkingMemory(string shopKey, string seller, string buyer, KnowledgeV2Query query)
         {
-            if (query == null) return;
+            if (query == null || string.IsNullOrWhiteSpace(buyer)) return;
             var key = WorkingKey(shopKey, seller, buyer);
             var current = Working.GetOrAdd(key, _ => new KnowledgeV2WorkingMemory
             {
@@ -309,10 +345,22 @@ namespace Bot.Knowledge
             });
             lock (current)
             {
-                if (!query.ContextDependent || !string.IsNullOrWhiteSpace(query.Subject)) current.Subject = query.Subject;
-                if (query.Predicate != "general") current.Predicate = query.Predicate;
-                if (query.Intent != "general") current.Intent = query.Intent;
-                if (query.Entities != null && query.Entities.Count > 0) current.Entities = query.Entities.Take(8).ToList();
+                if (!query.ContextDependent || current.UpdatedAt < DateTime.Now.AddMinutes(-45))
+                {
+                    // A standalone/new turn starts a new context, including empty fields.
+                    // A timed-out object's previous product/intent must not be revived.
+                    current.Subject = query.Subject ?? string.Empty;
+                    current.Predicate = query.Predicate ?? "general";
+                    current.Intent = query.Intent ?? "general";
+                    current.Entities = (query.Entities ?? new List<string>()).Take(8).ToList();
+                }
+                else
+                {
+                    if (!string.IsNullOrWhiteSpace(query.Subject)) current.Subject = query.Subject;
+                    if (query.Predicate != "general") current.Predicate = query.Predicate;
+                    if (query.Intent != "general") current.Intent = query.Intent;
+                    if (query.Entities != null && query.Entities.Count > 0) current.Entities = query.Entities.Take(8).ToList();
+                }
                 current.UpdatedAt = DateTime.Now;
             }
             SweepExpiredWorkingMemoryIfDue();
@@ -472,9 +520,10 @@ namespace Bot.Knowledge
 
         private static string WorkingKey(string shopKey, string seller, string buyer)
         {
-            return (shopKey ?? string.Empty).Trim() + "|"
-                + (seller ?? string.Empty).Trim() + "|"
-                + (buyer ?? string.Empty).Trim();
+            var shop = (shopKey ?? string.Empty).Trim();
+            var account = (seller ?? string.Empty).Trim();
+            var contact = (buyer ?? string.Empty).Trim();
+            return shop.Length + ":" + shop + account.Length + ":" + account + contact.Length + ":" + contact;
         }
 
         private static bool IsMediaPlaceholder(string value)
