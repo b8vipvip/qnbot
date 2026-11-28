@@ -134,7 +134,7 @@ def test_durable_manual_save_warms_a_cold_snapshot_before_next_buyer_question():
     ]
     assert "if (!Snapshots.TryGetValue(shopKey, out current) || current == null)" in method
     assert "Warm(seller);" in method
-    assert "KnowledgeEngineV2Repository.LoadCommittedRecord(seller, id)" in method
+    assert "KnowledgeEngineV2Repository.LoadCommittedRecordForSnapshot(seller, id, out version, out mutationId)" in method
 
 
 def test_manual_takeover_auto_learning_requires_native_buyer_and_human_message_ids():
