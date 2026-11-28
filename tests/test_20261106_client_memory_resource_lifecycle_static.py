@@ -75,7 +75,7 @@ def test_timeline_cache_sweeps_only_after_context_window():
 def test_expired_working_memory_does_not_evict_active_buyers():
     index = source("src/Bot/Knowledge/KnowledgeEngineV2.Service.Index.cs")
     assert "SoftWorkingMemoryLimit = 256;" in index
-    assert "memory.UpdatedAt >= DateTime.Now.AddMinutes(-45)" in index
+    assert "memory.UpdatedAt < DateTime.Now.AddMinutes(-45)" in index
     assert "idle < TimeSpan.FromMinutes(60)" in index
     assert "SweepExpiredWorkingMemoryIfDue();" in index
     assert "ReferenceEquals(current, memory)" in index
