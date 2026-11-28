@@ -1249,11 +1249,7 @@ namespace Bot.ChromeNs
                         || ConversationProgressGuardService.RequiresContextualHandling(authority.ConversationState))
                         return string.Empty;
 
-                    var priorMatch = (approvedDecision.Matches ?? new List<KnowledgeV2Match>())
-                        .Where(x => x != null && x.Record != null
-                            && KnowledgeV2AuthorityPolicy.IsProductionApproved(x.Record))
-                        .OrderByDescending(x => x.Score)
-                        .FirstOrDefault();
+                    var priorMatch = approvedDecision.SelectedMatch;
                     if (priorMatch == null || priorMatch.Record == null
                         || string.IsNullOrWhiteSpace(priorMatch.Record.Id))
                         return string.Empty;
@@ -1270,18 +1266,15 @@ namespace Bot.ChromeNs
                         || !string.IsNullOrWhiteSpace(latest.ConditionalAdviceKey)
                         || !string.Equals(latest.Answer, approvedDecision.Answer, StringComparison.Ordinal))
                         return string.Empty;
-                    var latestMatch = (latest.Matches ?? new List<KnowledgeV2Match>())
-                        .Where(x => x != null && x.Record != null
-                            && KnowledgeV2AuthorityPolicy.IsProductionApproved(x.Record))
-                        .OrderByDescending(x => x.Score)
-                        .FirstOrDefault();
+                    var latestMatch = latest.SelectedMatch;
                     if (latestMatch == null || latestMatch.Record == null
                         || !string.Equals(latestMatch.Record.Id, priorMatch.Record.Id, StringComparison.Ordinal))
                         return string.Empty;
 
                     var persisted = KnowledgeEngineV2Repository.LoadCommittedRecord(seller, latestMatch.Record.Id);
                     if (persisted == null || !KnowledgeV2AuthorityPolicy.IsProductionApproved(persisted)
-                        || !string.Equals(persisted.Answer, latest.Answer, StringComparison.Ordinal))
+                        || !string.Equals(persisted.Answer, latest.Answer, StringComparison.Ordinal)
+                        || !KnowledgeEngineV2RuntimeBridge.IsSelectedKnowledgeCurrent(seller, shopKey, latest))
                         return string.Empty;
 
                     var answer = ReplyTranscriptSanitizer.Sanitize(latest.Answer);

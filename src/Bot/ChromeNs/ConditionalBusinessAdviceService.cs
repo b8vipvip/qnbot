@@ -398,6 +398,7 @@ namespace Bot.ChromeNs
                     continue;
 
                 decision.CanDirectReply = true;
+                decision.SelectedMatch = match;
                 decision.Answer = (record.Answer ?? string.Empty).Trim();
                 decision.ConditionalAdviceKey = "refund-advice:" + record.Id;
                 decision.ConditionalAdviceOrderId = evidence.OrderId;

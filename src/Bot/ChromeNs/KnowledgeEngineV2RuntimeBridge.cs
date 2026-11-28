@@ -465,7 +465,14 @@ namespace Bot.ChromeNs
                     + burst.BuyerNick + ", generation=" + burst.SessionGeneration);
                 return KnowledgeV2RuntimeResult.HandledResult();
             }
-            var best = decision.Matches.FirstOrDefault(IsApprovedMatchForLogging);
+            var best = decision.SelectedMatch;
+            if (!IsSelectedKnowledgeCurrent(burst.SellerNick, burst.ShopKey, decision))
+            {
+                if (ctl != null) ctl.SetSendResult(false, "未发送：选中的V2知识已变更或不可用");
+                lease.MarkCompleted("knowledge_v2_selected_record_changed");
+                ResponseProgressTracker.Cancel(burst.SellerNick, burst.BuyerNick, "Knowledge V2选中知识已变更", burst.ShopKey);
+                return KnowledgeV2RuntimeResult.HandledResult();
+            }
             // Preserve the actual knowledge record selected for the direct reply.
             // A generic "本地知识V2" label cannot open the right editor later.
             var sourceLabel = best != null && best.Record != null
@@ -602,11 +609,19 @@ namespace Bot.ChromeNs
             // If a later retry is cancelled, an earlier attempt may still have reached the buyer.
             var conditionalAdviceSendMayHaveStarted = false;
             var outgoingPolicySuppressed = false;
+            var knowledgeVersionSuppressed = false;
             var latestOutgoingPolicyReason = string.Empty;
             Func<bool> preSendGuard = () =>
             {
                 if (!lease.IsCurrent || lease.CancellationToken.IsCancellationRequested)
                     return false;
+                if (!ReplyModeService.IsLocalFirst(burst.SellerNick)
+                    || !IsSelectedKnowledgeCurrent(burst.SellerNick, burst.ShopKey, decision))
+                {
+                    knowledgeVersionSuppressed = true;
+                    Log.Info("Knowledge V2实际发送前选中知识或回复模式已变更，阻止旧答案发送: buyer=" + burst.BuyerNick);
+                    return false;
+                }
                 if (conditionalAdviceReserved
                     && !ConditionalBusinessAdviceService.IsEvidenceStillValid(
                         burst.ShopKey, burst.SellerNick, burst.BuyerNick,
@@ -684,6 +699,13 @@ namespace Bot.ChromeNs
                     burst.ShopKey, burst.SellerNick, burst.BuyerNick,
                     decision.ConditionalAdviceOrderId, decision.ConditionalAdviceKey,
                     sendOk, !conditionalAdviceSendMayHaveStarted);
+            if (!sendOk && knowledgeVersionSuppressed)
+            {
+                if (ctl != null) ctl.SetSendResult(false, "未发送：选中知识或回复模式已变更");
+                lease.MarkCompleted("knowledge_v2_selected_record_changed_before_send");
+                ResponseProgressTracker.Cancel(burst.SellerNick, burst.BuyerNick, "Knowledge V2发送前知识版本变化", burst.ShopKey);
+                return KnowledgeV2RuntimeResult.HandledResult();
+            }
             if (outgoingPolicySuppressed)
             {
                 if (ctl != null) ctl.SetSendResult(false, "未发送：" + latestOutgoingPolicyReason);
@@ -811,9 +833,37 @@ namespace Bot.ChromeNs
             return value.Length <= max ? value : value.Substring(0, max) + "...";
         }
 
-        private static bool IsApprovedMatchForLogging(KnowledgeV2Match match)
+        internal static bool IsSelectedKnowledgeCurrent(string seller, string shopKey, KnowledgeV2Decision decision)
         {
-            return match != null && Bot.Knowledge.KnowledgeV2AuthorityPolicy.IsProductionApproved(match.Record);
+            var selected = decision == null ? null : decision.SelectedMatch;
+            var record = selected == null ? null : selected.Record;
+            var shop = ShopSettingsScope.Current;
+            if (shop == null || !shop.HasStableSellerId
+                || !string.Equals(shop.ShopKey, shopKey, StringComparison.Ordinal)
+                || !string.Equals(shop.SellerNick, seller, StringComparison.Ordinal)
+                || decision == null || !decision.CanDirectReply
+                || !KnowledgeV2AuthorityPolicy.IsProductionApproved(record)
+                || string.IsNullOrWhiteSpace(record.Id)
+                || !string.Equals((record.Answer ?? string.Empty).Trim(), decision.Answer, StringComparison.Ordinal))
+                return false;
+            try
+            {
+                var committed = KnowledgeEngineV2Repository.LoadCommittedRecord(seller, record.Id);
+                if (committed == null || !committed.Enabled
+                    || string.Equals(committed.Status, "deleted", StringComparison.OrdinalIgnoreCase)
+                    || string.Equals(committed.Status, "disabled", StringComparison.OrdinalIgnoreCase))
+                    return false;
+                committed = KnowledgeV2AuthorityPolicy.NormalizeForRead(committed);
+                return KnowledgeV2AuthorityPolicy.IsProductionApproved(committed)
+                    && !ShopReceptionPolicy.IsQuarantined(seller, committed.Id, committed.Title, committed.Answer)
+                    && string.Equals(KnowledgeEngineV2Repository.EditorRecordFingerprint(record),
+                        KnowledgeEngineV2Repository.EditorRecordFingerprint(committed), StringComparison.Ordinal);
+            }
+            catch (Exception ex)
+            {
+                Log.ErrorWithMaxCount("Knowledge V2发送前知识版本校验失败：" + ex.GetType().Name, 10);
+                return false;
+            }
         }
     }
 }

@@ -640,3 +640,10 @@ def test_context_entity_extraction_reuses_production_snapshot_not_full_database(
     assert "KnowledgeV2AuthorityPolicy.IsProductionApproved" in method
     assert "ShopReceptionPolicy.IsQuarantined" in method
     assert "KnowledgeEngineV2Repository.LoadAll" not in method
+
+
+def test_ai_outage_rechecks_the_actual_selected_match_not_the_top_ranked_row():
+    source = read("src/Bot/ChromeNs/BuyerStreamingReplyPipeline.cs")
+    assert "var priorMatch = approvedDecision.SelectedMatch;" in source
+    assert "var latestMatch = latest.SelectedMatch;" in source
+    assert "KnowledgeEngineV2RuntimeBridge.IsSelectedKnowledgeCurrent(seller, shopKey, latest)" in source

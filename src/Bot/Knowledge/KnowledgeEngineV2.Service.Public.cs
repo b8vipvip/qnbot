@@ -307,6 +307,7 @@ namespace Bot.Knowledge
                     && best.ConfidenceScore >= minConfidence
                     && (best.AliasScore >= 0.94 || best.PredicateScore >= 0.99)
                     && (effectiveMargin >= 0.08 || best.AliasScore >= 0.98)));
+            decision.SelectedMatch = decision.CanDirectReply ? best : null;
             decision.Answer = decision.CanDirectReply ? (best.Record.Answer ?? string.Empty).Trim() : string.Empty;
             decision.Reason = decision.CanDirectReply
                 ? (approvedExact ? "人工审核精确问法直答即时生效：score="
