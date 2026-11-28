@@ -769,6 +769,20 @@ namespace Bot.Knowledge
                             continue;
                         }
                     }
+                    // Both devices changed the same stable ID relative to a known
+                    // baseline. Do not silently make the cloud arrival winner an
+                    // authoritative fact when the actual answers/scopes disagree.
+                    if (baseline != null && baseline.ContainsKey(id) && cloud.Enabled && local.Enabled
+                        && !SameBusinessClaims(cloud, local))
+                    {
+                        AddCandidate(merged, mergedIds, local, id);
+                        cloud.Enabled = false;
+                        cloud.Status = "candidate";
+                        cloud.Type = "learning_candidate";
+                        // Preserve the stable cloud record ID and original evidence
+                        // provenance. Both variants remain available for resolution.
+                        continue;
+                    }
                     // Concurrent demotion and edit must never leave the edited
                     // answer active against an explicit stop on another device.
                     if (!local.Enabled && cloud.Enabled)
@@ -938,6 +952,23 @@ namespace Bot.Knowledge
         {
             return (left??Enumerable.Empty<string>()).SequenceEqual(
                 right??Enumerable.Empty<string>(),StringComparer.Ordinal);
+        }
+
+        private static bool SameBusinessClaims(KnowledgeV2Record left, KnowledgeV2Record right)
+        {
+            return string.Equals(left.Title, right.Title, StringComparison.Ordinal)
+                && string.Equals(left.Answer, right.Answer, StringComparison.Ordinal)
+                && string.Equals(left.ShortAnswer, right.ShortAnswer, StringComparison.Ordinal)
+                && string.Equals(left.Subject, right.Subject, StringComparison.Ordinal)
+                && string.Equals(left.Predicate, right.Predicate, StringComparison.Ordinal)
+                && string.Equals(left.Intent, right.Intent, StringComparison.Ordinal)
+                && string.Equals(left.RiskLevel, right.RiskLevel, StringComparison.OrdinalIgnoreCase)
+                && SameList(left.ProductIds, right.ProductIds)
+                && SameList(left.Entities, right.Entities)
+                && SameList(left.Aliases, right.Aliases)
+                && SameList(left.Conditions, right.Conditions)
+                && SameList(left.RequiredContext, right.RequiredContext)
+                && SameList(left.Exclusions, right.Exclusions);
         }
 
         private static bool SameRecordContent(KnowledgeV2Record left,KnowledgeV2Record right)
