@@ -15,7 +15,9 @@ def policy() -> dict:
 def test_import_export_bootstrap_is_explicitly_initialized():
     app = read("src/Bot/App.xaml.cs")
     assert "RulePolicyImportExportUi.InitializeForApp();" in app
-    assert app.index("KnowledgePolicyProfileUi.Initialize();") < app.index("RulePolicyImportExportUi.InitializeForApp();")
+    assert "KnowledgePolicyProfileUi.Initialize();" not in app
+    source = read("src/Bot/Knowledge/RulePolicyImportExportUi.cs")
+    assert "typeof(StorePromptProfileWindow)" in source
 
 
 def test_progress_guard_tracks_state_without_persisting_sensitive_values():

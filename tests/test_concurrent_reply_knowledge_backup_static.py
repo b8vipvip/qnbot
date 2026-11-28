@@ -32,14 +32,16 @@ def test_policy_full_export_contains_reliability_stats():
 
 
 def test_knowledge_center_has_complete_package_import_export():
-    center = read("src/Bot/Knowledge/KnowledgeCenterWindow.cs")
-    io = read("src/Bot/Knowledge/RulePolicyImportExportUi.cs")
-    assert '导入知识库完整包' in center
-    assert '导出知识库完整包' in center
-    assert 'KnowledgePackageSchema = "qnbot.knowledge-package"' in io
-    assert 'BotFeatureStore.SaveKnowledgeBase(importedKnowledge)' in io
-    assert '["policy"] = policy' in io
-    assert '["settings"] = settings' in io
+    center = read("src/Bot/Knowledge/KnowledgeCenterV2Ui.cs")
+    io = read("src/Bot/Knowledge/KnowledgeCenterV2OperationsPages.cs")
+    assert 'new KnowledgeV2ImportExportPage(_owner, _seller, _shopKey)' in center
+    assert '导入V2完整包' in io
+    assert '导出V2完整包' in io
+    assert "KnowledgeEngineV2Repository.ReplaceAll(_seller, package.Records)" in io
+    assert "Settings = KnowledgeEngineV2Service.GetSettingsView(_seller)" in io
+    assert "ParseValidatedPackage" in io
+    assert "CreateAutomaticBackup()" in io
+    assert "BotFeatureStore.SaveKnowledgeBase" not in io
 
 
 def test_dispatched_buyer_work_is_not_cancelled_by_next_buyer_message():

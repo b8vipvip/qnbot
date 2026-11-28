@@ -69,12 +69,14 @@ def test_store_rule_center_generates_core_and_scene_rules_instead_of_one_long_pr
     assert "按当前场景动态选取的店铺规则" in service
     assert "StorePromptProfileService.BuildTextRulesAddon(state)" in state
     assert "StorePromptProfileService.BuildVisionPromptAddon(prompt)" in vision
-    assert 'Content = "店铺规则中心"' in ui
+    options = read("src/Bot/Options/CtlRobotOptions.xaml.cs")
+    assert 'MakeButton("店铺规则中心", 110)' in options
+    assert "StorePromptProfileUi.Show(this)" in options
     assert 'Content = "AI生成结构化规则"' in ui
     assert "原始店铺资料" in ui
     assert "核心规则" in ui
     assert "场景规则卡" in ui
-    assert "StorePromptProfileUi.Initialize()" in app
+    assert "RulePolicyImportExportUi.InitializeForApp()" in app
     assert "StorePromptProfileService.cs" in targets
     assert "StorePromptProfileUi.cs" in targets
 

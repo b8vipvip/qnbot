@@ -57,6 +57,9 @@ namespace Bot.Knowledge
 
         public static void SetSettings(string seller, bool enabled, string mode, double threshold, double minConfidence)
         {
+            if (double.IsNaN(threshold) || double.IsInfinity(threshold)
+                || double.IsNaN(minConfidence) || double.IsInfinity(minConfidence))
+                throw new ArgumentOutOfRangeException(nameof(threshold), "知识库检索阈值必须是有限数字。");
             var shop = ResolveShopRequired(seller);
             var store = new ShopScopedSettingsStore(shop, Paths);
             // Knowledge V2 is the only supported knowledge engine. The old enable

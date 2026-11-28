@@ -48,7 +48,9 @@ namespace Bot
             QnRuntimeSafetyMonitor.Start();
             Bot.Knowledge.KnowledgeV2CloudSyncService.InitializeForApp();
             // Retired V1 knowledge UI hooks are intentionally not bootstrapped.
-            // Knowledge V2 owns the import/export surface; do not register the legacy V1 UI.
+            // Knowledge V2 owns the knowledge import/export surface.
+            // Independent store rules still need their import/export buttons.
+            Bot.Knowledge.RulePolicyImportExportUi.InitializeForApp();
             ConversationSessionLearningService.Initialize();
             ManualVisualReplyLearningService.Initialize();
             // Explicit startup call: partial-App field initializers are not a reliable

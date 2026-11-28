@@ -1,4 +1,7 @@
+using Bot.ShopScope;
+using Bot.ChromeNs;
 using Microsoft.Win32;
+using Newtonsoft.Json.Linq;
 using Newtonsoft.Json;
 using System;
 using System.Collections.Generic;
@@ -369,12 +372,14 @@ namespace Bot.Knowledge
     {
         private readonly Window _owner;
         private readonly string _seller;
+        private readonly string _shopKey;
         private TextBlock _status;
 
-        public KnowledgeV2ImportExportPage(Window owner, string seller)
+        public KnowledgeV2ImportExportPage(Window owner, string seller, string shopKey)
         {
             _owner = owner;
             _seller = seller ?? string.Empty;
+            _shopKey = (shopKey ?? string.Empty).Trim();
             Build();
             Loaded += delegate { RefreshView(); };
         }
@@ -384,10 +389,35 @@ namespace Bot.Knowledge
             if (string.IsNullOrWhiteSpace(_seller)) return;
             try
             {
-                var stats = KnowledgeEngineV2Service.GetStats(_seller);
-                _status.Text = "当前 V2 知识 " + stats.Total + " 条；数据库：" + stats.DatabasePath;
+                using (ShopSettingsScope.Enter(RequireShop()))
+                {
+                    var stats = KnowledgeEngineV2Service.GetStats(_seller);
+                    _status.Text = "当前 V2 知识 " + stats.Total + " 条；数据库：" + stats.DatabasePath;
+                }
             }
             catch (Exception ex) { _status.Text = "读取状态失败：" + ex.Message; }
+        }
+
+        private ShopContext RequireShop()
+        {
+            if (string.IsNullOrWhiteSpace(_shopKey))
+                throw new InvalidOperationException("知识包操作缺少精确 ShopKey。");
+            var shop = ShopContextLocator.ResolveRuntimeByShopKey(_shopKey);
+            if (shop == null || !shop.HasStableSellerId
+                || !string.Equals(shop.ShopKey, _shopKey, StringComparison.Ordinal)
+                || (!DirectOrderIdentityResolver.IdentityEquals(shop.SellerNick, _seller)
+                    && !DirectOrderIdentityResolver.IdentityEquals(shop.DisplayName, _seller)))
+                throw new InvalidOperationException("知识包操作的店铺身份不匹配。");
+            return shop;
+        }
+
+        private void InShop(Action action)
+        {
+            try
+            {
+                using (ShopSettingsScope.Enter(RequireShop())) action();
+            }
+            catch (Exception ex) { MessageBox.Show(_owner, "知识库操作失败：" + ex.Message); }
         }
 
         private void Build()
@@ -402,10 +432,10 @@ namespace Bot.Knowledge
                 Margin = new Thickness(0, 5, 0, 14)
             });
             var actions = new WrapPanel();
-            var export = Btn("导出V2完整包", 124); export.Click += delegate { ExportPackage(); };
-            var import = Btn("导入V2完整包", 124); import.Click += delegate { ImportPackage(); };
-            var exportRecords = Btn("仅导出结构化知识", 142); exportRecords.Click += delegate { ExportRecords(); };
-            var rebuild = Btn("重建V2检索索引", 140); rebuild.Click += delegate { RebuildIndex(); };
+            var export = Btn("导出V2完整包", 124); export.Click += delegate { InShop(ExportPackage); };
+            var import = Btn("导入V2完整包", 124); import.Click += delegate { InShop(ImportPackage); };
+            var exportRecords = Btn("仅导出结构化知识", 142); exportRecords.Click += delegate { InShop(ExportRecords); };
+            var rebuild = Btn("重建V2检索索引", 140); rebuild.Click += delegate { InShop(RebuildIndex); };
             actions.Children.Add(export); actions.Children.Add(import); actions.Children.Add(exportRecords); actions.Children.Add(rebuild);
             root.Children.Add(actions);
             _status = new TextBlock { Margin = new Thickness(0, 16, 0, 0), TextWrapping = TextWrapping.Wrap };
@@ -461,14 +491,13 @@ namespace Bot.Knowledge
                     Filter = "JSON文件 (*.json)|*.json|所有文件 (*.*)|*.*"
                 };
                 if (dialog.ShowDialog(_owner) != true) return;
-                var package = JsonConvert.DeserializeObject<KnowledgeV2PortablePackage>(
+                var package = ParseValidatedPackage(
                     File.ReadAllText(dialog.FileName, System.Text.Encoding.UTF8));
-                if (package == null || package.Records == null)
-                    throw new InvalidDataException("文件不是有效的 Knowledge Center V2 完整包。");
-                if (package.SchemaVersion > KnowledgeEngineV2Constants.SchemaVersion)
-                    throw new InvalidDataException("该知识包版本高于当前客户端，请先升级客户端。");
                 if (MessageBox.Show(_owner,
-                    "将用导入包替换当前 V2 结构化知识。导入前会自动备份现有数据。是否继续？",
+                    "将用导入包的 " + package.Records.Count + " 条记录替换店铺 " + _seller
+                    + "（ShopKey: " + _shopKey + "）的 V2 结构化知识。"
+                    + (package.Records.Count == 0 ? "注意：该包为空，将清空当前知识。" : string.Empty)
+                    + "导入前会自动备份现有数据。是否继续？",
                     "导入完整包", MessageBoxButton.YesNo, MessageBoxImage.Warning) != MessageBoxResult.Yes) return;
 
                 var backup = CreateAutomaticBackup();
@@ -480,6 +509,47 @@ namespace Bot.Knowledge
                 _status.Text = "导入完成，共 " + package.Records.Count + " 条。导入前备份：" + backup;
             }
             catch (Exception ex) { MessageBox.Show(_owner, "导入失败：" + ex.Message); }
+        }
+
+        internal static KnowledgeV2PortablePackage ParseValidatedPackage(string json)
+        {
+            // Constructor defaults must not turn arbitrary JSON into an empty replacement.
+            var root = JObject.Parse(json);
+            var version = root.GetValue("SchemaVersion", StringComparison.OrdinalIgnoreCase);
+            var rows = root.GetValue("Records", StringComparison.OrdinalIgnoreCase) as JArray;
+            if (version == null || version.Type != JTokenType.Integer
+                || version.Value<long>() != KnowledgeEngineV2Constants.SchemaVersion || rows == null)
+                throw new InvalidDataException("文件缺少受支持的 V2 版本或 Records 数组。");
+
+            var ids = new HashSet<string>(StringComparer.Ordinal);
+            foreach (var token in rows)
+            {
+                var row = token as JObject;
+                var id = row == null ? null : row.GetValue("Id", StringComparison.OrdinalIgnoreCase);
+                var title = row == null ? null : row.GetValue("Title", StringComparison.OrdinalIgnoreCase);
+                var answer = row == null ? null : row.GetValue("Answer", StringComparison.OrdinalIgnoreCase);
+                if (id == null || id.Type != JTokenType.String || string.IsNullOrWhiteSpace((string)id)
+                    || !ids.Add(((string)id).Trim())
+                    || title == null || title.Type != JTokenType.String
+                    || answer == null || answer.Type != JTokenType.String)
+                    throw new InvalidDataException("知识包包含无效记录或重复 ID，未替换现有知识。");
+            }
+
+            var package = root.ToObject<KnowledgeV2PortablePackage>();
+            var settings = root.GetValue("Settings", StringComparison.OrdinalIgnoreCase);
+            if (settings == null || settings.Type == JTokenType.Null)
+                package.Settings = null;
+            else
+            {
+                var obj = settings as JObject;
+                if (obj == null || obj.GetValue("DirectThreshold", StringComparison.OrdinalIgnoreCase) == null
+                    || obj.GetValue("MinConfidence", StringComparison.OrdinalIgnoreCase) == null
+                    || package.Settings == null
+                    || double.IsNaN(package.Settings.DirectThreshold) || double.IsInfinity(package.Settings.DirectThreshold)
+                    || double.IsNaN(package.Settings.MinConfidence) || double.IsInfinity(package.Settings.MinConfidence))
+                    throw new InvalidDataException("知识包包含无效的 V2 检索阈值。");
+            }
+            return package;
         }
 
         private void RebuildIndex()
@@ -512,7 +582,7 @@ namespace Bot.Knowledge
             var dbPath = KnowledgeEngineV2Repository.GetDatabasePath(_seller);
             var root = Path.Combine(Path.GetDirectoryName(dbPath) ?? string.Empty, "backups");
             Directory.CreateDirectory(root);
-            var path = Path.Combine(root, "knowledge-center-v2-before-import-" + DateTime.Now.ToString("yyyyMMdd-HHmmss") + ".json");
+            var path = Path.Combine(root, "knowledge-center-v2-before-import-" + DateTime.Now.ToString("yyyyMMdd-HHmmss-fff") + "-" + Guid.NewGuid().ToString("N") + ".json");
             File.WriteAllText(path, JsonConvert.SerializeObject(BuildPackage(), Formatting.Indented), new System.Text.UTF8Encoding(false));
             return path;
         }

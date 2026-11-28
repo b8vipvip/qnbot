@@ -310,7 +310,7 @@ namespace Bot.Knowledge
                 Nav("学习", () => new KnowledgeV2RecordsPage(_owner, _seller, KnowledgeV2RecordsPageMode.Learning)),
                 Nav("冲突", () => new KnowledgeV2ConflictPage(_owner, _seller)),
                 Nav("测试台", () => new KnowledgeV2DebuggerPage(_owner, _seller)),
-                Nav("导入导出", () => new KnowledgeV2ImportExportPage(_owner, _seller)),
+                Nav("导入导出", () => new KnowledgeV2ImportExportPage(_owner, _seller, _shopKey)),
                 Nav("智能导入", () => new KnowledgeV2SmartImportPage(_owner, _seller, _shopKey)),
                 Nav("历史聊天整理", () => new KnowledgeV2ChatHistoryPage(_owner, _seller)),
                 Nav("买家消息管理", () => new BuyerMessageManagementPage(_owner, _seller)),

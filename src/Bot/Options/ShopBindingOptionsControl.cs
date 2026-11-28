@@ -25,6 +25,7 @@ namespace Bot.Options
         private CheckBox _knowledgeCloudSync;
         private Button _manageToken;
         private Button _exportAll;
+        private Button _cloudBackup;
         private Button _importAll;
         private Button _importLegacy;
         private Button _syncKnowledge;
@@ -413,6 +414,9 @@ namespace Bot.Options
             _importAll = MakeButton("导入全店信息", 140);
             _importAll.Click += ImportAll_Click;
             transferButtons.Children.Add(_importAll);
+            _cloudBackup = MakeButton("本店云备份/换机", 150);
+            _cloudBackup.Click += OpenCloudBackup_Click;
+            transferButtons.Children.Add(_cloudBackup);
             transferPanel.Children.Add(transferButtons);
             panel.Children.Add(transferCard);
 
@@ -839,10 +843,32 @@ namespace Bot.Options
             _status.Foreground = string.IsNullOrWhiteSpace(fingerprint) ? Brushes.Gray : Brushes.SeaGreen;
         }
 
+        private void OpenCloudBackup_Click(object sender, RoutedEventArgs e)
+        {
+            var shop = _shop;
+            if (shop == null || !shop.HasStableSellerId) return;
+            try
+            {
+                using (ShopSettingsScope.Enter(shop))
+                {
+                    var window = new ClientDataBackupWindow(shop);
+                    var owner = Window.GetWindow(this);
+                    if (owner != null) window.Owner = owner;
+                    ShopScopedUiBridge.Attach(window, shop);
+                    window.ShowDialog();
+                }
+            }
+            catch (Exception ex)
+            {
+                MessageBox.Show("无法打开本店云备份：" + ex.Message, "云备份", MessageBoxButton.OK, MessageBoxImage.Warning);
+            }
+        }
+
         private void SetEnabled(bool enabled)
         {
             _manageToken.IsEnabled = enabled;
             _exportAll.IsEnabled = enabled;
+            _cloudBackup.IsEnabled = enabled && _shop != null && _shop.HasStableSellerId;
             _importAll.IsEnabled = enabled;
             _importLegacy.IsEnabled = enabled;
             _syncKnowledge.IsEnabled = enabled;
