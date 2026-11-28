@@ -23,12 +23,13 @@ def test_answer_source_badges_are_explicit():
     assert "control.SetAnswer(answer, source, answerReadyAt)" in tracker
 
 
-def test_history_scan_button_is_in_smart_import_only():
-    manager = text("src/Bot/Knowledge/KnowledgeManagerControl.cs")
-    importer = text("src/Bot/Knowledge/KnowledgeImportControl.cs")
-    assert "扫描历史聊天记录" not in manager
-    assert "扫描历史聊天记录" in importer
-    assert "ChatHistoryScanWindow" in importer
+def test_history_scan_has_one_native_v2_navigation_entry():
+    shell = text("src/Bot/Knowledge/KnowledgeCenterV2Ui.cs")
+    smart = text("src/Bot/Knowledge/KnowledgeCenterV2AiToolsUi.cs")
+    assert shell.count('Nav("历史聊天整理",') == 1
+    assert "KnowledgeV2ChatHistoryPage" in shell
+    assert "new ChatHistoryScanWindow" not in smart
+    assert not (ROOT / "src/Bot/Knowledge/KnowledgeManagerControl.cs").exists()
 
 
 def test_off_hours_rule_supports_ai_and_fixed_reply():

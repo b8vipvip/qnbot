@@ -528,9 +528,11 @@ namespace Bot.Options
 
                 _status.Text = "正在连接服务端并同步本店云端知识库...";
                 _status.Foreground = Brushes.SteelBlue;
-                await KnowledgeV2CloudSyncService.SyncNowAsync(_shop);
-                _status.Text = "本店云端知识库同步完成。可以进入“知识库”页面核对条目；写入前的本机版本会保留在本店 backup 目录。";
-                _status.Foreground = Brushes.SeaGreen;
+                var converged = await KnowledgeV2CloudSyncService.SyncNowAsync(_shop);
+                _status.Text = converged
+                    ? "本店云端知识库同步完成。可以进入“知识库”页面核对条目；写入前的本机版本会保留在本店 backup 目录。"
+                    : "本次同步尚未收敛（可能存在并发修改或待上传的合并结果），后台将继续同步；请稍后核对。";
+                _status.Foreground = converged ? Brushes.SeaGreen : Brushes.SteelBlue;
             }
             catch (Exception ex)
             {

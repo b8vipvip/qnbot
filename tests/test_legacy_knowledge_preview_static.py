@@ -44,7 +44,7 @@ def test_history_import_writes_only_to_v2_and_auto_publishes_only_with_human_evi
     assert "shop == null || !shop.HasStableSellerId" in importer
     assert "using (ShopSettingsScope.Enter(shop))" in importer
     assert "KnowledgeEngineV2Repository.LoadAll(seller)" in importer
-    assert "KnowledgeEngineV2Repository.Save(seller, record)" in importer
+    assert "KnowledgeEngineV2Repository.TryAddHistoryImportRecord(seller, record)" in importer
     assert "SourceEvidenceByToken" in ai and "sourceEvidenceByToken" in history
     assert "ImportEvidenceTokens" in ai
     assert "evidenceValid" in importer and "autoPublish = evidenceValid" in importer

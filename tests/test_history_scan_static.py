@@ -8,12 +8,11 @@ def text(path):
 
 
 def test_history_scan_button_and_options():
-    manager = text("src/Bot/Knowledge/KnowledgeManagerControl.cs")
-    importer = text("src/Bot/Knowledge/KnowledgeImportControl.cs")
+    shell = text("src/Bot/Knowledge/KnowledgeCenterV2Ui.cs")
     window = text("src/Bot/Knowledge/ChatHistoryScanWindow.cs")
-    assert "扫描历史聊天记录" not in manager
-    assert "扫描历史聊天记录" in importer
-    assert "ChatHistoryScanWindow" in importer
+    assert 'Nav("历史聊天整理", () => new KnowledgeV2ChatHistoryPage(_owner, _seller))' in shell
+    assert 'MakeButton("开始整理", 100, Start_Click)' in window
+    assert "PromoteHistoryImport(_seller, _shopKey, scan.ImportResult)" in window
     assert "全部扫描" in window
     assert "按时间段扫描" in window
     assert "DatePicker" in window
@@ -49,7 +48,8 @@ def test_history_scan_reuses_smart_import_batches():
     assert "KnowledgeAiService" in source
     assert "ImportAsync" in source
     assert "GetSmartImportTimeoutSeconds" in source
-    assert '"历史聊天扫描"' in source
+    assert "历史聊天扫描完成" in source
+    assert "importResult.SourceEvidenceByToken = sourceEvidenceByToken" in source
 
 
 def test_history_scan_filters_and_redacts():

@@ -52,7 +52,7 @@ def test_update_page_has_no_fixed_minheight_and_primary_actions_are_before_prefe
 def test_shop_binding_page_replaces_ai_service_navigation_and_can_pull_cloud_knowledge():
     window = read("src/Bot/Options/WndOption.xaml.cs")
     binding = read("src/Bot/Options/ShopBindingOptionsControl.cs")
-    sync = read("src/Bot/Knowledge/KnowledgeCloudSyncService.cs")
+    sync = read("src/Bot/Knowledge/KnowledgeV2CloudSyncService.cs")
 
     assert 'AddPage("店铺与连接", "AI 服务"' not in window
     assert "if (showPage == OptionEnum.Robot) showPage = OptionEnum.ShopBinding;" in window
@@ -63,8 +63,8 @@ def test_shop_binding_page_replaces_ai_service_navigation_and_can_pull_cloud_kno
     assert "导出全店信息" in binding and "导入全店信息" in binding
     assert "立即同步知识库" in binding
     assert "保存令牌并立即同步知识库" not in binding
-    assert "await KnowledgeCloudSyncService.SyncNowAsync(_shop)" in binding
-    assert "internal static async Task SyncNowAsync(ShopContext shop)" in sync
+    assert "await KnowledgeV2CloudSyncService.SyncNowAsync(_shop)" in binding
+    assert "internal static async Task<bool> SyncNowAsync(ShopContext shop)" in sync
 
 
 def test_attached_window_tracking_no_longer_periodically_uses_topmost():

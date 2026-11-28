@@ -34,7 +34,7 @@ def test_history_chat_organizer_is_native_v2_and_uses_evidence_gated_promotion()
     assert "chat_history_unverified_candidate" in importer
     assert "SourceEvidenceByToken" in importer or "SourceEvidenceByToken" in read("src/Bot/Knowledge/KnowledgeAiService.cs")
     assert "KnowledgeEngineV2Repository.LoadAll" in importer
-    assert "KnowledgeEngineV2Repository.Save" in importer
+    assert "KnowledgeEngineV2Repository.TryAddHistoryImportRecord" in importer
     assert "using (ShopSettingsScope.Enter(shop))" in importer
     assert "BotFeatureStore.SaveKnowledgeBase" not in importer
     assert "KnowledgeV2LegacyDeltaImportService" not in shell

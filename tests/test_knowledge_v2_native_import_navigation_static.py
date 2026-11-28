@@ -55,7 +55,7 @@ def test_history_result_is_written_directly_to_v2_with_evidence_gated_publicatio
         "KnowledgeEngineV2Semantics.NormalizeIntent",
         "KnowledgeEngineV2Semantics.NormalizePredicate",
         "KnowledgeEngineV2Repository.LoadAll",
-        "KnowledgeEngineV2Repository.Save",
+        "KnowledgeEngineV2Repository.TryAddHistoryImportRecord",
         "ShopContextLocator.ResolveRuntimeByShopKey(shopKey)",
         "using (ShopSettingsScope.Enter(shop))",
         "SourceEvidenceByToken",

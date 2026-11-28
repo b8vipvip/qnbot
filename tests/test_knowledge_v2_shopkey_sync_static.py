@@ -48,7 +48,7 @@ def test_v2_cloud_sync_serializes_jobs_per_shopkey_and_does_not_drop_manual_sync
         service.index("internal static void QueueSync")
     ]
     manual = service[
-        service.index("internal static async Task SyncNowAsync"):
+        service.index("internal static async Task<bool> SyncNowAsync"):
         service.index("private static async Task SyncOnce")
     ]
 
@@ -72,3 +72,15 @@ def test_v2_corrupt_list_json_fails_closed_instead_of_becoming_empty_metadata():
     assert "静默丢失知识元数据" in parser
     assert "catch { return new List<string>(); }" not in parser
     assert "MirrorOneToLegacy" not in repository
+
+
+def test_manual_sync_never_reports_unconverged_or_missing_credentials_as_success():
+    service = read("src/Bot/Knowledge/KnowledgeV2CloudSyncService.cs")
+    ui = read("src/Bot/Options/ShopBindingOptionsControl.cs")
+    manual = service.split("internal static async Task<bool> SyncNowAsync", 1)[1].split("private static async Task SyncOnce", 1)[0]
+    assert 'state.LastStatus == "credentials_missing"' in manual
+    assert 'return state.LastStatus == "synced" && state.LastConverged;' in manual
+    assert "state.LastConverged = true" not in manual
+    assert "var converged = await KnowledgeV2CloudSyncService.SyncNowAsync(_shop)" in ui
+    assert "_status.Text = converged" in ui
+    assert "本次同步尚未收敛" in ui

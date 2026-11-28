@@ -153,7 +153,7 @@ namespace Bot.Knowledge
             Queue(shop);
         }
 
-        internal static async Task SyncNowAsync(ShopContext shop)
+        internal static async Task<bool> SyncNowAsync(ShopContext shop)
         {
             if (shop == null) throw new ArgumentNullException(nameof(shop));
             SetEnabledForShop(shop, true, false);
@@ -183,7 +183,9 @@ namespace Bot.Knowledge
                 await SyncOnce(shop, state).ConfigureAwait(false);
                 lock (state.SyncRoot)
                 {
-                    if (state.LastStatus == "synced") state.LastConverged = true;
+                    if (state.LastStatus == "credentials_missing")
+                        throw new InvalidOperationException("本店云同步缺少有效服务端地址或令牌。");
+                    return state.LastStatus == "synced" && state.LastConverged;
                 }
             }
             catch (Exception ex)

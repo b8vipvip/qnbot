@@ -8,7 +8,7 @@ DOCKERFILE = ROOT / "services" / "api-control-plane" / "Dockerfile"
 HTML = ROOT / "services" / "api-control-plane" / "static" / "bot-web.html"
 JS = ROOT / "services" / "api-control-plane" / "static" / "bot-web-v2.js"
 CSS = ROOT / "services" / "api-control-plane" / "static" / "bot-web-v2.css"
-CLIENT = ROOT / "src" / "Bot" / "Knowledge" / "KnowledgeCloudSyncService.cs"
+CLIENT = ROOT / "src" / "Bot" / "Knowledge" / "KnowledgeV2CloudSyncService.cs"
 PROPS = ROOT / "src" / "Bot" / "Directory.Build.props"
 
 
@@ -87,17 +87,20 @@ def test_mobile_page_has_buyer_list_detail_long_press_and_knowledge_management()
 def test_windows_client_requires_per_shop_opt_in_token_revision_and_backup():
     source = read(CLIENT)
     props = read(PROPS)
-    assert "启用本店知识库云同步" in source
+    ui = read(ROOT / "src" / "Bot" / "Options" / "ShopBindingOptionsControl.cs")
+    assert "启用本店知识库云同步" in ui
     assert "KnowledgeCloudSyncEnabled" in source
-    assert "/api/runtime/v1/bot-web/knowledge-sync" in source
+    assert "/api/runtime/v1/bot-web/knowledge-v2-sync" in source
     assert "ShopControlPlaneConnectionStore" in source
-    assert "ConcurrentDictionary<string, ShopSyncState>" in source
+    assert "ConcurrentDictionary<string, State>" in source
     assert '"X-Shop-Key"' in source
-    assert "RevisionKey, Scope" in source
-    assert "LastHashKey, Scope" in source
-    assert "BotFeatureStore.GetKnowledgeBase()" in source
-    assert "BotFeatureStore.SaveKnowledgeBase(cloud)" in source
-    assert "knowledge-cloud-before-apply-" in source
+    assert "KnowledgeV2CloudRevision" in source
+    assert "KnowledgeV2CloudFingerprint" in source
+    assert "KnowledgeEngineV2Repository.LoadAll" in source
+    assert "KnowledgeEngineV2Repository.TryReplaceAllIfUnchanged" in source
+    assert "knowledge-v2-cloud-before-apply-" in source
     assert "Paths.GetBackupRoot(shop)" in source
-    assert "KnowledgeCloudSyncService.cs" in props
+    assert "KnowledgeV2CloudSyncService.cs" in props
     assert "ControlPlaneClientToken" not in source
+    assert "BotFeatureStore.GetKnowledgeBase()" not in source
+    assert "BotFeatureStore.SaveKnowledgeBase" not in source
