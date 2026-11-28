@@ -6,12 +6,13 @@ SAFETY = (ROOT / "src/Bot/ChromeNs/BulkListManagementUiBridge.cs").read_text(enc
 
 
 def test_manual_takeover_generates_compare_only_ai_and_history():
-    assert "MessageProcessingTraceService.RecordLearningComparison(" in KNOWLEDGE
-    assert "MyOpenAI.CallStructuredChat(" in KNOWLEDGE
-    assert "should_learn" in KNOWLEDGE and "confidence < 0.95" in KNOWLEDGE
-    assert "double.IsNaN(confidence) || double.IsInfinity(confidence)" in KNOWLEDGE
-    assert "KnowledgeEngineV2Repository.TrySaveReviewedDirectAnswer(" in KNOWLEDGE
-    assert "seller, question, manualAnswer, sourceMessageIds" in KNOWLEDGE
+    learning = (ROOT / "src/Bot/ChromeNs/KnowledgeLearningService.cs").read_text(encoding="utf-8-sig")
+    assert "MessageProcessingTraceService.RecordLearningComparison(" in learning
+    assert "MyOpenAI.CallStructuredChat(" in learning
+    assert "should_learn" in learning and "confidence < 0.95" in learning
+    assert "double.IsNaN(confidence) || double.IsInfinity(confidence)" in learning
+    assert "KnowledgeEngineV2Repository.TrySaveReviewedDirectAnswer(" in learning
+    assert "seller, question, manualAnswer, sourceMessageIds" in learning
 
 
 def test_ingress_watchdog_recovers_active_history_and_order_panel():
