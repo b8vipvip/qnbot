@@ -324,6 +324,9 @@ def web_revision_sync_status(client=Depends(bot_web_console._web_client)):
     from datetime import datetime,timezone,timedelta
     client_id=int(client["id"])
     with _cp.db() as conn:
+        # The exported counts, digest, device receipts and highwater must
+        # all describe one consistent read snapshot, not overlapping syncs.
+        conn.execute("BEGIN")
         shop_key=_feedback_binding(conn,client_id)
         count,digest,highwater=_revision_digest(conn,client_id,shop_key)
         action_counts={}
