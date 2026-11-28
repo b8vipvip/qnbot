@@ -106,11 +106,16 @@ namespace Bot.Knowledge
             foreach (var item in gramVotes.OrderByDescending(x => x.Value).Take(40)) result.Add(item.Key);
             if (result.Count > 96)
             {
-                var ordered = result
+                // Never prune exact aliases before applicability and conflict checks.
+                // A broad predicate/intent bucket can otherwise displace a reviewed FAQ.
+                var exactIds = exact ?? new HashSet<int>();
+                var ordered = result.Where(i => !exactIds.Contains(i))
                     .OrderByDescending(i => PreliminaryScore(snapshot.Records[i], query))
-                    .Take(96)
-                    .ToList();
-                return new HashSet<int>(ordered);
+                    .ThenBy(i => snapshot.Records[i].Id, StringComparer.Ordinal)
+                    .Take(Math.Max(0, 96 - exactIds.Count));
+                var selected = new HashSet<int>(exactIds);
+                selected.UnionWith(ordered);
+                return selected;
             }
             return result;
         }

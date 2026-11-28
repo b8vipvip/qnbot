@@ -1514,7 +1514,14 @@ namespace Bot.Knowledge
                     LastVerifiedAtTicks=x.LastVerifiedAt.Ticks
                 })
                 .OrderBy(x=>x.Id,StringComparer.Ordinal);
-            return KnowledgeAiService.ContentHash(JsonConvert.SerializeObject(projection),string.Empty);
+            // The FAQ content hash intentionally removes punctuation, whitespace and case.
+            // CAS must compare lossless persisted data, including IDs, conditions and exact answers.
+            var json = JsonConvert.SerializeObject(projection, Formatting.None);
+            using (var sha = SHA256.Create())
+            {
+                return BitConverter.ToString(sha.ComputeHash(Encoding.UTF8.GetBytes(json)))
+                    .Replace("-", string.Empty).ToLowerInvariant();
+            }
         }
 
         // Compare-and-replace for cloud replay. The expected fingerprint is checked while

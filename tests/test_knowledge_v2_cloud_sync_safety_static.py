@@ -72,7 +72,8 @@ def test_v2_cloud_sync_uses_same_canonical_fingerprint_for_persistence_and_compa
     assert "store.SetString(" not in persist
     assert "private static State LoadState(ShopContext shop)" in service
     assert "private static void PersistState(ShopContext shop,State state,int targetRevision,string targetFingerprint)" in service
-    assert "KnowledgeAiService.ContentHash(JsonConvert.SerializeObject(projection),string.Empty)" in repository
+    assert "JsonConvert.SerializeObject(projection, Formatting.None)" in repository
+    assert "sha.ComputeHash(Encoding.UTF8.GetBytes(json))" in repository
 
 
 def test_v2_cloud_sync_checkpoint_advances_only_after_persisted_values_are_verified():
@@ -378,3 +379,13 @@ def test_knowledge_v2_sync_isolates_profile_failures_per_shop():
     assert "catch (Exception ex)" in queue_all
     assert "跳过异常店铺并继续处理其他店铺" in queue_all
     assert "Profiles.GetAll()" in queue_all
+
+
+def test_cloud_cas_fingerprint_does_not_use_lossy_faq_normalization():
+    repository = read("src/Bot/Knowledge/KnowledgeEngineV2.Repository.cs")
+    fingerprint = repository.split("internal static string ComputeCloudSyncFingerprint", 1)[1].split("internal static bool TryReplaceAllIfUnchanged", 1)[0]
+    assert "SHA256.Create()" in fingerprint
+    assert "Encoding.UTF8.GetBytes(json)" in fingerprint
+    assert "KnowledgeAiService.ContentHash" not in fingerprint
+    assert "NormalizeQuestion" not in fingerprint
+    assert "JsonConvert.SerializeObject(projection, Formatting.None)" in fingerprint

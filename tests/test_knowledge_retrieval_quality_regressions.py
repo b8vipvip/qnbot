@@ -619,3 +619,13 @@ def test_default_prompt_addon_fails_closed_without_legacy_knowledge_store():
     assert "不读取旧知识库" in default_overload
     assert "GetKnowledgeBase" not in default_overload
 
+
+
+def test_exact_aliases_survive_broad_recall_budget_for_conflict_detection():
+    index = read("src/Bot/Knowledge/KnowledgeEngineV2.Service.Index.cs")
+    recall = index.split("private static HashSet<int> Recall", 1)[1].split("private static KnowledgeV2Match Score", 1)[0]
+    assert "var exactIds = exact ?? new HashSet<int>()" in recall
+    assert "result.Where(i => !exactIds.Contains(i))" in recall
+    assert ".Take(Math.Max(0, 96 - exactIds.Count))" in recall
+    assert "new HashSet<int>(exactIds)" in recall
+    assert "selected.UnionWith(ordered)" in recall
