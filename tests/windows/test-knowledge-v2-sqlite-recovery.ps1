@@ -31,7 +31,9 @@ function Open-Db([string]$path) {
     $ctor = [object[]]::new(2)
     $ctor[0] = $path
     $ctor[1] = $types
-    return [Activator]::CreateInstance($helperType, $ctor)
+    $constructor = $helperType.GetConstructors() | Where-Object { $_.GetParameters().Count -eq 2 } | Select-Object -First 1
+    if ($null -eq $constructor) { throw 'SQLiteHelper constructor not found' }
+    return $constructor.Invoke($ctor)
 }
 function New-TestRow([string]$id, [string]$answer, [string]$product) {
     $r = [Activator]::CreateInstance($recordType)
