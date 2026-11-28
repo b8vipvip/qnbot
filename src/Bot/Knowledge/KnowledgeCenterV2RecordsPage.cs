@@ -316,13 +316,23 @@ namespace Bot.Knowledge
             if (string.IsNullOrWhiteSpace(query)) return true;
             var haystack = string.Join(" ", new[]
             {
-                item.Title, item.Type, item.Intent, item.Subject, item.Predicate, item.Answer,
+                item.Id, item.Title, item.Type, item.Intent, item.Subject, item.Predicate,
+                item.Answer, item.ShortAnswer, item.SourceType, item.SourceId, item.Status, item.RiskLevel,
                 string.Join(" ", item.Entities ?? new List<string>()),
                 string.Join(" ", item.Aliases ?? new List<string>()),
-                string.Join(" ", item.ProductIds ?? new List<string>())
+                string.Join(" ", item.ProductIds ?? new List<string>()),
+                string.Join(" ", item.Conditions ?? new List<string>()),
+                string.Join(" ", item.Exclusions ?? new List<string>()),
+                string.Join(" ", item.RequiredContext ?? new List<string>())
             });
+            var compactHaystack = KnowledgeEngineV2Semantics.Compact(haystack);
             foreach (var term in query.Split(new[] { ' ', '\t', '\r', '\n' }, StringSplitOptions.RemoveEmptyEntries))
-                if (haystack.IndexOf(term, StringComparison.OrdinalIgnoreCase) < 0) return false;
+            {
+                if (haystack.IndexOf(term, StringComparison.OrdinalIgnoreCase) >= 0) continue;
+                var compactTerm = KnowledgeEngineV2Semantics.Compact(term);
+                if (compactTerm.Length == 0
+                    || compactHaystack.IndexOf(compactTerm, StringComparison.OrdinalIgnoreCase) < 0) return false;
+            }
             return true;
         }
 
