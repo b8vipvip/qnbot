@@ -82,7 +82,7 @@ def test_server_ocr_runs_before_knowledge_readiness_and_uses_shopkey():
     vision_gate = read("src/Bot/ChromeNs/VisionMessageDecision.cs")
     prewarm = decision.index("PrepareForVision(task.ShopKey, knowledgeSeller)")
     ocr_call = decision.index("LocalOcrService.TryRecognizeAsync")
-    knowledge_gate = decision.index("KnowledgeEngineV2Service.IsSnapshotReady")
+    knowledge_gate = decision.index("KnowledgeEngineV2Service.ResolveWithEvidence(")
     assert prewarm < ocr_call < knowledge_gate
     assert "task.ShopKey," in decision
     assert "task.Message, null, cancellationToken, task.ShopKey, task.BrowserClient" in decision
