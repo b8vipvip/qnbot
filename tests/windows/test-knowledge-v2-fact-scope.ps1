@@ -334,8 +334,10 @@ for ($i = 0; $i -lt 10000; $i++) {
     $entry.ProductIds = [System.Collections.Generic.List[string]]@([string](30000000 + $i))
     $governRecords.Add($entry)
 }
+$governArgs = [object[]]::new(1)
+$governArgs[0] = $governRecords
 $watch = [Diagnostics.Stopwatch]::StartNew()
-$result = $govern.Invoke($null, [object[]]@($governRecords))
+$result = $govern.Invoke($null, $governArgs)
 Assert-Equal ($result.Count) 0 'disjoint scopes never conflict'
 $disjointMs = $watch.Elapsed.TotalMilliseconds
 $entry = New-CloudRecord '不支持'
@@ -344,7 +346,7 @@ $entry.Title = '是否支持此功能'
 $entry.ProductIds = [System.Collections.Generic.List[string]]@('30000000','40000000')
 $governRecords.Add($entry)
 $watch.Restart()
-$result = $govern.Invoke($null, [object[]]@($governRecords))
+$result = $govern.Invoke($null, $governArgs)
 Assert-Equal (@($result | Where-Object {$_.RequiresScopeReview}).Count) 1 'overlapping contradictory scope retained'
 Write-Host ("Knowledge V2 conflict benchmark: records={0}; disjoint_ms={1:N1}; overlap_ms={2:N1}" -f $governRecords.Count,$disjointMs,$watch.Elapsed.TotalMilliseconds)
 Assert-Equal ($disjointMs -lt 10000) $true '10k disjoint governance budget'
