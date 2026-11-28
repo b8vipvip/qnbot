@@ -56,7 +56,8 @@ def test_history_import_uses_exact_buyer_and_human_message_ids_and_excludes_bot_
     assert "turn.IsBotReply || IsBotMarkedSellerReply(turn.Text)" in build_pairs
     assert "questionIds.Count == buyers.Count" in build_pairs
     assert "answerIds.Count == sellers.Count" in build_pairs
-    assert "MessageKey" in build_pairs
+    assert "NativeEvidenceKey" in build_pairs
+    assert "HasNativeMessageId" in build_pairs
     assert "botAnsweredPendingQuestion && sellers.Count == 0" in build_pairs
     assert "source_evidence_id：" in source
     assert "source_evidence_ids" in ai
