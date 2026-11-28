@@ -689,7 +689,8 @@ def test_remote_knowledge_job_receipts_survive_restart_without_replaying_mutatio
     start=source.split("private static void StartKnowledgeOperation(",1)[1].split("private static async Task<JObject> ExecuteKnowledgeOperationAsync",1)[0]
     assert start.index("WriteKnowledgeJournal(path, journalScope, receipt)") < start.index("Task.Run(async")
     assert "WriteKnowledgeJournal(job.JournalPath, job.JournalScope, result)" in start
-    assert 'result["phase"] = "interrupted"' in source
+    assert 'result["phase"] = completed ? "completed" : "interrupted"' in source
+    assert "RecoverInterruptedKnowledgeOperation(state, id, result, scope, claim)" in source
     assert "EnsureKnowledgeResultDurable(x.Value, journalScope)" in source
     assert "ReferenceEquals(current, pair.Value)" in source
     assert "ThenBy(x => x.Key).Take(100)" in source
