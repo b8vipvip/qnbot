@@ -123,7 +123,9 @@ namespace Bot.Knowledge
                         && confidence >= 0.90 && !double.IsNaN(authority) && !double.IsInfinity(authority)
                         && authority >= 0.90;
 
-                    record.Id = string.IsNullOrWhiteSpace(record.Id) ? Guid.NewGuid().ToString("N") : record.Id;
+                    // Import is an add-only operation. The model's ID must never overwrite
+                    // an existing knowledge row or resurrect a deleted record.
+                    record.Id = Guid.NewGuid().ToString("N");
                     record.Title = title;
                     record.Answer = answer;
                     record.Type = autoPublish
