@@ -128,3 +128,15 @@ def test_history_scan_rejects_unbound_or_changed_desk_before_promoting_evidence(
         assert "requireOriginalSession();" in scan[call:scan.index(";", call)+100]
     assert "if (isOriginalSession() && !string.IsNullOrWhiteSpace(originalBuyer))" in scan
     assert scan.index("requireOriginalSession();", scan.index("finally")) < scan.index("BuildTranscript(histories")
+
+
+def test_verified_history_does_not_promote_unproven_model_scope_or_retrieval_metadata():
+    importer = read("src/Bot/Knowledge/KnowledgeV2HistoryImportService.cs")
+    for field in ("Conditions", "Exclusions", "RequiredContext", "ProductIds"):
+        assert "Clean(record." + field + ").Count > 0" in importer
+    assert "&& !hasUnverifiedScope" in importer
+    assert '? "business_fact"' in importer
+    assert "autoPublish || string.IsNullOrWhiteSpace(record.Intent)" in importer
+    assert "autoPublish || string.IsNullOrWhiteSpace(record.Subject)" in importer
+    assert "autoPublish || string.IsNullOrWhiteSpace(record.Predicate)" in importer
+    assert "autoPublish || record.Entities == null" in importer

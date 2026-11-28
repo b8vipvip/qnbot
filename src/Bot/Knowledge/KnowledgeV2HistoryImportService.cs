@@ -121,7 +121,15 @@ namespace Bot.Knowledge
                         || string.Equals(record.Type, "learning_candidate", StringComparison.OrdinalIgnoreCase);
                     var confidence = record.Confidence;
                     var authority = record.Authority;
+                    // Source evidence verifies the original question and answer only.
+                    // AI-inferred product scopes and guards are not proven by those
+                    // message IDs; retain such proposals as candidates instead.
+                    var hasUnverifiedScope = Clean(record.Conditions).Count > 0
+                        || Clean(record.Exclusions).Count > 0
+                        || Clean(record.RequiredContext).Count > 0
+                        || Clean(record.ProductIds).Count > 0;
                     var autoPublish = evidenceValid && !risk && !modelCandidate
+                        && !hasUnverifiedScope
                         && !parsed.ContextDependent
                         && KnowledgeEngineV2Repository.IsSafeHistoryImportForAutoPublish(title, answer)
                         && !double.IsNaN(confidence) && !double.IsInfinity(confidence)
@@ -134,16 +142,16 @@ namespace Bot.Knowledge
                     record.Title = title;
                     record.Answer = answer;
                     record.Type = autoPublish
-                        ? KnowledgeEngineV2Semantics.NormalizeType(record.Type)
+                        ? "business_fact"
                         : "learning_candidate";
                     record.Intent = KnowledgeEngineV2Semantics.NormalizeIntent(
-                        string.IsNullOrWhiteSpace(record.Intent) ? parsed.Intent : record.Intent);
-                    record.Subject = string.IsNullOrWhiteSpace(record.Subject)
+                        autoPublish || string.IsNullOrWhiteSpace(record.Intent) ? parsed.Intent : record.Intent);
+                    record.Subject = autoPublish || string.IsNullOrWhiteSpace(record.Subject)
                         ? KnowledgeEngineV2Semantics.ResolveSubject(title, parsed.Entities)
                         : record.Subject;
                     record.Predicate = KnowledgeEngineV2Semantics.NormalizePredicate(
-                        string.IsNullOrWhiteSpace(record.Predicate) ? parsed.Predicate : record.Predicate);
-                    record.Entities = record.Entities == null || record.Entities.Count == 0
+                        autoPublish || string.IsNullOrWhiteSpace(record.Predicate) ? parsed.Predicate : record.Predicate);
+                    record.Entities = autoPublish || record.Entities == null || record.Entities.Count == 0
                         ? (parsed.Entities == null ? new List<string>() : parsed.Entities.ToList())
                         : record.Entities;
                     record.Aliases = autoPublish ? new List<string> { title }

@@ -18,7 +18,8 @@ def test_v2_optimization_replaces_legacy_v1_optimizer_and_preserves_revision_wor
     assert 'Nav("优化记录", () => new KnowledgeV2AiOptimizationHistoryPage' in shell
     assert "KnowledgeEngineV2Repository.TryAddHistoryImportRecord(seller, record)" in service
     assert "KnowledgeEngineV2GovernanceAuditService.TryAppendAction" in service
-    assert "GenerateRevisionCandidates" in revision
+    assert "public static KnowledgeV2RevisionGenerationResult GenerateCandidates(string seller)" in revision
+    assert '"generate_revision_candidates"' in revision
     assert "KnowledgeEngineV2GovernanceAuditService.GetEntries" in ui
     assert "KnowledgeOptimizationService.cs" not in targets
     assert "KnowledgeOptimizationUi.cs" not in targets
