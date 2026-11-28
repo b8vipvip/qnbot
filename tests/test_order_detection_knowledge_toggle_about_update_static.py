@@ -38,15 +38,13 @@ def test_paid_order_fallback_expands_nested_json_and_never_guesses_buyer():
 
 
 def test_knowledge_enabled_checkbox_is_single_click_two_way_and_persisted():
-    code = read("src/Bot/Knowledge/KnowledgeManagerControl.cs")
-    assert "IsReadOnly = false" in code
-    assert "EnabledTemplate()" in code
-    assert "Mode = BindingMode.TwoWay" in code
-    assert "UpdateSourceTrigger = UpdateSourceTrigger.PropertyChanged" in code
-    assert "OnEnabledClicked" in code
-    assert "BotFeatureStore.SaveKnowledgeBase(_all)" in code
-    assert "点击后立即保存启用状态" in code
-    assert "HasVisualAncestor<CheckBox>" in code
+    assert not (ROOT / "src/Bot/Knowledge/KnowledgeManagerControl.cs").exists()
+    code = read("src/Bot/Knowledge/KnowledgeCenterV2RecordsPage.cs")
+    assert '_enabled = new CheckBox { Content = "启用"' in code
+    assert "_enabled.IsChecked = item.Enabled" in code
+    assert "record.Enabled = _enabled.IsChecked == true" in code
+    assert "TrySaveEditorRecord" in code
+    assert "BotFeatureStore.SaveKnowledgeBase" not in code
 
 
 def test_legacy_about_menu_opens_full_about_and_update_center():

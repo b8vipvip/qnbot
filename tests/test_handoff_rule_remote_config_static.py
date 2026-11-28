@@ -60,7 +60,8 @@ def test_local_rule_service_is_initialized_and_compiled():
     assert "HandoffRuleRemoteConfigService.Initialize();" in app
     assert "ChromeNs\\HandoffRuleRemoteConfigService.cs" in targets
     assert "Options\\HandoffPolicyUi.cs" in props
-    assert "Knowledge\\BulkListManagementUi.cs" in props
+    assert "Knowledge\\KnowledgeCenterV2RecordsPage.cs" in props
+    assert "ChromeNs\\BulkListManagementUiBridge.cs" in props
     assert "ChromeNs\\HandoffPolicyLegacyMigrationService.cs" in props
 
 

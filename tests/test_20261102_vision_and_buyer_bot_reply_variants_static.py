@@ -13,7 +13,11 @@ def test_scan_pairs_only_transport_verified_bot_echoes():
     evidence = read("src/Bot/Knowledge/BuyerHistoryScanEvidenceSession.cs")
     assert "MatchBotRepliesToBuyerTurns" in scan
     assert 'turn.Item1 != "seller"' in scan
-    assert 'raw.EndsWith("[A]", StringComparison.OrdinalIgnoreCase)' in scan
+    assert "if (!IsBotMarkedSellerReply(raw))" in scan
+    marker = scan.split("private static bool IsBotMarkedSellerReply", 1)[1].split("private static bool IsUsefulPair", 1)[0]
+    assert r"\[\s*A\s*\]" in marker
+    assert r"\[\s*AI\s*\]" in marker
+    assert "RegexOptions.IgnoreCase" in marker
     assert 'TimeSpan.FromMinutes(30)' in scan
     assert "pendingBuyerKey = null;" in scan
     assert "botReply" in scan

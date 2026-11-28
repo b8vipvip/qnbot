@@ -18,6 +18,7 @@ namespace Bot.Knowledge
     {
         private readonly Window _owner;
         private readonly string _seller;
+        private readonly string _shopKey;
         private TextBox _text;
         private TextBox _timeout;
         private TextBlock _summary;
@@ -29,10 +30,11 @@ namespace Bot.Knowledge
         private CancellationTokenSource _cts;
         private SmartImportCancelSource _cancelSource;
 
-        public KnowledgeV2SmartImportPage(Window owner, string seller)
+        public KnowledgeV2SmartImportPage(Window owner, string seller, string shopKey)
         {
             _owner = owner;
             _seller = seller ?? string.Empty;
+            _shopKey = (shopKey ?? string.Empty).Trim();
             _data = new ClipboardKnowledgeData();
             Build();
             PreviewKeyDown += OnKeyDown;
@@ -63,7 +65,7 @@ namespace Bot.Knowledge
             });
             header.Children.Add(new TextBlock
             {
-                Text = "沿用旧版智能导入的文字/图片 AI 整理能力，但结果直接去重后写入 Knowledge Center V2。旧版知识库不会作为本功能的数据源。",
+                Text = "将文字和图片整理为 Knowledge V2 结构化记录，按当前 ShopKey 去重并写入 V2 SQLite。只接受 V2 records 格式，不读取旧版知识库。",
                 TextWrapping = TextWrapping.Wrap,
                 Foreground = Brushes.DimGray,
                 Margin = new Thickness(0, 4, 0, 0)
@@ -243,7 +245,7 @@ namespace Bot.Knowledge
         private async Task StartImport()
         {
             RefreshSummary();
-            if (string.IsNullOrWhiteSpace(_seller))
+            if (string.IsNullOrWhiteSpace(_seller) || string.IsNullOrWhiteSpace(_shopKey))
             {
                 MessageBox.Show("当前未识别店铺，不能执行智能导入。", "智能导入", MessageBoxButton.OK, MessageBoxImage.Warning);
                 return;
@@ -275,7 +277,7 @@ namespace Bot.Knowledge
 
             try
             {
-                var result = await service.ImportAsync(_seller, _data, timeout, _cts.Token,
+                var result = await service.ImportAsync(_seller, _shopKey, _data, timeout, _cts.Token,
                     () => _cancelSource,
                     progressText => Dispatcher.Invoke(() => _status.Text = progressText));
                 _status.Text = "智能导入完成，结果已写入 Knowledge Center V2。";

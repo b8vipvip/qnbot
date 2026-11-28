@@ -46,11 +46,10 @@ namespace Bot
             BuyerIdentityAliasRuntimeBridge.Initialize();
             BuyerIdentityAliasUiBridge.Start();
             QnRuntimeSafetyMonitor.Start();
-            Bot.Knowledge.KnowledgeOptimizationUi.Initialize();
-            Bot.Knowledge.StorePromptProfileUi.Initialize();
-            Bot.Knowledge.KnowledgePolicyProfileUi.Initialize();
-            // Explicit constructor call is required. A never-read static field on a beforefieldinit
-            // partial App type is not guaranteed to run, which made the import/export buttons disappear.
+            Bot.Knowledge.KnowledgeV2CloudSyncService.InitializeForApp();
+            // Retired V1 knowledge UI hooks are intentionally not bootstrapped.
+            // Knowledge V2 owns the knowledge import/export surface.
+            // Independent store rules still need their import/export buttons.
             Bot.Knowledge.RulePolicyImportExportUi.InitializeForApp();
             ConversationSessionLearningService.Initialize();
             ManualVisualReplyLearningService.Initialize();

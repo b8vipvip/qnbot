@@ -87,7 +87,7 @@ namespace Bot.ChromeNs
 
                 var primary = endpoints.First();
                 systemPrompt = BuildSystemPrompt(string.IsNullOrWhiteSpace(primary.SystemPrompt) ? Params.Robot.GetSystemPrompt() : primary.SystemPrompt);
-                var featureFingerprint = BotFeatureStore.GetMessagePolicy().Tone + ":" + BotFeatureStore.GetKnowledgeBase().Count + ":" + BotFeatureStore.GetAutoReplyRules().Enabled;
+                var featureFingerprint = BotFeatureStore.GetMessagePolicy().Tone + ":" + BotFeatureStore.GetAutoReplyRules().Enabled;
                 var fingerprint = string.Join("|", endpoints.Select(e => string.Format("{0}:{1}:{2}:{3}", e.Name, e.BaseUrl, e.TextModel, e.Enabled))) + "|" + featureFingerprint;
                 if (fingerprint != lastConfigFingerprint)
                 {
@@ -746,29 +746,9 @@ namespace Bot.ChromeNs
 
                 if (string.IsNullOrWhiteSpace(question)) return "错误：买家消息为空，未调用AI。";
 
-                KnowledgeBaseEntry contextualKnowledge = null;
-                ContextualKnowledgeDecision contextualDecision = null;
-                double contextualKnowledgeScore = 0;
-                KnowledgeBaseEntry localKnowledge;
-                double localScore;
-                if (KnowledgeLearningService.TryFindLocalAnswer(seller, buyer, question, out localKnowledge, out localScore))
-                {
-                    var localAnswer = BotFeatureStore.ApplyOutputPolicy(localKnowledge.Answer);
-                    var contextDecision = KnowledgeContextualReplyService.Analyze(seller, buyer, question, localKnowledge);
-                    if (!contextDecision.IsFollowUp)
-                    {
-                        KnowledgeLearningService.RegisterAnswerSource(seller, buyer, question, localAnswer, "本地");
-                        Log.Info("命中本地知识库，未调用AI。buyer=" + buyer + ", knowledgeId=" + localKnowledge.Id + ", score=" + localScore.ToString("0.00"));
-                        return localAnswer;
-                    }
-
-                    contextualKnowledge = localKnowledge;
-                    contextualDecision = contextDecision;
-                    contextualKnowledgeScore = localScore;
-                    Log.Info("命中本地知识库，但当前消息属于上下文续答，将基于知识库事实进行衔接改写。buyer="
-                        + buyer + ", knowledgeId=" + localKnowledge.Id + ", score=" + localScore.ToString("0.00")
-                        + ", reason=" + contextDecision.Reason);
-                }
+                string silenceReason;
+                if (ReceptionFlowPolicy.TryChooseSilence(seller, buyer, question, out silenceReason))
+                    return ReceptionFlowPolicy.SilentMarker + silenceReason;
 
                 var manualDecision = BotFeatureStore.EvaluateAutoReplyRule(question);
                 if (manualDecision.Matched)
@@ -787,19 +767,20 @@ namespace Bot.ChromeNs
                     return offHoursAnswer;
                 }
 
+                var v2Decision = KnowledgeEngineV2Service.Resolve(seller, buyer, question);
+                if (v2Decision != null && v2Decision.CanDirectReply
+                    && !string.IsNullOrWhiteSpace(v2Decision.Answer))
+                {
+                    var direct = BotFeatureStore.ApplyOutputPolicy(v2Decision.Answer);
+                    if (ConversationContextStore.IsWithdrawnAnswer(seller, buyer, direct))
+                        return "错误：该 Knowledge V2 答案已被客服撤回，未再次发送。";
+                    KnowledgeLearningService.RegisterAnswerSource(seller, buyer, question, direct, "Knowledge V2直答");
+                    return direct;
+                }
+                var knowledgeV2ContextAddon = KnowledgeEngineV2RuntimeBridge.BuildContextPromptAddon(v2Decision);
+
                 if (!EnsureConfig())
                 {
-                    if (contextualKnowledge != null)
-                    {
-                        var fallback = KnowledgeContextualReplyService.BuildOfflineFallback(contextualDecision, contextualKnowledge);
-                        if (!string.IsNullOrWhiteSpace(fallback))
-                        {
-                            fallback = BotFeatureStore.ApplyOutputPolicy(fallback);
-                            KnowledgeLearningService.RegisterAnswerSource(seller, buyer, question, fallback, "本地知识库上下文");
-                            Log.Info("上下文知识回复使用本地安全兜底。buyer=" + buyer + ", answer=" + fallback);
-                            return fallback;
-                        }
-                    }
                     return "错误：AI配置不完整，请检查 API接口 列表中的 BaseUrl / ApiKey / Model。";
                 }
                 var endpoints = AiEndpointStore.GetEnabledEndpoints();
@@ -812,22 +793,10 @@ namespace Bot.ChromeNs
                     if (contextForKnowledge.Length > 3500) break;
                     contextForKnowledge.Append(' ').Append(turn.Text);
                 }
-                var allowLegacyKnowledgePrompt = false;
-                try
-                {
-                    var currentShopScope = ShopSettingsScope.Current;
-                    if (currentShopScope == null
-                        || string.Equals(currentShopScope.SellerNick, seller, StringComparison.Ordinal))
-                        allowLegacyKnowledgePrompt = !KnowledgeEngineV2Service.IsEnabled(seller);
-                }
-                catch { allowLegacyKnowledgePrompt = false; }
                 var dynamicSystemPrompt = systemPrompt + BotFeatureStore.BuildPromptAddon(
-                    contextForKnowledge.ToString(), allowLegacyKnowledgePrompt);
+                    contextForKnowledge.ToString());
+                dynamicSystemPrompt += knowledgeV2ContextAddon;
                 dynamicSystemPrompt += RecentVisualContextService.BuildPromptAddon(seller, buyer, question);
-                if (contextualKnowledge != null)
-                {
-                    dynamicSystemPrompt += KnowledgeContextualReplyService.BuildPromptAddon(contextualDecision, contextualKnowledge);
-                }
                 var messages = new JArray { CreateMessage("system", dynamicSystemPrompt) };
 
                 foreach (var turn in turns)
@@ -852,22 +821,10 @@ namespace Bot.ChromeNs
                         {
                             return "错误：该回复已被客服撤回，已阻止再次发送。";
                         }
-                        var answerSource = contextualKnowledge == null ? "AI生成" : "本地知识库上下文";
+                        var answerSource = string.IsNullOrWhiteSpace(knowledgeV2ContextAddon)
+                            ? "AI生成"
+                            : "AI生成（Knowledge V2上下文）";
                         KnowledgeLearningService.RegisterAnswerSource(seller, buyer, question, finalAnswer, answerSource);
-                        if (contextualKnowledge == null)
-                        {
-                            if (!deferLearningUntilDelivered)
-                            {
-                                KnowledgeLearningService.QueueLearn(question, finalAnswer, "AI生成", seller, buyer);
-                            }
-                        }
-                        else
-                        {
-                            Log.Info("上下文知识回复生成成功。buyer=" + buyer
-                                + ", knowledgeId=" + contextualKnowledge.Id
-                                + ", score=" + contextualKnowledgeScore.ToString("0.00")
-                                + ", answer=" + finalAnswer);
-                        }
                         return finalAnswer;
                     }
 

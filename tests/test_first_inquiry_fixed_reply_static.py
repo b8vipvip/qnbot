@@ -157,9 +157,12 @@ def test_first_reply_is_premerge_prelude_and_same_problem_continues_normal_reply
 
 def test_fixed_reply_does_not_enter_ai_learning_path():
     source = read("src/Bot/ChromeNs/QN.cs")
-    assert 'if (string.Equals(answerSource, "AI生成", StringComparison.Ordinal))' in source
-    assert 'KnowledgeLearningService.RegisterAnswerSource(' in source
-    assert '"首条咨询固定回复"' in source
+    start = source.index("if (usedFirstInquiryFixedReply)")
+    fixed = source[start:source.index("else", start)]
+    assert "KnowledgeLearningService.RegisterAnswerSource(" in fixed
+    assert '"首条咨询固定回复"' in fixed
+    assert "QueueLearn(" not in fixed
+    assert "FirstInquiryFixedReplyService.MarkDelivered(" in source
 
 
 def test_qnrpa_no_longer_requires_global_desk_and_send_path_is_nonblocking_main_area_click():

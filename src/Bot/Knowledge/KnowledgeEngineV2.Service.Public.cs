@@ -36,6 +36,7 @@ namespace Bot.Knowledge
         private static readonly ConcurrentDictionary<string, KnowledgeV2WorkingMemory> Working = new ConcurrentDictionary<string, KnowledgeV2WorkingMemory>(StringComparer.Ordinal);
         private static readonly ConcurrentDictionary<string, object> BuildLocks = new ConcurrentDictionary<string, object>(StringComparer.Ordinal);
         private static readonly ConcurrentDictionary<string, RuntimeSettings> SettingsCache = new ConcurrentDictionary<string, RuntimeSettings>(StringComparer.Ordinal);
+        private static readonly ConcurrentDictionary<string, object> SettingsLocks = new ConcurrentDictionary<string, object>(StringComparer.Ordinal);
         private static readonly IShopScopedPathProvider Paths = new ShopScopedPathProvider();
 
         public static bool IsEnabled(string seller) { return GetSettings(seller).Enabled; }
@@ -52,30 +53,61 @@ namespace Bot.Knowledge
         public static KnowledgeV2Settings GetSettingsView(string seller)
         {
             var settings = GetSettings(seller);
-            return new KnowledgeV2Settings { Enabled = settings.Enabled, Mode = settings.Mode, DirectThreshold = settings.DirectThreshold, MinConfidence = settings.MinConfidence };
+            return new KnowledgeV2Settings { Enabled = true, Mode = settings.Mode, DirectThreshold = settings.DirectThreshold, MinConfidence = settings.MinConfidence };
         }
 
         public static void SetSettings(string seller, bool enabled, string mode, double threshold, double minConfidence)
         {
+            if (double.IsNaN(threshold) || double.IsInfinity(threshold)
+                || double.IsNaN(minConfidence) || double.IsInfinity(minConfidence))
+                throw new ArgumentOutOfRangeException(nameof(threshold), "知识库检索阈值必须是有限数字。");
             var shop = ResolveShopRequired(seller);
-            var store = new ShopScopedSettingsStore(shop, Paths);
-            store.SetString(KnowledgeEngineV2Constants.SettingsEnabled, enabled ? "1" : "0");
-            store.SetString(KnowledgeEngineV2Constants.SettingsMode, KnowledgeEngineV2Constants.ModeProduction);
-            store.SetString(KnowledgeEngineV2Constants.SettingsDirectThreshold, Math.Max(0.70, Math.Min(0.96, threshold)).ToString("0.000", System.Globalization.CultureInfo.InvariantCulture));
-            store.SetString(KnowledgeEngineV2Constants.SettingsMinConfidence, Math.Max(0.50, Math.Min(0.95, minConfidence)).ToString("0.000", System.Globalization.CultureInfo.InvariantCulture));
-            SettingsCache[shop.ShopKey] = new RuntimeSettings
+            lock (SettingsLocks.GetOrAdd(shop.ShopKey, _ => new object()))
             {
-                Enabled = enabled,
-                Mode = KnowledgeEngineV2Constants.ModeProduction,
-                DirectThreshold = Math.Max(0.70, Math.Min(0.96, threshold)),
-                MinConfidence = Math.Max(0.50, Math.Min(0.95, minConfidence)),
-                ExpiresAt = DateTime.Now.AddMinutes(5)
-            };
+                var store = new ShopScopedSettingsStore(shop, Paths);
+                var direct = Math.Max(0.70, Math.Min(0.96, threshold));
+                var confidence = Math.Max(0.50, Math.Min(0.95, minConfidence));
+                // Persist one complete setting revision before publishing the cache.
+                var values = new Dictionary<string, string>(StringComparer.Ordinal)
+                {
+                    { KnowledgeEngineV2Constants.SettingsEnabled, "1" },
+                    { KnowledgeEngineV2Constants.SettingsMode, KnowledgeEngineV2Constants.ModeProduction },
+                    { KnowledgeEngineV2Constants.SettingsDirectThreshold, direct.ToString("0.000", System.Globalization.CultureInfo.InvariantCulture) },
+                    { KnowledgeEngineV2Constants.SettingsMinConfidence, confidence.ToString("0.000", System.Globalization.CultureInfo.InvariantCulture) }
+                };
+                store.MergeValues(values, true);
+                var persisted = store.ExportValues();
+                foreach (var pair in values)
+                {
+                    string value;
+                    if (!persisted.TryGetValue(pair.Key, out value)
+                        || !string.Equals(value, pair.Value, StringComparison.Ordinal))
+                    {
+                        RuntimeSettings ignored;
+                        SettingsCache.TryRemove(shop.ShopKey, out ignored);
+                        throw new InvalidOperationException("Knowledge V2设置写入后校验失败。");
+                    }
+                }
+                SettingsCache[shop.ShopKey] = new RuntimeSettings
+                {
+                    Enabled = true,
+                    Mode = KnowledgeEngineV2Constants.ModeProduction,
+                    DirectThreshold = double.Parse(values[KnowledgeEngineV2Constants.SettingsDirectThreshold], System.Globalization.CultureInfo.InvariantCulture),
+                    MinConfidence = double.Parse(values[KnowledgeEngineV2Constants.SettingsMinConfidence], System.Globalization.CultureInfo.InvariantCulture),
+                    ExpiresAt = DateTime.Now.AddMinutes(5)
+                };
+            }
         }
 
         public static KnowledgeV2Decision Resolve(string seller, string buyer, string message)
         {
             return ResolveInternal(seller, buyer, message, false, string.Empty, string.Empty, false);
+        }
+
+        internal static KnowledgeV2Decision ResolveWithCommerceContext(
+            string seller, string buyer, string message, CommerceContextSnapshot commerce)
+        {
+            return ResolveInternal(seller, buyer, message, false, string.Empty, string.Empty, false, commerce);
         }
 
         // Visual/OCR evidence enriches entity recall without becoming the buyer's question.
@@ -99,12 +131,13 @@ namespace Bot.Knowledge
             string buyer,
             string message,
             string evidenceText,
-            string evidenceSubject)
+            string evidenceSubject,
+            CommerceContextSnapshot commerce = null)
         {
             var hasCuratedImageKnowledge = !string.IsNullOrWhiteSpace(evidenceText)
                 && evidenceText.IndexOf("【已命中本店人工维护的图片知识】", StringComparison.Ordinal) >= 0;
             return ResolveInternal(
-                seller, buyer, message, false, evidenceText, evidenceSubject, hasCuratedImageKnowledge);
+                seller, buyer, message, false, evidenceText, evidenceSubject, hasCuratedImageKnowledge, commerce);
         }
 
         // Simulator-specific safety evaluation: retain every knowledge, conflict,
@@ -122,7 +155,8 @@ namespace Bot.Knowledge
             bool sandbox,
             string evidenceText,
             string evidenceSubject,
-            bool curatedImageEvidence)
+            bool curatedImageEvidence,
+            CommerceContextSnapshot commerce = null)
         {
             var total = Stopwatch.StartNew();
             var settings = GetSettings(seller);
@@ -147,6 +181,8 @@ namespace Bot.Knowledge
             var shop = ResolveShopRequired(seller);
             var memory = GetWorkingMemory(shop.ShopKey, seller, buyer);
             var query = KnowledgeEngineV2Semantics.Parse(message, memory);
+            if (commerce != null && commerce.HasStructuredOrder)
+                query.VerifiedCommerceScope = CommerceContextService.BuildPolicyScopeToken(commerce);
             // Persist only buyer-authored query semantics. OCR/menu labels must never
             // become the next turn's working-memory intent, predicate or subject.
             // An image-only message has no buyer-authored query to update memory with.
@@ -231,7 +267,8 @@ namespace Bot.Knowledge
 
             var rankSw = Stopwatch.StartNew();
             var rankedMatches = candidates.Select(i => Score(seller, snapshot.Records[i], query)).Where(x => x != null && x.Score >= 0.30).OrderByDescending(x => x.Score).ThenByDescending(x => x.ConfidenceScore).ToList();
-            var productionMatches = rankedMatches.Where(x => IsEligibleProductionMatch(x, query)).Take(5).ToList();
+            var allProductionMatches = rankedMatches.Where(x => IsEligibleProductionMatch(x, query)).ToList();
+            var productionMatches = allProductionMatches.Take(5).ToList();
             // Operator-reviewed direct replies take precedence at the exact question
             // boundary; confidence observations never delay an explicit manual save.
             // Other semantically similar questions continue through normal safety ranking.
@@ -270,7 +307,8 @@ namespace Bot.Knowledge
                 && !object.ReferenceEquals(x, best));
             // An explicit human correction of this exact standalone question wins over
             // older generic answers; unrelated queries still use conflict rejection.
-            decision.HasConflict = manualExactConflict || (manualExact == null && HasConflict(best, second));
+            decision.HasConflict = manualExactConflict || (manualExact == null
+                && allProductionMatches.Any(x => !ReferenceEquals(x, best) && HasConflict(best, x)));
             var margin = second == null ? best.Score : best.Score - second.Score;
             var threshold = settings.DirectThreshold;
             var minConfidence = settings.MinConfidence;
@@ -291,6 +329,7 @@ namespace Bot.Knowledge
                     && best.ConfidenceScore >= minConfidence
                     && (best.AliasScore >= 0.94 || best.PredicateScore >= 0.99)
                     && (effectiveMargin >= 0.08 || best.AliasScore >= 0.98)));
+            decision.SelectedMatch = decision.CanDirectReply ? best : null;
             decision.Answer = decision.CanDirectReply ? (best.Record.Answer ?? string.Empty).Trim() : string.Empty;
             decision.Reason = decision.CanDirectReply
                 ? (approvedExact ? "人工审核精确问法直答即时生效：score="
@@ -378,7 +417,7 @@ namespace Bot.Knowledge
             // A local direct answer must be grounded by the current buyer message itself. Working
             // Memory may help AI/contextual reasoning, but it must never turn “充没/1?/不满意/人工”
             // into the previous account_binding fact and auto-send it as a fresh answer.
-            if (!string.IsNullOrWhiteSpace(query.WorkingMemoryReason)) return false;
+            if (query.ContextDependent || !string.IsNullOrWhiteSpace(query.WorkingMemoryReason)) return false;
             if (Regex.IsMatch(compact, @"^\d{5,20}$")) return false;
             if (Regex.IsMatch(compact, @"^[?？!！.。]+$")) return false;
             if (Regex.IsMatch(compact, @"(人工|客服|转人工|投诉|不满意|有病|垃圾|骗子|差评|举报|生气|退款|退货|充没|充上没|到账没|付款没|发货没)")) return false;
@@ -408,11 +447,11 @@ namespace Bot.Knowledge
             if (query.ContextDependent && (query.Entities == null || query.Entities.Count < 1) && string.IsNullOrWhiteSpace(query.Subject)) return false;
             var close = productionMatches.Where(x => x != null && x.Record != null).Where(x => best.Score - x.Score < 0.08).Where(x => x.Score >= threshold && x.ConfidenceScore >= minConfidence).Take(4).ToList();
             if (close.Count < 2) return false;
-            foreach (var candidate in close.Skip(1))
+            foreach (var candidate in close.Where(x => !ReferenceEquals(x, best)))
             {
                 if (!candidate.Record.Enabled || string.Equals(candidate.Record.RiskLevel, "high", StringComparison.OrdinalIgnoreCase) || KnowledgeEngineV2Semantics.IsHighRisk(candidate.Record.Answer)) return false;
                 if (!SameConsensusScope(best.Record, candidate.Record)) return false;
-                if (HasAnswerPolarityConflict(best.Record.Answer, candidate.Record.Answer)) return false;
+                if (!AnswersEquivalent(best.Record.Answer, candidate.Record.Answer)) return false;
             }
             return true;
         }
@@ -441,8 +480,10 @@ namespace Bot.Knowledge
         {
             var value = KnowledgeEngineV2Semantics.Compact(answer);
             if (value.Length == 0) return 0;
-            var negative = value.Contains("不支持") || value.Contains("不能使用") || value.Contains("无法使用") || value.Contains("不可以") || value.Contains("不可使用");
-            var positive = value.Contains("可以使用") || value.Contains("支持使用") || value.Contains("可以用于") || value.Contains("适用于") || value.Contains("是电视端") || value.Contains("可以支持");
+            const string negativePattern = "不支持|不能使用|不能用|无法使用|无法用|不可以|不可使用|不可用|不适用";
+            var negative = Regex.IsMatch(value, negativePattern);
+            var positive = Regex.IsMatch(Regex.Replace(value, negativePattern, string.Empty),
+                "支持|可以|适用于|能用|可用|是电视端");
             if (negative && !positive) return -1;
             if (positive && !negative) return 1;
             return 0;
@@ -451,6 +492,15 @@ namespace Bot.Knowledge
         private static bool IsApprovedProductionMatch(KnowledgeV2Match match)
         {
             return KnowledgeV2AuthorityPolicy.IsProductionApproved(match == null ? null : match.Record);
+        }
+
+        // Context extraction reads the same committed in-memory snapshot as retrieval;
+        // the management API below still reads the full repository including tombstones.
+        internal static IEnumerable<KnowledgeV2Record> GetProductionContextRecords(string seller)
+        {
+            return GetSnapshot(seller).Records
+                .Where(KnowledgeV2AuthorityPolicy.IsProductionApproved)
+                .Where(x => !ShopReceptionPolicy.IsQuarantined(seller, x.Id, x.Title, x.Answer));
         }
 
         public static List<KnowledgeV2Record> GetRecords(string seller)
@@ -487,25 +537,38 @@ namespace Bot.Knowledge
         {
             var shop = ResolveShop(seller);
             if (shop == null) return;
-            Snapshot ignored;
-            Snapshots.TryRemove(shop.ShopKey, out ignored);
+            lock (BuildLocks.GetOrAdd(shop.ShopKey, _ => new object()))
+            {
+                Snapshot ignored;
+                Snapshots.TryRemove(shop.ShopKey, out ignored);
+            }
         }
 
         public static void Warm(string seller) { GetSnapshot(seller); }
 
-        public static void RebuildFromLegacy(string seller)
-        {
-            KnowledgeEngineV2Repository.ResetFromLegacy(seller);
-            Invalidate(seller);
-            Warm(seller);
-        }
-
         public static void PromoteCandidate(string seller, string id)
         {
-            var record = GetRecords(seller).FirstOrDefault(x => x.Id == id);
-            if (record == null) return;
+            var record = KnowledgeEngineV2Repository.LoadCommittedRecord(seller, id);
+            if (record != null)
+                TryPromoteCandidate(seller, id, KnowledgeEngineV2Repository.EditorRecordFingerprint(record));
+        }
+
+        internal static bool TryPromoteCandidate(string seller, string id, string expectedFingerprint)
+        {
+            if (string.IsNullOrWhiteSpace(id) || string.IsNullOrWhiteSpace(expectedFingerprint)) return false;
+            var record = KnowledgeEngineV2Repository.LoadCommittedRecord(seller, id);
+            if (record == null || !string.Equals(record.Status, "candidate", StringComparison.OrdinalIgnoreCase)
+                || !KnowledgeV2AuthorityPolicy.IsCandidate(record)
+                || !string.Equals(KnowledgeEngineV2Repository.EditorRecordFingerprint(record), expectedFingerprint, StringComparison.Ordinal))
+                return false;
+            // An explicit operator approval is new provenance. Retain the source ID,
+            // scope, conditions and risk rather than treating the candidate as an
+            // unrestricted FAQ or reviving a disabled/deleted row.
+            record.SourceType = "manual_confirmed";
+            record.Enabled = true;
+            record.LastVerifiedAt = DateTime.Now;
             KnowledgeV2AuthorityPolicy.Promote(record);
-            KnowledgeEngineV2Repository.Save(seller, record);
+            return KnowledgeEngineV2Repository.TrySaveEditorRecord(seller, record, expectedFingerprint);
         }
     }
 }

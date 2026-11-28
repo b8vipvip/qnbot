@@ -23,15 +23,6 @@ using System.Windows.Controls;
 using System.Windows.Media;
 using System.Windows.Threading;
 
-namespace Bot
-{
-    public partial class App
-    {
-        private readonly object _clientDataCloudBackupBootstrap =
-            Knowledge.ClientDataCloudBackupService.InitializeForApp();
-    }
-}
-
 namespace Bot.Knowledge
 {
     internal static class ClientDataCloudBackupService
@@ -42,67 +33,6 @@ namespace Bot.Knowledge
         private const long MaxSingleFileBytes = 32L * 1024 * 1024;
 
         private static readonly ShopScopedPathProvider Paths = new ShopScopedPathProvider();
-        private static readonly ConditionalWeakTable<KnowledgeManagerControl, object> Attached =
-            new ConditionalWeakTable<KnowledgeManagerControl, object>();
-        private static int _initialized;
-
-        public static object InitializeForApp()
-        {
-            if (Interlocked.Exchange(ref _initialized, 1) == 0)
-            {
-                EventManager.RegisterClassHandler(
-                    typeof(KnowledgeManagerControl),
-                    FrameworkElement.LoadedEvent,
-                    new RoutedEventHandler(OnKnowledgeManagerLoaded),
-                    true);
-            }
-            return new object();
-        }
-
-        private static void OnKnowledgeManagerLoaded(object sender, RoutedEventArgs e)
-        {
-            var control = sender as KnowledgeManagerControl;
-            if (control == null) return;
-            object marker;
-            if (Attached.TryGetValue(control, out marker)) return;
-            try { Attached.Add(control, new object()); } catch { return; }
-
-            var window = Window.GetWindow(control);
-            var shop = ShopSettingsScope.Current ?? ShopScopedUiBridge.Get(window);
-            if (shop == null) return;
-            control.Dispatcher.BeginInvoke(
-                DispatcherPriority.ContextIdle,
-                new Action(() => AttachButton(control, shop)));
-        }
-
-        private static void AttachButton(KnowledgeManagerControl control, ShopContext shop)
-        {
-            var root = control.Content as DockPanel;
-            var top = root == null ? null : root.Children.OfType<WrapPanel>().FirstOrDefault();
-            if (top == null) return;
-            if (top.Children.OfType<Button>().Any(x => Convert.ToString(x.Tag) == "client-data-cloud-backup")) return;
-
-            var button = new Button
-            {
-                Content = "本店云备份/换机",
-                Tag = "client-data-cloud-backup",
-                Width = 126,
-                Height = 28,
-                Margin = new Thickness(0, 0, 8, 6),
-                ToolTip = "只备份当前 ShopKey；使用本店 Bot 客户端令牌加密上传。"
-            };
-            button.Click += (s, e) =>
-            {
-                using (ShopSettingsScope.Enter(shop))
-                {
-                    var window = new ClientDataBackupWindow(shop) { Owner = Window.GetWindow(control) };
-                    ShopScopedUiBridge.Attach(window, shop);
-                    window.ShowDialog();
-                }
-            };
-            top.Children.Add(button);
-        }
-
         internal static async Task<JObject> GetStatusAsync(ShopContext shop)
         {
             string serverUrl;

@@ -56,12 +56,14 @@ def test_business_and_handoff_policies_use_shop_rule_paths_and_path_keyed_caches
 
 
 def test_knowledge_cloud_sync_has_per_shop_state_token_revision_and_backup():
-    source = read("src/Bot/Knowledge/KnowledgeCloudSyncService.cs")
-    assert "ConcurrentDictionary<string, ShopSyncState>" in source
+    source = read("src/Bot/Knowledge/KnowledgeV2CloudSyncService.cs")
+    assert "ConcurrentDictionary<string, State>" in source
+    assert "States.GetOrAdd(shop.ShopKey" in source
     assert "ShopControlPlaneConnectionStore" in source
-    assert 'request.Headers.TryAddWithoutValidation("X-Shop-Key", shop.ShopKey)' in source
-    assert 'RevisionKey, Scope' in source
-    assert 'LastHashKey, Scope' in source
+    assert 'request.Headers.TryAddWithoutValidation("X-Shop-Key",shop.ShopKey)' in source
+    assert "KnowledgeV2CloudRevision" in source
+    assert "KnowledgeV2CloudFingerprint" in source
+    assert "ShopSettingsScope.Enter(shop)" in source
     assert "Paths.GetBackupRoot(shop)" in source
     assert "ControlPlaneClientToken" not in source
     assert '"ai-control-plane"' not in source
@@ -123,7 +125,8 @@ def test_conversation_alias_learning_dedup_progress_and_watchdogs_include_shop_k
         assert "ShopKey" in source
     assert "QN.CurQN" not in files["conversation"]
     assert "FindQn(pending.Shop, pending.Seller)" in files["watchdog"]
-    assert "SaveLocks.GetOrAdd(ScopeKey()" in files["learning"]
+    assert "return ScopeKey() + " in files["learning"]
+    assert "BotFeatureStore.SaveKnowledgeBase" not in files["learning"]
 
 
 def test_scoped_logs_mirror_to_shop_log_root():

@@ -15,13 +15,19 @@ namespace Bot.ChromeNs
     {
         public bool Handled { get; private set; }
         public string ContextPromptAddon { get; private set; }
+        // Only a V2 decision that already passed the direct-answer and typed
+        // evidence gates may be used if the configured AI upstream later fails.
+        public KnowledgeV2Decision OfflineFallbackDecision { get; private set; }
 
-        public static KnowledgeV2RuntimeResult Continue(string contextPromptAddon = null)
+        public static KnowledgeV2RuntimeResult Continue(
+            string contextPromptAddon = null,
+            KnowledgeV2Decision offlineFallbackDecision = null)
         {
             return new KnowledgeV2RuntimeResult
             {
                 Handled = false,
-                ContextPromptAddon = contextPromptAddon ?? string.Empty
+                ContextPromptAddon = contextPromptAddon ?? string.Empty,
+                OfflineFallbackDecision = offlineFallbackDecision
             };
         }
 
@@ -33,8 +39,6 @@ namespace Bot.ChromeNs
 
     internal static class KnowledgeEngineV2RuntimeBridge
     {
-        private static readonly ConcurrentDictionary<string, byte> PreparedShopKeys =
-            new ConcurrentDictionary<string, byte>(StringComparer.Ordinal);
         private static readonly ConcurrentDictionary<string, byte> WarmingShopKeys =
             new ConcurrentDictionary<string, byte>(StringComparer.Ordinal);
         private static int _initialized;
@@ -46,19 +50,9 @@ namespace Bot.ChromeNs
                 try { KnowledgeCenterV2UiBridge.Initialize(); } catch { }
                 try { KnowledgeV2QualityUiBridge.Initialize(); } catch { }
                 try { KnowledgeEngineV2FeedbackBridge.Initialize(); } catch { }
-                StopLegacyMemoryTimer();
                 Log.Info("Knowledge Engine V2已启动：回复主流程显式调用V2决策，不再与Smart Reply争抢反射包装顺序；SQLite知识库、结构化索引、Working Memory和反馈质量闭环已启用。");
             }
             return new object();
-        }
-
-        private static void StopLegacyMemoryTimer()
-        {
-            try { KnowledgeMemoryRuntimeBridge.DisableForV2(); }
-            catch (Exception ex)
-            {
-                Log.ErrorWithMaxCount("关闭Knowledge Memory V1运行时包装器失败: " + ex.Message, 10);
-            }
         }
 
         private static void PrepareSeller(string shopKey, string seller)
@@ -66,22 +60,6 @@ namespace Bot.ChromeNs
             shopKey = (shopKey ?? string.Empty).Trim();
             seller = (seller ?? string.Empty).Trim();
             if (shopKey.Length == 0 || seller.Length == 0) return;
-
-            // Runtime state is shop-scoped. Seller nicknames are display data and can
-            // be identical across multiple logged-in Qianniu stores.
-            if (PreparedShopKeys.TryAdd(shopKey, 1))
-            {
-                try
-                {
-                    KnowledgeMemoryEngine.SetEnabled(seller, false);
-                }
-                catch (Exception ex)
-                {
-                    PreparedShopKeys.TryRemove(shopKey, out _);
-                    Log.ErrorWithMaxCount("关闭Knowledge Memory v1店铺开关失败: shopRef="
-                        + MyWebSocketServer.DiagnosticRef("shop", shopKey) + ", error=" + ex.Message, 10);
-                }
-            }
             QueueWarm(shopKey, seller);
         }
 
@@ -211,6 +189,32 @@ namespace Bot.ChromeNs
             // the same seller nickname into one warm/initialization state.
             PrepareSeller(burst.ShopKey, burst.SellerNick);
 
+            // Resolve short follow-ups against the same ShopKey-scoped conversation
+            // state before V2 retrieval. Otherwise "这个呢/那价格呢" reaches V2 as
+            // an isolated fragment and only the downstream AI prompt knows the topic.
+            var retrievalQuestion = currentQuestion;
+            ContextualQueryResolution contextualResolution = null;
+            try
+            {
+                var contextualPlan = await SmartReplyRouterService.BuildPlanAsync(
+                    burst.SellerNick, burst.BuyerNick, currentQuestion, lease.CancellationToken)
+                    .ConfigureAwait(false);
+                contextualResolution = contextualPlan == null ? null : contextualPlan.QueryResolution;
+                if (contextualResolution != null && contextualResolution.Rewritten
+                    && !string.IsNullOrWhiteSpace(contextualResolution.ResolvedQuery))
+                    retrievalQuestion = contextualResolution.ResolvedQuery;
+            }
+            catch (OperationCanceledException)
+            {
+                if (lease.CancellationToken.IsCancellationRequested)
+                    return KnowledgeV2RuntimeResult.HandledResult();
+                Log.Info("Knowledge V2上下文还原被取消，保留原始买家问题继续检索。");
+            }
+            catch (Exception ex)
+            {
+                Log.ErrorWithMaxCount("Knowledge V2上下文还原失败，保留原始问题检索: " + ex.Message, 5);
+            }
+
             // V2 is only a fast terminal path when the shared commerce authority allows local
             // termination. The same authority is consumed by Smart Reply, so verified orders and
             // strongly post-order conversations cannot be decided differently by parallel layers.
@@ -233,22 +237,33 @@ namespace Bot.ChromeNs
                     + burst.BuyerNick
                     + ", phase=" + (commerceAuthority.CommerceContext == null ? string.Empty : commerceAuthority.CommerceContext.PurchasePhase)
                     + ", reason=" + commerceAuthority.Reason);
+                // Order-dependent questions still need applicable V2 facts for AI.
+                // No ordinary local terminal reply is permitted in this branch.
+                try
+                {
+                    var contextualDecision = KnowledgeEngineV2Service.ResolveWithCommerceContext(
+                        burst.SellerNick, burst.BuyerNick, retrievalQuestion, commerceAuthority.CommerceContext);
+                    if (contextualDecision != null)
+                    {
+                        contextualDecision.CanDirectReply = false;
+                        contextualDecision.Answer = string.Empty;
+                        if (contextualDecision.Query != null)
+                            contextualDecision.Query.UserOriginal = currentQuestion;
+                    }
+                    commercePrompt += BuildContextPromptAddon(contextualDecision);
+                }
+                catch (Exception ex)
+                {
+                    Log.ErrorWithMaxCount("Knowledge V2订单上下文检索失败：" + ex.GetType().Name, 10);
+                }
                 if (string.IsNullOrWhiteSpace(commercePrompt))
                     return KnowledgeV2RuntimeResult.Continue();
                 return KnowledgeV2RuntimeResult.Continue(commercePrompt);
             }
 
-            if (!KnowledgeEngineV2Service.IsSnapshotReady(burst.SellerNick))
-            {
-                QueueWarm(burst.ShopKey, burst.SellerNick);
-                Log.Info("Knowledge Engine V2索引尚未就绪，本轮不阻塞买家消息，直接继续兼容回复链路: buyer="
-                    + burst.BuyerNick);
-                var warmContext = conditionalOnly
-                    ? ConditionalBusinessAdviceService.BuildPromptAddon(conditionalAdviceEvidence, false)
-                        + CommerceContextService.BuildPromptAddon(commerceAuthority.CommerceContext)
-                    : string.Empty;
-                return KnowledgeV2RuntimeResult.Continue(warmContext);
-            }
+            // Do not skip retrieval on the first buyer turn after startup. Resolve()
+            // builds the exact ShopKey snapshot under its per-shop build lock when cold;
+            // the background warmup remains an optimization, not a correctness gate.
 
             KnowledgeV2Decision decision;
             try
@@ -259,9 +274,10 @@ namespace Bot.ChromeNs
                     decision = KnowledgeEngineV2Service.ResolveWithCuratedImageKnowledgeEvidence(
                         burst.SellerNick,
                         burst.BuyerNick,
-                        burst.CombinedQuestion,
+                        retrievalQuestion,
                         imageEvidenceText,
-                        conditionalAdviceEvidence.ImageDescription);
+                        conditionalAdviceEvidence.ImageDescription,
+                        commerceAuthority.CommerceContext);
                     string conditionalReason;
                     if (!ConditionalBusinessAdviceService.TryAuthorizeRefundSuggestion(
                         decision, conditionalAdviceEvidence, out conditionalReason))
@@ -275,7 +291,7 @@ namespace Bot.ChromeNs
                 }
                 else
                 {
-                    decision = KnowledgeEngineV2Service.Resolve(burst.SellerNick, burst.BuyerNick, burst.CombinedQuestion);
+                    decision = KnowledgeEngineV2Service.Resolve(burst.SellerNick, burst.BuyerNick, retrievalQuestion);
                 }
             }
             catch (Exception ex)
@@ -284,6 +300,9 @@ namespace Bot.ChromeNs
                     + burst.BuyerNick + ", error=" + ex.Message, 20);
                 return KnowledgeV2RuntimeResult.Continue();
             }
+
+            if (decision != null && decision.Query != null)
+                decision.Query.UserOriginal = currentQuestion;
 
             if (!conditionalOnly && ConditionalBusinessAdviceService.RequiresEvidenceGate(decision))
             {
@@ -326,6 +345,17 @@ namespace Bot.ChromeNs
                 }
             }
 
+            // Ordinary fixed answers must not intercept a live reception step.
+            // Typed conditional advice remains subject to its separate evidence gate.
+            if (decision != null && decision.CanDirectReply
+                && string.IsNullOrWhiteSpace(decision.ConditionalAdviceKey)
+                && ConversationProgressGuardService.RequiresContextualHandling(commerceAuthority.ConversationState))
+            {
+                decision.CanDirectReply = false;
+                decision.Answer = string.Empty;
+                Log.Info("Knowledge V2 当前会话需要上下文处理，禁止固定知识直答。");
+            }
+
             if (decision == null || !decision.CanDirectReply || string.IsNullOrWhiteSpace(decision.Answer))
             {
                 var contextPromptAddon = BuildContextPromptAddon(decision);
@@ -338,6 +368,21 @@ namespace Bot.ChromeNs
                     + ", contextAvailable=" + !string.IsNullOrWhiteSpace(contextPromptAddon)
                     + ", reason=" + (decision == null ? "无决策" : decision.Reason));
                 return KnowledgeV2RuntimeResult.Continue(contextPromptAddon);
+            }
+
+            // AI-first must still use the V2 retrieval result as grounded context,
+            // but it must not terminate the AI generation path with a local answer.
+            // Local-first is the only mode allowed to take the V2 direct-send fast path.
+            if (!ReplyModeService.IsLocalFirst(burst.SellerNick))
+            {
+                var aiFirstContext = BuildContextPromptAddon(decision);
+                if (conditionalOnly || typedEvidenceGateAttempted)
+                    aiFirstContext += ConditionalBusinessAdviceService.BuildPromptAddon(conditionalAdviceEvidence, false)
+                        + CommerceContextService.BuildPromptAddon(commerceAuthority.CommerceContext);
+                Log.Info("Knowledge Engine V2 AI优先模式：保留已批准知识作为上下文，不截断AI生成: buyer="
+                    + burst.BuyerNick + ", candidates=" + decision.CandidateCount
+                    + ", totalMs=" + decision.TotalMs);
+                return KnowledgeV2RuntimeResult.Continue(aiFirstContext, decision);
             }
 
             var detectedAt = burst.Items.Min(x => x.ReceivedAt);
@@ -420,7 +465,14 @@ namespace Bot.ChromeNs
                     + burst.BuyerNick + ", generation=" + burst.SessionGeneration);
                 return KnowledgeV2RuntimeResult.HandledResult();
             }
-            var best = decision.Matches.FirstOrDefault(IsApprovedMatchForLogging);
+            var best = decision.SelectedMatch;
+            if (!IsSelectedKnowledgeCurrent(burst.SellerNick, burst.ShopKey, decision))
+            {
+                if (ctl != null) ctl.SetSendResult(false, "未发送：选中的V2知识已变更或不可用");
+                lease.MarkCompleted("knowledge_v2_selected_record_changed");
+                ResponseProgressTracker.Cancel(burst.SellerNick, burst.BuyerNick, "Knowledge V2选中知识已变更", burst.ShopKey);
+                return KnowledgeV2RuntimeResult.HandledResult();
+            }
             // Preserve the actual knowledge record selected for the direct reply.
             // A generic "本地知识V2" label cannot open the right editor later.
             var sourceLabel = best != null && best.Record != null
@@ -557,11 +609,19 @@ namespace Bot.ChromeNs
             // If a later retry is cancelled, an earlier attempt may still have reached the buyer.
             var conditionalAdviceSendMayHaveStarted = false;
             var outgoingPolicySuppressed = false;
+            var knowledgeVersionSuppressed = false;
             var latestOutgoingPolicyReason = string.Empty;
             Func<bool> preSendGuard = () =>
             {
                 if (!lease.IsCurrent || lease.CancellationToken.IsCancellationRequested)
                     return false;
+                if (!ReplyModeService.IsLocalFirst(burst.SellerNick)
+                    || !IsSelectedKnowledgeCurrent(burst.SellerNick, burst.ShopKey, decision))
+                {
+                    knowledgeVersionSuppressed = true;
+                    Log.Info("Knowledge V2实际发送前选中知识或回复模式已变更，阻止旧答案发送: buyer=" + burst.BuyerNick);
+                    return false;
+                }
                 if (conditionalAdviceReserved
                     && !ConditionalBusinessAdviceService.IsEvidenceStillValid(
                         burst.ShopKey, burst.SellerNick, burst.BuyerNick,
@@ -639,6 +699,13 @@ namespace Bot.ChromeNs
                     burst.ShopKey, burst.SellerNick, burst.BuyerNick,
                     decision.ConditionalAdviceOrderId, decision.ConditionalAdviceKey,
                     sendOk, !conditionalAdviceSendMayHaveStarted);
+            if (!sendOk && knowledgeVersionSuppressed)
+            {
+                if (ctl != null) ctl.SetSendResult(false, "未发送：选中知识或回复模式已变更");
+                lease.MarkCompleted("knowledge_v2_selected_record_changed_before_send");
+                ResponseProgressTracker.Cancel(burst.SellerNick, burst.BuyerNick, "Knowledge V2发送前知识版本变化", burst.ShopKey);
+                return KnowledgeV2RuntimeResult.HandledResult();
+            }
             if (outgoingPolicySuppressed)
             {
                 if (ctl != null) ctl.SetSendResult(false, "未发送：" + latestOutgoingPolicyReason);
@@ -706,6 +773,7 @@ namespace Bot.ChromeNs
         internal static string BuildContextPromptAddon(KnowledgeV2Decision decision)
         {
             if (decision == null || decision.HasConflict || decision.Query == null
+                || KnowledgeEngineV2Semantics.IsHighRisk(decision.Query.UserOriginal ?? decision.Query.Original)
                 || KnowledgeEngineV2Semantics.IsHighRisk(decision.Query.Original))
                 return string.Empty;
 
@@ -728,7 +796,7 @@ namespace Bot.ChromeNs
 
             var sb = new StringBuilder();
             sb.Append("\n\n【Knowledge Center V2已批准知识：仅作为上下文证据】\n")
-                .Append("买家当前问题：").Append(SafeContext(decision.Query.Original, 300)).Append("\n")
+                .Append("买家当前问题：").Append(SafeContext(decision.Query.UserOriginal ?? decision.Query.Original, 300)).Append("\n")
                 .Append("结构化解析：subject=").Append(SafeContext(decision.Query.Subject, 100))
                 .Append("；intent=").Append(SafeContext(decision.Query.Intent, 60))
                 .Append("；predicate=").Append(SafeContext(decision.Query.Predicate, 60))
@@ -765,9 +833,37 @@ namespace Bot.ChromeNs
             return value.Length <= max ? value : value.Substring(0, max) + "...";
         }
 
-        private static bool IsApprovedMatchForLogging(KnowledgeV2Match match)
+        internal static bool IsSelectedKnowledgeCurrent(string seller, string shopKey, KnowledgeV2Decision decision)
         {
-            return match != null && Bot.Knowledge.KnowledgeV2AuthorityPolicy.IsProductionApproved(match.Record);
+            var selected = decision == null ? null : decision.SelectedMatch;
+            var record = selected == null ? null : selected.Record;
+            var shop = ShopSettingsScope.Current;
+            if (shop == null || !shop.HasStableSellerId
+                || !string.Equals(shop.ShopKey, shopKey, StringComparison.Ordinal)
+                || !string.Equals(shop.SellerNick, seller, StringComparison.Ordinal)
+                || decision == null || !decision.CanDirectReply
+                || !KnowledgeV2AuthorityPolicy.IsProductionApproved(record)
+                || string.IsNullOrWhiteSpace(record.Id)
+                || !string.Equals((record.Answer ?? string.Empty).Trim(), decision.Answer, StringComparison.Ordinal))
+                return false;
+            try
+            {
+                var committed = KnowledgeEngineV2Repository.LoadCommittedRecord(seller, record.Id);
+                if (committed == null || !committed.Enabled
+                    || string.Equals(committed.Status, "deleted", StringComparison.OrdinalIgnoreCase)
+                    || string.Equals(committed.Status, "disabled", StringComparison.OrdinalIgnoreCase))
+                    return false;
+                committed = KnowledgeV2AuthorityPolicy.NormalizeForRead(committed);
+                return KnowledgeV2AuthorityPolicy.IsProductionApproved(committed)
+                    && !ShopReceptionPolicy.IsQuarantined(seller, committed.Id, committed.Title, committed.Answer)
+                    && string.Equals(KnowledgeEngineV2Repository.EditorRecordFingerprint(record),
+                        KnowledgeEngineV2Repository.EditorRecordFingerprint(committed), StringComparison.Ordinal);
+            }
+            catch (Exception ex)
+            {
+                Log.ErrorWithMaxCount("Knowledge V2发送前知识版本校验失败：" + ex.GetType().Name, 10);
+                return false;
+            }
         }
     }
 }

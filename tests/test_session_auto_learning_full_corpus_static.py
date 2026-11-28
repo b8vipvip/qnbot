@@ -103,7 +103,7 @@ def test_corpus_batches_retry_transient_502_503_and_record_model_protocol_metada
     assert "public string EndpointName { get; set; }" in my
 
 
-def test_session_learning_stays_dry_run_and_persists_live_coverage_progress():
+def test_session_learning_persists_coverage_and_auto_publishes_only_verified_v2_evidence():
     service = read("src/Bot/ChromeNs/ConversationSessionLearningService.cs")
     finalize = service[
         service.index("private static async Task FinalizeAsync"):
@@ -111,6 +111,8 @@ def test_session_learning_stays_dry_run_and_persists_live_coverage_progress():
     ]
 
     assert "private const bool EnableAutomaticWrites = false;" in service
+    assert "private const bool EnableVerifiedCorpusNewKnowledgeWrites = true;" in service
+    assert "private const bool EnableVerifiedCorpusCorrectionWrites = true;" in service
     assert "AnalyzeKnowledgeCorpusAsync(" in finalize
     assert "SaveReport(report);" in finalize
     assert '["knowledgeCorpusComplete"] = false' in finalize
@@ -118,11 +120,12 @@ def test_session_learning_stays_dry_run_and_persists_live_coverage_progress():
     assert ".Concat(corpusAnalysis.Candidates)" in finalize
     assert ".Concat(corpusAnalysis.NewCandidates)" in finalize
     assert "corpusAnalysis.Complete" in finalize
-    assert "ReviewedKnowledgeLearningService.ApplyReviewedKnowledge" in finalize
-    assert finalize.index("if (!EnableAutomaticWrites)") < finalize.index(
-        "ReviewedKnowledgeLearningService.ApplyReviewedKnowledge"
-    )
-
+    assert "ApplyVerifiedCorpusNewKnowledge(" in finalize
+    assert "ApplyVerifiedCorpusCorrections(" in finalize
+    assert "genericSuggestionWriteMode" in finalize
+    assert "ai_auto_publish_verified_human_evidence" in finalize
+    assert "ReviewedKnowledgeLearningService.ApplyReviewedKnowledge" not in finalize
+    assert "缺少完整的 Knowledge V2 真人消息证据链，保留候选" in finalize
 
 def test_serialized_full_corpus_candidates_include_id_fingerprint_and_message_provenance():
     service = read("src/Bot/ChromeNs/ConversationSessionLearningService.cs")
@@ -879,26 +882,38 @@ def test_pending_learning_recovery_only_resumes_durable_unfinished_reports_and_d
     assert "legacy_report_shop_scope_unavailable" in recovery
 
 
-def test_incomplete_knowledge_v2_corpus_blocks_all_automatic_learning_writes():
+def test_incomplete_knowledge_v2_corpus_blocks_all_production_adds_and_corrections():
     service = read("src/Bot/ChromeNs/ConversationSessionLearningService.cs")
     finalize = service[
         service.index("private static async Task FinalizeAsync"):
         service.index("private static async Task<KnowledgeCorpusAnalysisResult> AnalyzeKnowledgeCorpusAsync")
     ]
+    new_add = service[
+        service.index("private static int ApplyVerifiedCorpusNewKnowledge"):
+        service.index("private static bool CanAutoApplyVerifiedNewKnowledge")
+    ]
+    corrections = service[
+        service.index("private static int ApplyVerifiedCorpusCorrections"):
+        service.index("private static bool CanAutoApplyVerifiedCorpusCorrection")
+    ]
 
-    corpus_gate = finalize.index(
-        "var corpusComplete = corpusAnalysis != null && corpusAnalysis.Complete;"
-    )
-    style_write = finalize.index("SaveStyleProfile(session.Seller, styleAfter);")
+    corpus_gate = finalize.index("var corpusComplete = corpusAnalysis != null && corpusAnalysis.Complete;")
     suggestion_loop = finalize.index("foreach (var suggestion in suggestions)")
-    knowledge_write = finalize.index(
-        "ReviewedKnowledgeLearningService.ApplyReviewedKnowledge"
-    )
-
-    assert corpus_gate < style_write < knowledge_write
-    assert "if (EnableAutomaticWrites\n                    && corpusComplete" in finalize
+    knowledge_write = finalize.index("if (EnableVerifiedCorpusNewKnowledgeWrites)")
+    assert corpus_gate < suggestion_loop < knowledge_write
     assert "if (!corpusComplete)" in finalize[suggestion_loop:knowledge_write]
     assert "禁止自动写入生产知识库" in finalize[suggestion_loop:knowledge_write]
+
+    # The write helpers themselves fail closed, so callers cannot accidentally
+    # publish from an incomplete scan or a source version that drifted mid-run.
+    assert "!analysis.Complete" in new_add
+    assert "!analysis.NewCandidateAnalysisComplete" in new_add
+    assert "analysis.SourceFingerprint, analysis.AfterFingerprint" in new_add
+    assert "TryCreateVerifiedSessionKnowledge(" in new_add
+
+    assert "!analysis.Complete" in corrections
+    assert "analysis.SourceFingerprint, analysis.AfterFingerprint" in corrections
+    assert "TryApplyVerifiedSessionCorrection(" in corrections
 
 def test_corpus_batch_is_not_checkpointed_until_candidate_evidence_restoration_succeeds():
     service = read("src/Bot/ChromeNs/ConversationSessionLearningService.cs")
@@ -1082,3 +1097,18 @@ def test_pending_learning_waits_for_authoritative_qn_session_even_when_shop_prof
     assert "report.CompletedAtTicks = 0;" in gate
     assert "continue;" in gate
     assert "StartPendingRecoveryTimer();" in service
+
+def test_auto_correction_revalidates_real_human_text_and_corpus_for_each_write():
+    service = read("src/Bot/ChromeNs/ConversationSessionLearningService.cs")
+    repo = read("src/Bot/Knowledge/KnowledgeEngineV2.Repository.cs")
+    apply = service.split("private static int ApplyVerifiedCorpusCorrections(", 1)[1].split("private static bool CanAutoApplyVerifiedCorpusCorrection(", 1)[0]
+    assert "HasVerifiedCorrectionTranscript(candidate, turns, cards)" in apply
+    assert "FindUniqueTurnByMessageId(turns, id)" in apply
+    assert "IsBotTurn(x, cards)" in apply
+    assert "candidate.OldAnswer, StringComparison.Ordinal" in apply
+    assert "bundle.Any(x => !evidence.Contains(x))" in apply
+    assert "string.Equals(actual, candidate.Answer, StringComparison.Ordinal)" in apply
+    assert "expectedCurrentFingerprint = nextFingerprint;" in apply
+    write = repo.split("public static bool TryApplyVerifiedSessionCorrection(", 1)[1].split("public static bool TryRollbackLastBotCorrection", 1)[0]
+    assert write.index("lock (state.Sync)") < write.index("ComputeRepositoryCorpusFingerprint(current)") < write.index("state.Db.SaveRecordsInTransaction")
+    assert "updatedCorpusFingerprint, expectedCorpusFingerprint" in write

@@ -23,10 +23,10 @@ def test_five_minute_learning_keeps_original_timing_and_auto_publishes_verified_
     assert '"auto_published"' in source
     assert "ReceptionWorkflowAgentService.PublishProposals(" in finalize
     assert "receptionWorkflowPublished" in finalize
-    assert "ReviewedKnowledgeLearningService.ApplyReviewedKnowledge(" in source
-    assert source.index("RequiresWorkflowReview(suggestion)") < source.index(
-        "ReviewedKnowledgeLearningService.ApplyReviewedKnowledge("
-    )
+    assert "ApplyVerifiedCorpusNewKnowledge(" in finalize
+    assert "ApplyVerifiedCorpusCorrections(" in finalize
+    assert "RequiresWorkflowReview(suggestion)" in finalize
+    assert "ReviewedKnowledgeLearningService.ApplyReviewedKnowledge(" not in source
 
 
 def test_workflow_candidates_require_real_evidence_and_are_not_general_answers():
@@ -70,10 +70,12 @@ def test_ai_and_observed_human_learning_cannot_publish_store_policy():
     learn = text("src/Bot/ChromeNs/KnowledgeLearningService.cs")
     policy = text(POLICY)
     assert "RequiresManualKnowledgeReview(string seller, string question, string answer)" in policy
-    assert learn.count("ShopReceptionPolicy.RequiresManualKnowledgeReview(") == 2
-    assert "店铺业务知识自动学习改为会话复盘待审核" in learn
-    assert 'string.Equals(sourceType, "人工修改", StringComparison.Ordinal)' in learn
-    assert "等待人工审核，未自动写入" in learn
+    session = text(LEARNING)
+    assert "ShopReceptionPolicy.Applies(session.Seller)" in session
+    assert "RequiresWorkflowReview(suggestion)" in session
+    assert "HasVerifiedCorrectionTranscript(candidate, turns, cards)" in session
+    assert "TryCreateVerifiedSessionKnowledge(" in session
+    assert "BotFeatureStore.SaveKnowledgeBase" not in learn
 
 def test_knowledge_center_exposes_scoped_read_only_audit():
     ui = text("src/Bot/Knowledge/KnowledgeCenterV2Ui.cs")

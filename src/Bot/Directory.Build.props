@@ -7,11 +7,7 @@
     <Compile Include="$(MSBuildThisFileDirectory)Knowledge\RulePolicyImportExportUi.cs" />
   </ItemGroup>
 
-  <ItemGroup Condition="Exists('$(MSBuildThisFileDirectory)Knowledge\KnowledgeCloudSyncService.cs')">
-    <Compile Include="$(MSBuildThisFileDirectory)Knowledge\KnowledgeCloudSyncService.cs" />
-  </ItemGroup>
-
-  <ItemGroup Condition="Exists('$(MSBuildThisFileDirectory)Knowledge\StoreRuleCloudSyncService.cs')">
+<ItemGroup Condition="Exists('$(MSBuildThisFileDirectory)Knowledge\StoreRuleCloudSyncService.cs')">
     <Compile Include="$(MSBuildThisFileDirectory)Knowledge\StoreRuleCloudSyncService.cs" />
   </ItemGroup>
 
@@ -59,13 +55,7 @@
     <Compile Include="$(MSBuildThisFileDirectory)ChromeNs\ReplyModeService.cs" />
   </ItemGroup>
 
-  <ItemGroup Condition="Exists('$(MSBuildThisFileDirectory)ChromeNs\KnowledgeMemoryEngine.cs')">
-    <Compile Include="$(MSBuildThisFileDirectory)ChromeNs\KnowledgeMemoryEngine.cs" />
-  </ItemGroup>
 
-  <ItemGroup Condition="Exists('$(MSBuildThisFileDirectory)Knowledge\KnowledgeMemoryEngineUi.cs')">
-    <Compile Include="$(MSBuildThisFileDirectory)Knowledge\KnowledgeMemoryEngineUi.cs" />
-  </ItemGroup>
 
   <!-- Knowledge Center V2 is explicitly included for the normal Bot project and WPF *_wpftmp projects. -->
   <ItemGroup Condition="Exists('$(MSBuildThisFileDirectory)Knowledge\KnowledgeEngineV2.Models.cs')">
@@ -81,7 +71,6 @@
     <Compile Include="$(MSBuildThisFileDirectory)Knowledge\KnowledgeEngineV2GovernanceService.cs" />
     <Compile Include="$(MSBuildThisFileDirectory)Knowledge\KnowledgeEngineV2GovernanceBootstrap.cs" />
     <Compile Include="$(MSBuildThisFileDirectory)Knowledge\KnowledgeCenterHelpWindow.cs" />
-    <Compile Include="$(MSBuildThisFileDirectory)Knowledge\LegacyKnowledgePreviewWindow.cs" />
     <Compile Include="$(MSBuildThisFileDirectory)Knowledge\KnowledgeCenterV2Ui.cs" />
     <Compile Include="$(MSBuildThisFileDirectory)Knowledge\KnowledgeCenterV2RecordsPage.cs" />
     <Compile Include="$(MSBuildThisFileDirectory)Knowledge\KnowledgeV2BotReplyManagementPage.cs" />
@@ -93,8 +82,8 @@
     <Compile Include="$(MSBuildThisFileDirectory)Knowledge\KnowledgeV2CloudSyncService.cs" />
     <Compile Include="$(MSBuildThisFileDirectory)Knowledge\KnowledgeCenterV2AiToolsUi.cs" />
     <Compile Include="$(MSBuildThisFileDirectory)Knowledge\KnowledgeV2NaturalLanguageService.cs" />
+    <Compile Include="$(MSBuildThisFileDirectory)Knowledge\KnowledgeV2HistoryImportService.cs" />
     <Compile Include="$(MSBuildThisFileDirectory)Knowledge\KnowledgeV2OperatorUiBridge.cs" />
-    <Compile Include="$(MSBuildThisFileDirectory)Knowledge\KnowledgeV2LegacyDeltaImportService.cs" />
     <Compile Include="$(MSBuildThisFileDirectory)ChromeNs\KnowledgeEngineV2RuntimeBridge.cs" />
     <Compile Include="$(MSBuildThisFileDirectory)ChromeNs\KnowledgeEngineV2LearningBridge.cs" />
     <Compile Include="$(MSBuildThisFileDirectory)ChromeNs\KnowledgeEngineV2FeedbackBridge.cs" />
@@ -161,11 +150,7 @@
     <Compile Include="$(MSBuildThisFileDirectory)Knowledge\BusinessPolicyProfileUi.cs" />
   </ItemGroup>
 
-  <ItemGroup Condition="Exists('$(MSBuildThisFileDirectory)Knowledge\BulkListManagementUi.cs')">
-    <Compile Include="$(MSBuildThisFileDirectory)Knowledge\BulkListManagementUi.cs" />
-  </ItemGroup>
-
-  <ItemGroup Condition="Exists('$(MSBuildThisFileDirectory)ChromeNs\BulkListManagementUiBridge.cs')">
+<ItemGroup Condition="Exists('$(MSBuildThisFileDirectory)ChromeNs\BulkListManagementUiBridge.cs')">
     <Compile Include="$(MSBuildThisFileDirectory)ChromeNs\BulkListManagementUiBridge.cs" />
   </ItemGroup>
 

@@ -6,14 +6,13 @@ SAFETY = (ROOT / "src/Bot/ChromeNs/BulkListManagementUiBridge.cs").read_text(enc
 
 
 def test_manual_takeover_generates_compare_only_ai_and_history():
-    assert 'Header = "AI优化记录"' in KNOWLEDGE
-    assert '"人工接管后的AI优化对比"' in KNOWLEDGE
-    assert 'desk.AddConversation(seller, buyer, question,' in KNOWLEDGE
-    assert 'false, "人工接管后的AI优化对比"' in KNOWLEDGE
-    assert 'accuracy_score' in KNOWLEDGE
-    assert 'human_reply_reason' in KNOWLEDGE
-    assert 'knowledge_strategy' in KNOWLEDGE
-    assert 'ReviewedKnowledgeLearningService.ApplyReviewedKnowledge' in KNOWLEDGE
+    learning = (ROOT / "src/Bot/ChromeNs/KnowledgeLearningService.cs").read_text(encoding="utf-8-sig")
+    assert "MessageProcessingTraceService.RecordLearningComparison(" in learning
+    assert "MyOpenAI.CallStructuredChat(" in learning
+    assert "should_learn" in learning and "confidence < 0.95" in learning
+    assert "double.IsNaN(confidence) || double.IsInfinity(confidence)" in learning
+    assert "KnowledgeEngineV2Repository.TrySaveReviewedDirectAnswer(" in learning
+    assert "seller, question, manualAnswer, sourceMessageIds" in learning
 
 
 def test_ingress_watchdog_recovers_active_history_and_order_panel():

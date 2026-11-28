@@ -23,7 +23,7 @@ def test_v2_cloud_replay_backs_up_before_any_shop_scoped_replace():
 def test_v2_cloud_conflicts_preserve_local_facts_as_disabled_review_candidates():
     service = read("src/Bot/Knowledge/KnowledgeV2CloudSyncService.cs")
     merge = service[
-        service.index("private static List<KnowledgeV2Record> MergeCloudAndLocal"):
+        service.index("internal static List<KnowledgeV2Record> MergeCloudAndLocal"):
         service.index("private static void AddUnique")
     ]
     candidate = service[
@@ -31,7 +31,7 @@ def test_v2_cloud_conflicts_preserve_local_facts_as_disabled_review_candidates()
         service.index("private static void AddUnique")
     ]
 
-    assert "MergeCloudAndLocal(records,latestLocal,preserveLocalOnly:!hasBaseline)" in service
+    assert "MergeCloudAndLocal(records,latestLocal,preserveLocalOnly:true)" in service
     assert "cloud_sync_conflict_candidate" in candidate
     assert 'candidate.Enabled=false;' in candidate
     assert 'candidate.Status="candidate";' in candidate
@@ -39,7 +39,7 @@ def test_v2_cloud_conflicts_preserve_local_facts_as_disabled_review_candidates()
     assert "AddCandidate(merged, mergedIds, local, id)" in merge
 
 
-def test_v2_cloud_replacement_uses_atomic_repository_compare_and_swap():
+def test_v2_cloud_replacement_uses_atomic_repository_compare_and_swap_without_v1_mirror():
     repository = read("src/Bot/Knowledge/KnowledgeEngineV2.Repository.cs")
     method = repository[
         repository.index("internal static bool TryReplaceAllIfUnchanged"):
@@ -51,9 +51,9 @@ def test_v2_cloud_replacement_uses_atomic_repository_compare_and_swap():
     assert "if(!string.Equals(currentFingerprint,expectedFingerprint??string.Empty" in method
     assert method.index("if(!string.Equals(currentFingerprint") < method.index("state.Db.ReplaceRecordsInTransaction")
     assert "state.Db.ReplaceRecordsInTransaction" in method
-    assert "MirrorAllToLegacy(shop,normalized)" in method
     assert "KnowledgeEngineV2Service.ReplaceSnapshot(seller,normalized)" in method
-
+    assert "MirrorAllToLegacy" not in method
+    assert "BotFeatureStore.SaveKnowledgeBase" not in method
 
 def test_v2_cloud_sync_uses_same_canonical_fingerprint_for_persistence_and_compare():
     service = read("src/Bot/Knowledge/KnowledgeV2CloudSyncService.cs")
@@ -64,7 +64,7 @@ def test_v2_cloud_sync_uses_same_canonical_fingerprint_for_persistence_and_compa
     assert "store.TryGetString(FingerprintKey,out fingerprint)" in service
     persist = service[
         service.index("private static void PersistState"):
-        service.index("private static List<KnowledgeV2Record> MergeCloudAndLocal")
+        service.index("internal static List<KnowledgeV2Record> MergeCloudAndLocal")
     ]
     assert "store.MergeValues(new Dictionary<string,string>(StringComparer.Ordinal)" in persist
     assert "{ RevisionKey, revision }" in persist
@@ -72,14 +72,15 @@ def test_v2_cloud_sync_uses_same_canonical_fingerprint_for_persistence_and_compa
     assert "store.SetString(" not in persist
     assert "private static State LoadState(ShopContext shop)" in service
     assert "private static void PersistState(ShopContext shop,State state,int targetRevision,string targetFingerprint)" in service
-    assert "KnowledgeAiService.ContentHash(JsonConvert.SerializeObject(projection),string.Empty)" in repository
+    assert "JsonConvert.SerializeObject(projection, Formatting.None)" in repository
+    assert "sha.ComputeHash(Encoding.UTF8.GetBytes(json))" in repository
 
 
 def test_v2_cloud_sync_checkpoint_advances_only_after_persisted_values_are_verified():
     service = read("src/Bot/Knowledge/KnowledgeV2CloudSyncService.cs")
     persist = service[
         service.index("private static void PersistState"):
-        service.index("private static List<KnowledgeV2Record> MergeCloudAndLocal")
+        service.index("internal static List<KnowledgeV2Record> MergeCloudAndLocal")
     ]
     sync = service[
         service.index("private static async Task SyncOnce"):
@@ -202,7 +203,7 @@ def test_delete_tombstones_remain_in_cloud_snapshots_and_are_accepted_by_runtime
 def test_v2_cloud_merge_compares_every_semantic_field_and_preserves_monotonic_metadata():
     service = read("src/Bot/Knowledge/KnowledgeV2CloudSyncService.cs")
     merge = service[
-        service.index("private static List<KnowledgeV2Record> MergeCloudAndLocal"):
+        service.index("internal static List<KnowledgeV2Record> MergeCloudAndLocal"):
         service.index("private static void AddUnique")
     ]
     compare = service[
@@ -250,7 +251,7 @@ def test_cloud_revision_reset_backs_up_local_corpus_and_restarts_safe_reconcilia
 def test_verified_human_evidence_is_deduplicated_across_different_device_record_ids():
     service = read("src/Bot/Knowledge/KnowledgeV2CloudSyncService.cs")
     merge = service[
-        service.index("private static List<KnowledgeV2Record> MergeCloudAndLocal"):
+        service.index("internal static List<KnowledgeV2Record> MergeCloudAndLocal"):
         service.index("private static void AddUnique")
     ]
     assert "recordsByHumanEvidence" in merge
@@ -259,9 +260,10 @@ def test_verified_human_evidence_is_deduplicated_across_different_device_record_
     assert "KnowledgeV2AuthorityPolicy.IsAutoPublishedHumanEvidenceSource(record.SourceType)" in merge
     assert "SameRecordContent(existingEvidence, record)" in merge
     assert "SameRecordContent(evidenceRecord, local)" in merge
-    assert "AddCandidate(merged, mergedIds, record, record.Id)" in merge
+    assert "AddUnique(merged, mergedIds, duplicate)" in merge
+    assert "cloudById[duplicate.Id] = duplicate" in merge
     assert "AddCandidate(merged, mergedIds, local, local.Id)" in merge
-    assert "if (preserveLocalOnly)" in merge
+    assert "if (preserveLocalOnly || IsDeleteTombstone(local))" in merge
     # The deterministic human-evidence SourceId, not a random record ID, is the cross-device dedupe key.
     assert "return (record.SourceId ?? string.Empty).Trim();" in merge
 
@@ -334,7 +336,7 @@ def test_cloud_fingerprint_covers_all_persisted_record_fields():
 
 def test_concurrent_explicit_delete_wins_without_resurrecting_cloud_or_local_answer():
     service = read("src/Bot/Knowledge/KnowledgeV2CloudSyncService.cs")
-    merge = service.split("private static List<KnowledgeV2Record> MergeCloudAndLocal", 1)[1].split(
+    merge = service.split("internal static List<KnowledgeV2Record> MergeCloudAndLocal", 1)[1].split(
         "private static bool IsDeleteTombstone", 1
     )[0]
     assert "IsDeleteTombstone(local)" in merge
@@ -349,13 +351,13 @@ def test_concurrent_explicit_delete_wins_without_resurrecting_cloud_or_local_ans
 def test_concurrent_delete_wins_across_different_ids_for_same_verified_human_evidence():
     service = read("src/Bot/Knowledge/KnowledgeV2CloudSyncService.cs")
     merge = service[
-        service.index("private static List<KnowledgeV2Record> MergeCloudAndLocal"):
+        service.index("internal static List<KnowledgeV2Record> MergeCloudAndLocal"):
         service.index("private static bool IsDeleteTombstone")
     ]
     evidence = merge.split(
         "if (evidenceId.Length > 0 && recordsByHumanEvidence.TryGetValue(evidenceId, out evidenceRecord))",
         1
-    )[1].split("if (preserveLocalOnly)", 1)[0]
+    )[1].split("if (preserveLocalOnly || IsDeleteTombstone(local))", 1)[0]
     assert "IsDeleteTombstone(local) && !IsDeleteTombstone(evidenceRecord)" in evidence
     assert "AddCandidate(merged, mergedIds, evidenceRecord, evidenceRecord.Id);" in evidence
     assert "var tombstone = CloneRecord(local);" in evidence
@@ -378,3 +380,49 @@ def test_knowledge_v2_sync_isolates_profile_failures_per_shop():
     assert "catch (Exception ex)" in queue_all
     assert "跳过异常店铺并继续处理其他店铺" in queue_all
     assert "Profiles.GetAll()" in queue_all
+
+
+def test_cloud_cas_fingerprint_does_not_use_lossy_faq_normalization():
+    repository = read("src/Bot/Knowledge/KnowledgeEngineV2.Repository.cs")
+    fingerprint = repository.split("internal static string ComputeCloudSyncFingerprint", 1)[1].split("internal static bool TryReplaceAllIfUnchanged", 1)[0]
+    assert "SHA256.Create()" in fingerprint
+    assert "Encoding.UTF8.GetBytes(json)" in fingerprint
+    assert "KnowledgeAiService.ContentHash" not in fingerprint
+    assert "NormalizeQuestion" not in fingerprint
+    assert "JsonConvert.SerializeObject(projection, Formatting.None)" in fingerprint
+
+
+def test_delete_evidence_normalization_keeps_all_device_ids_and_handles_clean_cloud_pull():
+    service = read("src/Bot/Knowledge/KnowledgeV2CloudSyncService.cs")
+    merge = service.split("internal static List<KnowledgeV2Record> MergeCloudAndLocal", 1)[1].split("private static HashSet<string> DeletedEvidenceKeys", 1)[0]
+    assert "DeletedEvidenceKeys(cloudInput.Concat(localInput))" in merge
+    assert "cloudRecords = NormalizeEvidenceDeletes(cloudInput, deletedEvidence)" in merge
+    assert "localRecords = NormalizeEvidenceDeletes(localInput, deletedEvidence)" in merge
+    assert "IsDeleteTombstone(record) ? string.Empty : AutoPublishedEvidenceKey(record)" in merge
+    assert "IsDeleteTombstone(local) ? string.Empty : AutoPublishedEvidenceKey(local)" in merge
+    assert "if (preserveLocalOnly || IsDeleteTombstone(local))" in merge
+    normalize = service.split("private static List<KnowledgeV2Record> NormalizeEvidenceDeletes", 1)[1].split("private static bool IsDeleteTombstone", 1)[0]
+    assert "CloneRecord(record)" in normalize
+    assert "tombstone.Enabled = false" in normalize
+    assert 'tombstone.Status = "deleted"' in normalize
+    assert "tombstone.Id =" not in normalize
+    assert ": MergeCloudAndLocal(records, Enumerable.Empty<KnowledgeV2Record>(), preserveLocalOnly:true)" in service
+    assert "NormalizeEvidenceDeletes(local, DeletedEvidenceKeys(local))" in service
+
+def test_cloud_duplicate_evidence_keeps_existing_ids_without_tombstoning_canonical_record():
+    service = read("src/Bot/Knowledge/KnowledgeV2CloudSyncService.cs")
+    merge = service.split("internal static List<KnowledgeV2Record> MergeCloudAndLocal", 1)[1]
+    duplicate = merge.split("var duplicate = CloneRecord(record);", 1)[1].split("continue;", 1)[0]
+    assert 'duplicate.Status = "candidate"' in duplicate
+    assert "duplicate.Enabled = false" in duplicate
+    assert "duplicate.Id =" not in duplicate
+    assert "cloudById[duplicate.Id] = duplicate" in duplicate
+    assert "preserveLocalOnly:true" in service
+
+def test_conflict_candidate_identity_is_stable_across_usage_metadata_changes():
+    source = read("src/Bot/Knowledge/KnowledgeV2CloudSyncService.cs")
+    candidate = source.split("private static void AddCandidate",1)[1].split("private static void AddUnique",1)[0]
+    assert "identity.UseCount = identity.AcceptedCount = identity.CorrectionCount = identity.WithdrawCount = 0" in candidate
+    assert "identity.CreatedAt = identity.UpdatedAt = identity.LastVerifiedAt = DateTime.MinValue" in candidate
+    assert "Fingerprint(new[]{identity})" in candidate
+    assert "!IsDeleteTombstone(existing)" in candidate

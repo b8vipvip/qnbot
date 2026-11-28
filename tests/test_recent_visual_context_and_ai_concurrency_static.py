@@ -147,7 +147,7 @@ def test_withdrawn_visual_context_is_injected_only_for_explicit_historical_image
 
 def test_oversized_bursts_cannot_be_intercepted_by_knowledge_or_vision_runtime_wrappers():
     burst = text("src/Bot/ChromeNs/BuyerMessageBurstCoordinator.cs")
-    memory = text("src/Bot/ChromeNs/KnowledgeMemoryEngine.cs")
+    assert not (ROOT / "src/Bot/ChromeNs/KnowledgeMemoryEngine.cs").exists()
     v2 = text("src/Bot/ChromeNs/KnowledgeEngineV2RuntimeBridge.cs")
     streaming = text("src/Bot/ChromeNs/BuyerStreamingReplyPipeline.cs")
     vision = text("src/Bot/ChromeNs/VisionWithdrawalAwarePipeline.cs")
@@ -157,11 +157,6 @@ def test_oversized_bursts_cannot_be_intercepted_by_knowledge_or_vision_runtime_w
         burst.index("public BuyerMessageBurst(", burst.index("public bool HasReplyableItem"))
     ]
     assert "return !InputOverflow && Items.Any(" in property_block
-
-    memory_guard = memory.split("var burst = lease == null ? null : lease.Burst;", 1)[1].split(
-        "KnowledgeMemoryDecision decision;", 1
-    )[0]
-    assert "!burst.HasReplyableItem" in memory_guard
 
     v2_guard = v2.split("var burst = lease == null ? null : lease.Burst;", 1)[1].split(
         "var shopScope", 1

@@ -55,7 +55,7 @@ namespace Bot.Knowledge
             });
             header.Children.Add(new TextBlock
             {
-                Text = "从千牛历史聊天中提取买家已提问、客服已回答的有效轮次。整理结果统一转换为当前 Knowledge Center V2 字段、按 V2 去重并写入当前店铺；本次扫描产生的旧格式临时记录会在 V2 写入后删除。不会向买家发送消息。",
+                Text = "从千牛历史聊天中提取买家已提问、客服已回答的有效轮次。整理结果统一转换为当前 Knowledge Center V2 字段、按 V2 去重并写入当前店铺；AI分析结果直接使用 Knowledge V2 结构化记录，只有当前店铺的 V2 数据库会接收写入。不会向买家发送消息。",
                 TextWrapping = TextWrapping.Wrap,
                 Foreground = new SolidColorBrush(Color.FromRgb(75, 85, 99)),
                 Margin = new Thickness(0, 5, 0, 0)
@@ -177,6 +177,7 @@ namespace Bot.Knowledge
             {
                 var service = new ChatHistoryScanService();
                 var scan = await service.ScanAndImportAsync(
+                    _shopKey,
                     options,
                     p => Dispatcher.BeginInvoke(new Action(() =>
                     {
@@ -186,14 +187,14 @@ namespace Bot.Knowledge
                     _cts.Token);
 
                 _summary.Text = "聊天扫描完成，正在把整理结果标准化为当前 Knowledge V2...";
-                var promoted = KnowledgeV2LegacyDeltaImportService.PromoteHistoryImport(_seller, _shopKey, scan.ImportResult);
+                var promoted = KnowledgeV2HistoryImportService.PromoteHistoryImport(_seller, _shopKey, scan.ImportResult);
                 var sb = new StringBuilder();
                 sb.Append("整理完成：联系人 ").Append(scan.ScannedContacts).Append("/").Append(scan.ContactCount);
                 sb.Append("，有效聊天消息 ").Append(scan.MessageCount);
                 sb.Append("，有效问答轮次 ").Append(scan.PairCount);
-                sb.Append("，V2写入 ").Append(promoted.Added);
+                sb.Append("，V2发布 ").Append(promoted.Published);
+                sb.Append("，V2候选 ").Append(promoted.Candidates);
                 sb.Append("，V2重复跳过 ").Append(promoted.DuplicateSkipped);
-                sb.Append("，清理本次旧格式临时记录 ").Append(promoted.LegacyTransientRemoved);
                 if (scan.FailedContacts > 0) sb.Append("，读取失败 ").Append(scan.FailedContacts);
                 _summary.Text = sb.ToString();
                 _progress.Text = sb + Environment.NewLine

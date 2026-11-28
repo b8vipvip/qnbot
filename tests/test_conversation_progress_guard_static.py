@@ -15,7 +15,9 @@ def policy() -> dict:
 def test_import_export_bootstrap_is_explicitly_initialized():
     app = read("src/Bot/App.xaml.cs")
     assert "RulePolicyImportExportUi.InitializeForApp();" in app
-    assert app.index("KnowledgePolicyProfileUi.Initialize();") < app.index("RulePolicyImportExportUi.InitializeForApp();")
+    assert "KnowledgePolicyProfileUi.Initialize();" not in app
+    source = read("src/Bot/Knowledge/RulePolicyImportExportUi.cs")
+    assert "typeof(StorePromptProfileWindow)" in source
 
 
 def test_progress_guard_tracks_state_without_persisting_sensitive_values():
@@ -34,10 +36,14 @@ def test_progress_guard_tracks_state_without_persisting_sensitive_values():
 
 
 def test_router_filters_regressive_knowledge_and_forces_contextual_flow():
-    router = read("src/Bot/ChromeNs/SmartReplyRouterService.cs")
-    assert "ConversationProgressGuardService.AllowKnowledge" in router
-    assert "ConversationProgressGuardService.RequiresContextualHandling" in router
-    assert "禁止固定知识直答" in router
+    runtime = read("src/Bot/ChromeNs/KnowledgeEngineV2RuntimeBridge.cs")
+    pipeline = read("src/Bot/ChromeNs/BuyerStreamingReplyPipeline.cs")
+    guard = "ConversationProgressGuardService.RequiresContextualHandling(commerceAuthority.ConversationState)"
+    assert guard in runtime
+    assert runtime.index(guard) < runtime.index("if (!ReplyModeService.IsLocalFirst")
+    assert "禁止固定知识直答" in runtime
+    assert "decision.CanDirectReply = false" in runtime
+    assert "ConversationProgressGuardService.RequiresContextualHandling(authority.ConversationState)" in pipeline
 
 
 def test_validator_uses_shop_configured_messages_for_repeated_or_regressive_requests():

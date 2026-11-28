@@ -54,7 +54,7 @@ def test_store_rule_cloud_sync_is_per_shop_and_has_apply_backup():
     assert "ConcurrentDictionary<string, ShopSyncState>" in client
     assert "StoreRuleCloudRevision" in client
     assert "StoreRuleCloudLastHash" in client
-    assert "KnowledgeCloudSyncService.IsEnabledForShop(shop)" in client
+    assert "KnowledgeV2CloudSyncService.IsEnabledForShop(shop)" in client
     assert "ShopControlPlaneConnectionStore(shop, Paths)" in client
     assert '"X-Shop-Key", shop.ShopKey' in client
     assert '"/api/runtime/v1/bot-web/store-rule-sync"' in client

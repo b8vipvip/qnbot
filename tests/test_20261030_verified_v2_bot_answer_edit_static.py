@@ -58,7 +58,7 @@ def test_exact_id_edit_is_transactional_and_snapshot_is_immediate():
     assert "new KnowledgeV2ManualEditRevisionRow" in method
     assert 'Action = "apply"' in method
     assert "state.Db.SaveRecordsInTransaction(new List<object> { ToRow(corrected), revision });" in method
-    assert "MirrorOneToLegacy(shop, corrected)" in method
+    assert "MirrorOneToLegacy" not in method
     assert "KnowledgeEngineV2Service.ApplyRecordUpdate(seller, corrected)" in method
     assert "GetRecords(seller).FirstOrDefault" not in method
     assert "KnowledgeLearningService.LearnAsync" not in method
@@ -93,5 +93,5 @@ def test_manual_reviewed_answer_supports_safe_semantic_paraphrases():
     assert "match.IntentScore < 0.99" in helper
     assert "match.EntityScore >= 0.66 || subjectSimilarity >= 0.82" in helper
     assert "query.ContextDependent" in helper
-    assert "decision.HasConflict = manualExactConflict || (manualExact == null && HasConflict(best, second))" in service
+    assert "allProductionMatches.Any(x => !ReferenceEquals(x, best) && HasConflict(best, x))" in service
 

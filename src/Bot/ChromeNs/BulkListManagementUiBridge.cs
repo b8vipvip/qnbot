@@ -33,7 +33,7 @@ namespace Bot.ChromeNs
         public static void Initialize()
         {
             HandoffPolicyLegacyMigrationService.StartOnce();
-            Bot.Knowledge.BulkListManagementUi.Initialize();
+            // Legacy KnowledgeBase manager hooks are retired; only the unrelated handoff-policy migration remains.
         }
     }
 

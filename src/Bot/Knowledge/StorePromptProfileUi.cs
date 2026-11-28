@@ -11,77 +11,40 @@ namespace Bot.Knowledge
 {
     internal static class StorePromptProfileUi
     {
-        private static int _initialized;
-
-        public static void Initialize()
+        public static void Show(Window owner)
         {
-            if (Interlocked.Exchange(ref _initialized, 1) != 0) return;
-            EventManager.RegisterClassHandler(
-                typeof(KnowledgeManagerControl),
-                FrameworkElement.LoadedEvent,
-                new RoutedEventHandler(OnManagerLoaded),
-                true);
-        }
-
-        private static void OnManagerLoaded(object sender, RoutedEventArgs e)
-        {
-            var manager = sender as KnowledgeManagerControl;
-            if (manager == null) return;
-            var top = FindFirst<WrapPanel>(manager);
-            if (top == null) return;
-            if (top.Children.OfType<Button>().Any(x => Convert.ToString(x.Tag) == "store-rule-center")) return;
-
-            var button = new Button
+            ShopContext shop = ShopSettingsScope.Current ?? ShopScopedUiBridge.Get(owner);
+            if (shop == null)
             {
-                Content = "店铺规则中心",
-                Width = 108,
-                Height = 28,
-                Margin = new Thickness(0, 0, 8, 6),
-                Tag = "store-rule-center",
-                ToolTip = "只编辑当前 ShopKey 的店铺规则；规则会按店铺独立保存、备份和同步。"
-            };
-            button.Click += (s, args) =>
-            {
-                var owner = Window.GetWindow(manager);
-                var shop = ShopSettingsScope.Current ?? ShopScopedUiBridge.Get(owner);
-                if (shop == null)
+                try
                 {
-                    MessageBox.Show(
-                        "当前设置窗口还没有识别到店铺身份，请从对应千牛店铺的 Bot 设置重新进入。",
-                        "店铺规则中心",
-                        MessageBoxButton.OK,
-                        MessageBoxImage.Warning);
-                    return;
+                    var shopKey = ActiveShopSessionRegistry.GetActiveShopKey();
+                    if (!string.IsNullOrWhiteSpace(shopKey))
+                        shop = ShopContextLocator.ResolveRuntimeByShopKey(shopKey);
+                    if (shop == null)
+                    {
+                        var seller = ActiveShopSessionRegistry.GetActiveSellerNick();
+                        if (!string.IsNullOrWhiteSpace(seller))
+                            shop = ShopContextLocator.ResolveRuntimeBySellerNick(seller);
+                    }
                 }
-
-                using (ShopSettingsScope.Enter(shop))
-                {
-                    var window = new StorePromptProfileWindow(shop) { Owner = owner };
-                    ShopScopedUiBridge.Attach(window, shop);
-                    window.ShowDialog();
-                }
-            };
-            top.Children.Add(button);
-        }
-
-        private static T FindFirst<T>(DependencyObject root) where T : DependencyObject
-        {
-            if (root == null) return null;
-            var direct = root as T;
-            if (direct != null) return direct;
-            var count = VisualTreeHelper.GetChildrenCount(root);
-            for (var i = 0; i < count; i++)
-            {
-                var found = FindFirst<T>(VisualTreeHelper.GetChild(root, i));
-                if (found != null) return found;
+                catch { shop = null; }
             }
-            if (root is ContentControl)
+
+            if (shop == null || !shop.HasStableSellerId)
             {
-                var child = ((ContentControl)root).Content as DependencyObject;
-                var found = FindFirst<T>(child);
-                if (found != null) return found;
+                MessageBox.Show(owner,
+                    "当前设置窗口未绑定稳定的店铺身份。请从对应千牛店铺的 Bot 设置重新打开店铺规则中心。",
+                    "店铺规则中心", MessageBoxButton.OK, MessageBoxImage.Warning);
+                return;
             }
-            return null;
+
+            using (ShopSettingsScope.Enter(shop))
+            {
+                var window = new StorePromptProfileWindow(shop) { Owner = owner };
+                ShopScopedUiBridge.Attach(window, shop);
+                window.ShowDialog();
+            }
         }
     }
 

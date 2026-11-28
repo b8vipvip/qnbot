@@ -32,30 +32,39 @@ def test_contextual_query_rewrite_is_local_and_only_runs_for_dependent_queries()
     assert "MyOpenAI" not in code
 
 
-def test_router_uses_rewritten_query_and_structured_state_before_top3_prompt():
+def test_v2_runtime_uses_contextually_rewritten_query_before_knowledge_retrieval():
     router = read("src/Bot/ChromeNs/SmartReplyRouterService.cs")
+    state = read("src/Bot/ChromeNs/ConversationStateService.cs")
+    runtime = read("src/Bot/ChromeNs/KnowledgeEngineV2RuntimeBridge.cs")
+
     assert "ConversationStateService.Build" in router
     assert "ContextualQueryRewriteService.Resolve" in router
     assert "QueryResolution" in router
     assert "ConversationState" in router
-    assert "ResolvedQueryScore" in router
-    assert "EntityScore" in router
-    assert "originalScore * 0.38" in router
-    assert "resolvedScore * 0.28" in router
-    assert "keywordScore * 0.12" in router
-    assert "entityScore * 0.10" in router
-    assert "PromptCandidateCount = 3" in router
-    assert "上下文问题还原" in router
-    assert "当前会话状态" in read("src/Bot/ChromeNs/ConversationStateService.cs")
+    assert "contextualPlan = await SmartReplyRouterService.BuildPlanAsync(" in runtime
+    assert "contextualResolution = contextualPlan == null ? null : contextualPlan.QueryResolution;" in runtime
+    assert "contextualResolution.Rewritten" in runtime
+    assert "retrievalQuestion = contextualResolution.ResolvedQuery;" in runtime
+    assert "KnowledgeEngineV2Service.Resolve(burst.SellerNick, burst.BuyerNick, retrievalQuestion)" in runtime
+    assert "decision.Query.UserOriginal = currentQuestion;" in runtime
+    assert "UserOriginal" in read("src/Bot/Knowledge/KnowledgeEngineV2.Models.cs")
+    assert "上下文问题还原" in router or "BuildContextPromptAddon" in runtime
+    assert "当前会话状态" in state
 
-
-def test_rewritten_queries_are_contextual_except_explicit_self_contained_demonstratives():
+def test_rewritten_queries_are_contextual_and_preserve_the_original_buyer_question():
     router = read("src/Bot/ChromeNs/SmartReplyRouterService.cs")
-    assert "resolution != null && resolution.Rewritten" in router
-    assert "if (resolution != null && resolution.Rewritten && !selfContainedDemonstrative) return false;" in router
-    assert "IsSelfContainedDemonstrativeQuestion" in router
-    assert "plan.QueryResolution == null || !plan.QueryResolution.Rewritten" in router
+    runtime = read("src/Bot/ChromeNs/KnowledgeEngineV2RuntimeBridge.cs")
+    model = read("src/Bot/Knowledge/KnowledgeEngineV2.Models.cs")
 
+    state = read("src/Bot/ChromeNs/ConversationStateService.cs")
+    assert "class ContextualQueryResolution" in state
+    assert "ContextualQueryRewriteService.Resolve(" in router
+    assert "contextDependencyScore < 0.30" in state
+    assert "买家当前追问" in state
+    assert "retrievalQuestion = contextualResolution.ResolvedQuery;" in runtime
+    assert "decision.Query.UserOriginal = currentQuestion;" in runtime
+    assert "public string UserOriginal { get; set; }" in model
+    assert "decision.Query.UserOriginal ?? decision.Query.Original" in runtime
 
 def test_new_source_is_included_in_wpf_temp_and_normal_builds():
     targets = read("src/Directory.Build.targets")

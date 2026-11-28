@@ -22,7 +22,6 @@ namespace Bot.ChromeNs
     {
         private const double DirectKnowledgeMinOcrConfidence = 0.88d;
         private const int MinUsefulTextChars = 4;
-        private const int SnapshotWarmWaitMs = 12000;
 
         public static async Task<VisionRequestResult> TryResolveAsync(
             VisionReplyTask task,
@@ -213,33 +212,10 @@ namespace Bot.ChromeNs
                         return BuildVisualFallback(visualMatch, ocr, "Knowledge V2未启用", imageKnowledgeMatch);
                     }
 
-                    if (!KnowledgeEngineV2Service.IsSnapshotReady(knowledgeSeller))
-                    {
-                        var warmWait = Stopwatch.StartNew();
-                        Log.Info("图片OCR等待Knowledge V2索引就绪: shopRef="
-                            + MyWebSocketServer.DiagnosticRef("shop", task.ShopKey)
-                            + ", timeoutMs=" + SnapshotWarmWaitMs);
-                        while (!KnowledgeEngineV2Service.IsSnapshotReady(knowledgeSeller)
-                            && warmWait.ElapsedMilliseconds < SnapshotWarmWaitMs)
-                        {
-                            cancellationToken.ThrowIfCancellationRequested();
-                            KnowledgeEngineV2RuntimeBridge.PrepareForVision(task.ShopKey, knowledgeSeller);
-                            await Task.Delay(100, cancellationToken).ConfigureAwait(false);
-                        }
-                        warmWait.Stop();
-                        Log.Info("图片OCR Knowledge V2索引预热等待结束: shopRef="
-                            + MyWebSocketServer.DiagnosticRef("shop", task.ShopKey)
-                            + ", ready=" + KnowledgeEngineV2Service.IsSnapshotReady(knowledgeSeller)
-                            + ", waitMs=" + warmWait.ElapsedMilliseconds);
-                    }
-
-                    if (!KnowledgeEngineV2Service.IsSnapshotReady(knowledgeSeller))
-                    {
-                        Log.Info("服务端OCR已完成，但Knowledge V2索引在等待窗口内仍未就绪；保留OCR缓存并继续视觉/文字兜底: shopRef="
-                            + MyWebSocketServer.DiagnosticRef("shop", task.ShopKey)
-                            + ", buyer=" + task.BuyerNick);
-                        return BuildVisualFallback(visualMatch, ocr, "Knowledge V2索引未就绪", imageKnowledgeMatch);
-                    }
+                    // OCR has already completed. Do not skip the only knowledge engine
+                    // just because the background warmup has not finished. Resolve builds
+                    // the exact ShopKey snapshot under the per-shop build lock if needed.
+                    cancellationToken.ThrowIfCancellationRequested();
 
                     var evidenceText = ocr.Text;
                     if (imageKnowledgeMatch != null && !string.IsNullOrWhiteSpace(imageKnowledgeMatch.ContextText))
@@ -262,6 +238,7 @@ namespace Bot.ChromeNs
                             question,
                             evidenceText,
                             evidenceSubject);
+                    cancellationToken.ThrowIfCancellationRequested();
 
                     // Structured orders always require the shared commerce authority.
                     // The only local exception is a knowledge record that explicitly opts
@@ -363,6 +340,20 @@ namespace Bot.ChromeNs
                     + task.BuyerNick);
             }
 
+            if (decision != null && decision.CanDirectReply)
+            {
+                using (ShopSettingsScope.Enter(shop, false))
+                {
+                    if (!KnowledgeEngineV2RuntimeBridge.IsSelectedKnowledgeCurrent(knowledgeSeller, task.ShopKey, decision))
+                    {
+                        decision.CanDirectReply = false;
+                        decision.Answer = string.Empty;
+                        decision.SelectedMatch = null;
+                        decision.Matches.Clear();
+                    }
+                }
+            }
+
             var approvedV2KnowledgeEvidence = KnowledgeEngineV2RuntimeBridge.BuildContextPromptAddon(decision);
 
             // A saved image knowledge description is an operator-confirmed image-class
@@ -433,6 +424,7 @@ namespace Bot.ChromeNs
             {
                 Success = true,
                 IsKnowledgeV2DirectAnswer = true,
+                SelectedKnowledgeDecision = decision,
                 ApprovedV2KnowledgeEvidence = approvedV2KnowledgeEvidence,
                 Answer = answer,
                 Error = string.Empty,
@@ -449,7 +441,7 @@ namespace Bot.ChromeNs
                 MatchedVisualKnowledgeId = visualMatch == null ? string.Empty : "ocr-direct-knowledge-v2:" + visualMatch.RuleId,
                 MatchedImageKnowledgeId = imageKnowledgeMatch == null ? string.Empty : imageKnowledgeMatch.KnowledgeId,
                 ImageKnowledgeScore = imageKnowledgeMatch == null ? 0d : imageKnowledgeMatch.Score,
-                VisualKnowledgeScore = decision.Matches == null || decision.Matches.Count < 1 ? 0d : decision.Matches.Max(x => x.Score),
+                VisualKnowledgeScore = decision.SelectedMatch == null ? 0d : decision.SelectedMatch.Score,
                 LocalOcrText = ocr.Text,
                 LocalOcrConfidence = ocr.Confidence,
                 LocalOcrLatencyMs = ocr.ElapsedMs,

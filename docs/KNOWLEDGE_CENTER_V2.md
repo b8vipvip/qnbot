@@ -76,11 +76,7 @@ Answer: ...
 - `KnowledgeV2RecordRow`
 - `KnowledgeV2MetaRow`
 
-旧问答知识在首次运行时自动迁移。迁移不会要求用户重新录入现有知识。
-
-V2 编辑的正式知识会同步镜像回旧知识列表，供过渡期兼容链路继续读取；生产本地直答以 V2 Repository 和 V2 Snapshot 为准。
-
-学习候选即使在 V2 内处于 Enabled，也会在旧知识镜像中强制 `Enabled=false`，避免 Smart Reply / AI 兼容回退链路提前使用尚未批准的候选答案。批准候选后才会转换为正式知识并重新启用兼容镜像。
+Knowledge Engine V2 是唯一知识事实源。客户端启动不会读取 `KnowledgeBaseJson`，不会执行 V1→V2 自动迁移，也不会向旧存储镜像写入。没有 V2 数据库时只初始化当前店铺的空 V2 SQLite；需要恢复数据时，只接受 Knowledge V2 完整包。旧版 FAQ 数据模型、旧版检索、旧版自动回复和旧版同步协议均不再编译或运行。
 
 ## 索引
 
@@ -105,7 +101,7 @@ V2 编辑的正式知识会同步镜像回旧知识列表，供过渡期兼容�
 
 与 Memory Engine v1 不同，查询不再对全部知识逐条执行策略文件读取与全表 Score。
 
-Snapshot 没有“10 分钟过期后自动全量重建”的时间过期规则。普通启用知识的新增/编辑通过 `KnowledgeEngineV2.Service.Incremental.cs` 对当前店铺 Snapshot 做原子增量更新：先复制当前完整 Snapshot、只删除/增加该知识对应的索引 posting，再一次性替换 Snapshot 引用，因此并发买家查询只会看到更新前或更新后的完整状态。删除、停用、完整包替换和重新迁移等结构性操作才使 Snapshot 失效并在后台/下次预热时重建。
+Snapshot 没有“10 分钟过期后自动全量重建”的时间过期规则。普通启用知识的新增/编辑通过 `KnowledgeEngineV2.Service.Incremental.cs` 对当前店铺 Snapshot 做原子增量更新：先复制当前完整 Snapshot、只删除/增加该知识对应的索引 posting，再一次性替换 Snapshot 引用，因此并发买家查询只会看到更新前或更新后的完整状态。删除、停用和完整包替换等结构性操作才使 Snapshot 失效并在后台/下次预热时重建。
 
 ## Working Memory
 
@@ -156,7 +152,7 @@ Type = learning_candidate
 Status = candidate
 ```
 
-候选知识默认不能直接发送，需要在 Knowledge Center V2 的“学习”页面批准后才进入 active 状态。V2 本地直答层和旧知识兼容镜像都会同时阻止未批准候选进入生产回复。
+未达到证据门槛的候选不会参与直答。完整、稳定的语料扫描中同时具备真实买家问题消息ID与真人客服回复消息ID，且通过置信度、风险、实体、数字和极性校验的新增/修订会直接写入 active 并刷新 V2 索引；不要求人工批准或灰度。Bot-only、来源不明、缺少原始消息ID、高风险和不完整语料只保留候选或跳过。
 
 如果学习内容是在修正已存在知识，V2 会生成独立候选修正记录，避免自动覆盖生产事实。
 
@@ -195,7 +191,7 @@ BuyerMessageBurstCoordinator
       -> Smart Reply / AI 生成链路
 ```
 
-V2 启动后会停止 Memory Engine v1 的运行时 Timer，并剥离已经挂载的 v1 wrapper，避免 V1/V2 重复套娃。V2 不再通过独立 Timer 反射包装 BuyerMessageBurstCoordinator；此前 V2 与 BuyerStreamingReplyPipeline 分别改写同一个 `_handler`，执行先后由启动时序决定，可能导致后安装的流式包装覆盖 V2 包装。现在由流式主入口显式调用 V2，消除包装竞争。
+V1 Memory Engine、V1 embedding retriever、V1 contextual reply、V1 KnowledgeBaseEntry 模型和相关 UI/编译入口已从客户端删除。现在由 BuyerStreamingReplyPipeline 显式调用 Knowledge Engine V2，避免多个检索包装器竞争同一个消息处理入口。
 
 本地答案发送仍必须经过：
 
@@ -289,7 +285,7 @@ V2 完整包包含：
 
 导入完整包前会自动在 V2 数据目录下创建 JSON 备份。
 
-也支持只导出结构化知识，以及从当前旧知识重新迁移。
+也支持只导出结构化知识，以及导入/恢复 Knowledge V2 完整包。
 
 ## 性能目标
 
@@ -305,38 +301,12 @@ UI 测试：不得在 WPF 主线程同步执行完整检索/性能循环
 
 测试台的单次检索和 30 次性能测试均在后台 Task 中执行。
 
-## 迁移与退场策略
+## V2-only 运行与数据边界
 
-1. 首次启动创建 `knowledge-center-v2.db`。
-2. 将旧问答、策略可靠度和人工证据迁移为 V2 Record。
-3. 后台建立 Snapshot。
-4. Memory Engine v1 运行时停用。
-5. Production 模式下 V2 高置信本地直答。
-6. 其余消息暂时继续兼容 Smart Reply / AI。
-7. 新人工学习进入 V2 candidate，不自动污染 active 知识，也不会被旧兼容知识链提前使用。
-8. 普通知识编辑使用原子增量 Snapshot 更新；结构性批量操作才重建。
-9. 生产数据稳定后，再逐步删除旧检索实现；旧格式只保留导入兼容。
-
-原则：**保数据，不保旧运行时架构。**
-
-## 关键文件
-
-```text
-src/Bot/Knowledge/KnowledgeEngineV2.Models.cs
-src/Bot/Knowledge/KnowledgeEngineV2.Repository.cs
-src/Bot/Knowledge/KnowledgeEngineV2.Semantics.cs
-src/Bot/Knowledge/KnowledgeEngineV2.Service.Index.cs
-src/Bot/Knowledge/KnowledgeEngineV2.Service.Incremental.cs
-src/Bot/Knowledge/KnowledgeEngineV2.Service.Public.cs
-src/Bot/Knowledge/KnowledgeCenterV2Ui.cs
-src/Bot/Knowledge/KnowledgeCenterV2RecordsPage.cs
-src/Bot/Knowledge/KnowledgeCenterV2OperationsPages.cs
-src/Bot/ChromeNs/KnowledgeEngineV2RuntimeBridge.cs
-src/Bot/ChromeNs/KnowledgeEngineV2LearningBridge.cs
-```
-
-回归测试：
-
-```text
-tests/test_knowledge_center_v2_static.py
-```
+1. `KnowledgeEngineV2Repository` 是唯一知识事实源，按稳定 `ShopKey` 隔离。
+2. 新安装只初始化 V2 SQLite，不读取或导入旧版问答 JSON。
+3. 已有 V2 数据库继续原位使用；数据库 schema 只允许 V2 内部升级，不触发旧格式回填。
+4. 备份恢复只接受 V2 完整包或本店 V2 云同步数据。
+5. V1 FAQ 模型、V1 检索、V1 策略镜像、V1 云同步协议和运行时兜底均已退役，不提供兼容开关。
+6. 历史聊天整理、智能导入、人工纠正、反馈和云同步都必须在精确 ShopKey 作用域内写入 V2。
+7. 生产验收关注 V2 检索、Working Memory、条件/风险门禁、索引增量更新、自动学习证据链、跨店隔离和崩溃恢复。

@@ -192,7 +192,8 @@ def test_repository_directly_publishes_ai_knowledge_with_aliases_and_reversible_
     assert "Status = \"active\"" in method
     assert "SaveRecordsInTransaction(new List<object> { ToRow(record), revision });" in method
     assert "PreviousJson = JsonConvert.SerializeObject(tombstone)" in method
-    assert "MirrorOneToLegacy(shop, record)" in method
+    assert "MirrorOneToLegacy" not in method
+    assert "BotFeatureStore.SaveKnowledgeBase" not in method
     assert "KnowledgeEngineV2Service.ApplyRecordUpdate(seller, record)" in method
     assert "session_ai_auto_add" in method
     assert "recoveredExisting = true;" in method
@@ -208,17 +209,22 @@ def test_ai_auto_published_source_is_not_misclassified_as_human_approved():
         bridge.index("public static bool IsExplicitHumanConfirmationSource"):
         bridge.index("public static bool IsAutoPublishedHumanEvidenceSource")
     ]
+    candidate = bridge[
+        bridge.index("public static bool IsCandidate"):
+        bridge.index("public static bool IsProductionApproved")
+    ]
 
     assert "human_evidence_auto_learned" not in explicit
     assert "ai_auto_learned_human_evidence" in bridge
     assert "public static bool IsAutoPublishedHumanEvidenceSource" in bridge
     assert "private static bool IsTrustedProductionSource" in bridge
-    assert "return IsTrustedProductionSource(entry.SourceType) || IsUnapprovedLegacyLearningEntry(entry);" in bridge
+    assert "return IsTrustedProductionSource(record.SourceType);" not in candidate
+    assert "string.Equals(record.Status, \"candidate\"" in candidate
+    assert "string.Equals(record.Type, \"learning_candidate\"" in candidate
     assert "ApplyAutoPublished(record);" in bridge
-    assert "if (IsTrustedProductionSource(record.SourceType)) return false;" in bridge
     assert "record.Authority = Math.Max(record.Authority, 0.90);" in bridge
     assert "record.Confidence = Math.Max(record.Confidence, 0.90);" in bridge
-
+    assert "IsUnapprovedLegacyLearningEntry" not in bridge
 
 def test_generated_content_and_aliases_survive_checkpoint_restart_revalidation():
     service = read("src/Bot/ChromeNs/ConversationSessionLearningService.cs")
@@ -245,17 +251,13 @@ def test_generated_content_and_aliases_survive_checkpoint_restart_revalidation()
 def test_new_knowledge_write_mode_is_direct_ai_publish_not_dry_run():
     service = read("src/Bot/ChromeNs/ConversationSessionLearningService.cs")
     initial = service[
-        service.index('["writeMode"] = EnableVerifiedCorpusNewKnowledgeWrites'):
-        service.index('["windowStart"]')
+        service.index("finalCoverage[\"writeMode\"]"):
+        service.index("finalCoverage[\"genericSuggestionWriteMode\"]")
     ]
-
     assert "ai_auto_publish_new_knowledge_and_verified_updates" in initial
-    assert '["newKnowledgeWriteMode"] = EnableVerifiedCorpusNewKnowledgeWrites ? "ai_auto_publish" : "dry_run"' in initial
-    assert "MaxVerifiedNewKnowledgePerSession = 8" in service
-    assert "newKnowledgeApplied" in service
-    assert "knowledgeCorpusNewCandidateApplied" in service
-
-
+    assert '["newKnowledgeWriteMode"] = EnableVerifiedCorpusNewKnowledgeWrites' in initial
+    assert "ai_auto_publish_verified_human_evidence" in initial
+    assert "dry_run" in initial
 def test_new_candidate_checkpoint_requires_matching_source_and_transcript_fingerprints():
     service = read("src/Bot/ChromeNs/ConversationSessionLearningService.cs")
     analysis = service[
@@ -277,7 +279,7 @@ def test_new_adds_chain_corpus_fingerprint_before_existing_corrections():
     ]
 
     assert "ref expectedCurrentFingerprint, out newKnowledgeSkipped, out newKnowledgeRetryNeeded" in finalize
-    assert "session, corpusAnalysis, expectedCurrentFingerprint, out corpusSkipped" in finalize
+    assert "session, corpusAnalysis, turns, cards, expectedCurrentFingerprint, out corpusSkipped" in finalize
     assert finalize.index("ApplyVerifiedCorpusNewKnowledge(") < finalize.index("ApplyVerifiedCorpusCorrections(")
     assert "expectedCurrentFingerprint = nextFingerprint;" in service
     assert "expectedCurrentFingerprint = string.Empty;" in service
@@ -436,7 +438,7 @@ def test_auto_published_human_evidence_answers_strongly_similar_questions_withou
         "private static bool IsSafeStandaloneLocalDirect(", 1
     )[0]
 
-    production = public.split("var productionMatches =", 1)[1].split(
+    production = public.split("var allProductionMatches =", 1)[1].split(
         "// Operator-reviewed", 1
     )[0]
     eligibility = public.split("private static bool IsEligibleProductionMatch(", 1)[1].split(

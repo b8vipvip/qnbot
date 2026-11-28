@@ -10,14 +10,17 @@ def read(path: str) -> str:
 
 def test_windows_client_exposes_per_shop_backup_and_restore():
     source = read("src/Bot/Knowledge/ClientDataCloudBackupService.cs")
-    assert 'Content = "本店云备份/换机"' in source
+    settings = read("src/Bot/Options/ShopBindingOptionsControl.cs")
+    assert 'MakeButton("本店云备份/换机", 150)' in settings
+    assert "new ClientDataBackupWindow(shop)" in settings
+    assert "ShopScopedUiBridge.Attach(window, shop)" in settings
     assert '"上传本店数据"' in source
     assert '"恢复本店云备份"' in source
     assert "GetStatusAsync(ShopContext shop)" in source
     assert "UploadAsync(ShopContext shop" in source
     assert "DownloadAndRestoreAsync(ShopContext shop" in source
     assert "RestartApplication" in source
-    assert "ShopScopedUiBridge.Attach(window, shop)" in source
+    assert "ShopSettingsScope.Enter(shop)" in settings
 
 
 def test_backup_is_encrypted_with_current_shop_token_and_shop_key_integrity_checked():

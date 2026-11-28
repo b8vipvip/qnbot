@@ -6,6 +6,7 @@ using System.Collections.Generic;
 using System.Diagnostics;
 using System.Linq;
 using System.Threading;
+using System.Text.RegularExpressions;
 
 namespace Bot.Knowledge
 {
@@ -106,11 +107,16 @@ namespace Bot.Knowledge
             foreach (var item in gramVotes.OrderByDescending(x => x.Value).Take(40)) result.Add(item.Key);
             if (result.Count > 96)
             {
-                var ordered = result
+                // Never prune exact aliases before applicability and conflict checks.
+                // A broad predicate/intent bucket can otherwise displace a reviewed FAQ.
+                var exactIds = exact ?? new HashSet<int>();
+                var ordered = result.Where(i => !exactIds.Contains(i))
                     .OrderByDescending(i => PreliminaryScore(snapshot.Records[i], query))
-                    .Take(96)
-                    .ToList();
-                return new HashSet<int>(ordered);
+                    .ThenBy(i => snapshot.Records[i].Id, StringComparer.Ordinal)
+                    .Take(Math.Max(0, 96 - exactIds.Count));
+                var selected = new HashSet<int>(exactIds);
+                selected.UnionWith(ordered);
+                return selected;
             }
             return result;
         }
@@ -197,12 +203,20 @@ namespace Bot.Knowledge
         private static bool IsMeaningfulConflictPair(KnowledgeV2Record left, KnowledgeV2Record right)
         {
             if (left == null || right == null) return false;
-            if (!string.Equals(KnowledgeEngineV2Semantics.FactKey(left),
+            var exactQuestion = (left.Aliases ?? new List<string>()).Concat(new[] { left.Title })
+                .Select(KnowledgeEngineV2Semantics.Compact).Where(x => x.Length > 0)
+                .Intersect((right.Aliases ?? new List<string>()).Concat(new[] { right.Title })
+                    .Select(KnowledgeEngineV2Semantics.Compact), StringComparer.Ordinal).Any();
+            if (!exactQuestion && !string.Equals(KnowledgeEngineV2Semantics.FactKey(left),
                 KnowledgeEngineV2Semantics.FactKey(right), StringComparison.Ordinal)) return false;
             if (AnswersEquivalent(left.Answer, right.Answer)) return false;
+            // Two applicable records claiming the exact same wording but different
+            // conclusions cannot be resolved safely by ranking alone.
+            if (exactQuestion) return true;
 
             var questionSimilarity = KnowledgeEngineV2Semantics.TextSimilarity(left.Title, right.Title);
             if (questionSimilarity < 0.72) return false;
+            if (questionSimilarity >= 0.86 && !SameAnswerNumbers(left.Answer, right.Answer)) return true;
 
             var leftDirection = AnswerDirection(left.Answer);
             var rightDirection = AnswerDirection(right.Answer);
@@ -217,9 +231,26 @@ namespace Bot.Knowledge
                 && (leftDirection < 0 || rightDirection < 0);
         }
 
+        internal static bool AnswerFactsCompatible(string left, string right)
+        {
+            return !HasAnswerPolarityConflict(left, right) && SameAnswerNumbers(left, right);
+        }
+
         private static bool AnswersEquivalent(string left, string right)
         {
-            return KnowledgeEngineV2Semantics.TextSimilarity(left, right) >= 0.68;
+            // Similar strings can have opposite meaning or different quantities:
+            // "supports" versus "does not support", or 1.2 versus 12.
+            return !HasAnswerPolarityConflict(left, right)
+                && SameAnswerNumbers(left, right)
+                && KnowledgeEngineV2Semantics.TextSimilarity(left, right) >= 0.68;
+        }
+
+        private static bool SameAnswerNumbers(string left, string right)
+        {
+            const string pattern = @"\d+(?:[.,]\d+)?";
+            var a = Regex.Matches(left ?? string.Empty, pattern).Cast<Match>().Select(x => x.Value);
+            var b = Regex.Matches(right ?? string.Empty, pattern).Cast<Match>().Select(x => x.Value);
+            return a.SequenceEqual(b, StringComparer.Ordinal);
         }
 
         private static double EntitySimilarity(IEnumerable<string> left, IEnumerable<string> right)
@@ -363,46 +394,57 @@ namespace Bot.Knowledge
             RuntimeSettings cached;
             if (SettingsCache.TryGetValue(shop.ShopKey, out cached)
                 && cached != null && cached.ExpiresAt >= DateTime.Now) return cached;
-            try
+            lock (SettingsLocks.GetOrAdd(shop.ShopKey, _ => new object()))
             {
-                var values = new ShopScopedSettingsStore(shop, Paths).ExportValues();
-                string enabledRaw;
-                string thresholdRaw;
-                string confidenceRaw;
-                double threshold;
-                double confidence;
-                var enabled = !values.TryGetValue(KnowledgeEngineV2Constants.SettingsEnabled, out enabledRaw)
-                    || !string.Equals((enabledRaw ?? string.Empty).Trim(), "0", StringComparison.Ordinal);
-                var mode = KnowledgeEngineV2Constants.ModeProduction;
-                threshold = values.TryGetValue(KnowledgeEngineV2Constants.SettingsDirectThreshold, out thresholdRaw)
-                    && double.TryParse(thresholdRaw, System.Globalization.NumberStyles.Float,
-                        System.Globalization.CultureInfo.InvariantCulture, out threshold)
-                    ? threshold : KnowledgeEngineV2Constants.DefaultDirectThreshold;
-                confidence = values.TryGetValue(KnowledgeEngineV2Constants.SettingsMinConfidence, out confidenceRaw)
-                    && double.TryParse(confidenceRaw, System.Globalization.NumberStyles.Float,
-                        System.Globalization.CultureInfo.InvariantCulture, out confidence)
-                    ? confidence : KnowledgeEngineV2Constants.DefaultMinConfidence;
-                cached = new RuntimeSettings
+                if (SettingsCache.TryGetValue(shop.ShopKey, out cached)
+                    && cached != null && cached.ExpiresAt >= DateTime.Now) return cached;
+                try
                 {
-                    Enabled = enabled,
-                    Mode = mode,
-                    DirectThreshold = Math.Max(0.70, Math.Min(0.96, threshold)),
-                    MinConfidence = Math.Max(0.50, Math.Min(0.95, confidence)),
-                    ExpiresAt = DateTime.Now.AddMinutes(5)
-                };
-                SettingsCache[shop.ShopKey] = cached;
-                return cached;
-            }
-            catch
-            {
-                return new RuntimeSettings
+                    var values = new ShopScopedSettingsStore(shop, Paths).ExportValues();
+                    string enabledRaw;
+                    string thresholdRaw;
+                    string confidenceRaw;
+                    double threshold;
+                    double confidence;
+                    // V2 is mandatory. Legacy settings cannot turn it off.
+                    var enabled = true;
+                    var mode = KnowledgeEngineV2Constants.ModeProduction;
+                    threshold = values.TryGetValue(KnowledgeEngineV2Constants.SettingsDirectThreshold, out thresholdRaw)
+                        && double.TryParse(thresholdRaw, System.Globalization.NumberStyles.Float,
+                            System.Globalization.CultureInfo.InvariantCulture, out threshold)
+                        ? threshold : KnowledgeEngineV2Constants.DefaultDirectThreshold;
+                    confidence = values.TryGetValue(KnowledgeEngineV2Constants.SettingsMinConfidence, out confidenceRaw)
+                        && double.TryParse(confidenceRaw, System.Globalization.NumberStyles.Float,
+                            System.Globalization.CultureInfo.InvariantCulture, out confidence)
+                        ? confidence : KnowledgeEngineV2Constants.DefaultMinConfidence;
+                    // Older installations or restored settings may already contain
+                    // non-finite values; Math.Min/Max alone do not sanitize NaN.
+                    if (double.IsNaN(threshold) || double.IsInfinity(threshold))
+                        threshold = KnowledgeEngineV2Constants.DefaultDirectThreshold;
+                    if (double.IsNaN(confidence) || double.IsInfinity(confidence))
+                        confidence = KnowledgeEngineV2Constants.DefaultMinConfidence;
+                    cached = new RuntimeSettings
+                    {
+                        Enabled = enabled,
+                        Mode = mode,
+                        DirectThreshold = Math.Max(0.70, Math.Min(0.96, threshold)),
+                        MinConfidence = Math.Max(0.50, Math.Min(0.95, confidence)),
+                        ExpiresAt = DateTime.Now.AddMinutes(5)
+                    };
+                    SettingsCache[shop.ShopKey] = cached;
+                    return cached;
+                }
+                catch
                 {
-                    Enabled = true,
-                    Mode = KnowledgeEngineV2Constants.ModeProduction,
-                    DirectThreshold = KnowledgeEngineV2Constants.DefaultDirectThreshold,
-                    MinConfidence = KnowledgeEngineV2Constants.DefaultMinConfidence,
-                    ExpiresAt = DateTime.Now.AddSeconds(30)
-                };
+                    return new RuntimeSettings
+                    {
+                        Enabled = true,
+                        Mode = KnowledgeEngineV2Constants.ModeProduction,
+                        DirectThreshold = KnowledgeEngineV2Constants.DefaultDirectThreshold,
+                        MinConfidence = KnowledgeEngineV2Constants.DefaultMinConfidence,
+                        ExpiresAt = DateTime.Now.AddSeconds(30)
+                    };
+                }
             }
         }
 
@@ -411,8 +453,12 @@ namespace Bot.Knowledge
             try
             {
                 var current = ShopSettingsScope.Current;
-                if (current != null) return current;
-                return ShopContextLocator.ResolveBySellerNick((seller ?? string.Empty).Trim());
+                var shop = current ?? ShopContextLocator.ResolveBySellerNick((seller ?? string.Empty).Trim());
+                if (shop == null || !shop.HasStableSellerId || string.IsNullOrWhiteSpace(shop.ShopKey)
+                    || (!DirectOrderIdentityResolver.IdentityEquals(shop.SellerNick, seller)
+                        && !DirectOrderIdentityResolver.IdentityEquals(shop.DisplayName, seller)))
+                    return null;
+                return shop;
             }
             catch { return null; }
         }

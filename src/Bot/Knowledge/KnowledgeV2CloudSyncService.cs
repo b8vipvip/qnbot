@@ -29,6 +29,33 @@ namespace Bot.Knowledge
 {
     internal static class KnowledgeV2CloudSyncService
     {
+        private const string SyncPreferenceScope = "shop-cloud";
+        private const string SyncPreferenceEnabledKey = "KnowledgeCloudSyncEnabled";
+
+        internal static bool IsEnabledForShop(ShopContext shop)
+        {
+            if (shop == null) return false;
+            using (ShopSettingsScope.Enter(shop))
+            {
+                return string.Equals(
+                    BotLib.Db.Sqlite.PersistentParams.GetParam2Key(
+                        SyncPreferenceEnabledKey, SyncPreferenceScope, "false"),
+                    "true",
+                    StringComparison.OrdinalIgnoreCase);
+            }
+        }
+
+        internal static void SetEnabledForShop(ShopContext shop, bool enabled, bool queueSync)
+        {
+            if (shop == null) return;
+            using (ShopSettingsScope.Enter(shop))
+            {
+                BotLib.Db.Sqlite.PersistentParams.TrySaveParam2Key(
+                    SyncPreferenceEnabledKey, SyncPreferenceScope, enabled ? "true" : "false");
+            }
+            if (enabled && queueSync) QueueSync(shop);
+        }
+
         private const string SettingsScope = "knowledge-v2-cloud";
         private const string RevisionKey = "KnowledgeV2CloudRevision";
         private const string FingerprintKey = "KnowledgeV2CloudFingerprint";
@@ -92,7 +119,7 @@ namespace Bot.Knowledge
         }
         private static void Queue(ShopContext shop)
         {
-            if(shop==null || !KnowledgeCloudSyncService.IsEnabledForShop(shop)
+            if(shop==null || !IsEnabledForShop(shop)
                 || !ShopTokenBindingService.ShouldAttemptSync(shop)) return;
             var state=States.GetOrAdd(shop.ShopKey,_=>LoadState(shop));
             if(Interlocked.Exchange(ref state.Syncing,1)!=0) return;
@@ -121,6 +148,59 @@ namespace Bot.Knowledge
                 }
             });
         }
+        internal static void QueueSync(ShopContext shop)
+        {
+            Queue(shop);
+        }
+
+        internal static async Task<bool> SyncNowAsync(ShopContext shop)
+        {
+            if (shop == null) throw new ArgumentNullException(nameof(shop));
+            SetEnabledForShop(shop, true, false);
+            var state = States.GetOrAdd(shop.ShopKey, _ => LoadState(shop));
+            var acquired = false;
+            for (var i = 0; i < 80; i++)
+            {
+                if (Interlocked.CompareExchange(ref state.Syncing, 1, 0) == 0)
+                {
+                    acquired = true;
+                    break;
+                }
+                await Task.Delay(125).ConfigureAwait(false);
+            }
+            if (!acquired)
+                throw new InvalidOperationException("本店 Knowledge V2 正在同步，请稍后重试。");
+
+            lock (state.SyncRoot)
+            {
+                state.LastAttemptUtc = DateTime.UtcNow;
+                state.LastStatus = "running";
+                state.LastConverged = false;
+            }
+            WriteDiagnosticsSnapshot();
+            try
+            {
+                await SyncOnce(shop, state).ConfigureAwait(false);
+                lock (state.SyncRoot)
+                {
+                    if (state.LastStatus == "credentials_missing")
+                        throw new InvalidOperationException("本店云同步缺少有效服务端地址或令牌。");
+                    return state.LastStatus == "synced" && state.LastConverged;
+                }
+            }
+            catch (Exception ex)
+            {
+                lock (state.SyncRoot) state.LastStatus = "failed";
+                Log.ErrorWithMaxCount("Knowledge V2 手动云同步失败: " + Safe(ex.Message, 260), 10);
+                throw;
+            }
+            finally
+            {
+                Interlocked.Exchange(ref state.Syncing, 0);
+                WriteDiagnosticsSnapshot();
+            }
+        }
+
         private static async Task SyncOnce(ShopContext shop,State state)
         {
             using(ShopSettingsScope.Enter(shop))
@@ -136,6 +216,21 @@ namespace Bot.Knowledge
 
                 var local=KnowledgeEngineV2Repository.LoadAll(shop.DisplayName);
                 var localFingerprint=Fingerprint(local);
+                // An acknowledged local snapshot can already contain independently
+                // generated duplicate evidence IDs. Repair those deletes before uploading.
+                var normalizedLocal = NormalizeEvidenceDeletes(local, DeletedEvidenceKeys(local));
+                if (!string.Equals(Fingerprint(normalizedLocal), localFingerprint, StringComparison.Ordinal))
+                {
+                    Backup(shop, local, state.Revision);
+                    if (!KnowledgeEngineV2Repository.TryReplaceAllIfUnchanged(
+                        shop.DisplayName, localFingerprint, normalizedLocal))
+                    {
+                        lock(state.SyncRoot) state.LastStatus = "local_changed_during_delete_reconciliation";
+                        return;
+                    }
+                    local = KnowledgeEngineV2Repository.LoadAll(shop.DisplayName);
+                    localFingerprint = Fingerprint(local);
+                }
                 lock(state.SyncRoot)
                 {
                     state.LastLocalRecordCount=local.Count;
@@ -280,8 +375,8 @@ namespace Bot.Knowledge
                                 ? !string.Equals(latestFingerprint,state.Fingerprint,StringComparison.Ordinal)
                                 : latestLocal.Count>0;
                             var merged=localDirty
-                                ? MergeCloudAndLocal(records,latestLocal,preserveLocalOnly:!hasBaseline)
-                                : records;
+                                ? MergeCloudAndLocal(records,latestLocal,preserveLocalOnly:true)
+                                : MergeCloudAndLocal(records, Enumerable.Empty<KnowledgeV2Record>(), preserveLocalOnly:true);
                             var mergedFingerprint=Fingerprint(merged);
 
                             if(!string.Equals(mergedFingerprint,latestFingerprint,StringComparison.Ordinal))
@@ -398,11 +493,20 @@ namespace Bot.Knowledge
             }
         }
 
-        private static List<KnowledgeV2Record> MergeCloudAndLocal(
+        internal static List<KnowledgeV2Record> MergeCloudAndLocal(
             IEnumerable<KnowledgeV2Record> cloudRecords,
             IEnumerable<KnowledgeV2Record> localRecords,
             bool preserveLocalOnly)
         {
+            // Determine the delete set across both snapshots before iterating either.
+            // Keep a tombstone for every affected record ID: the server rejects snapshots
+            // that silently omit an existing cloud ID, even when another ID has the same evidence.
+            var cloudInput = (cloudRecords ?? Enumerable.Empty<KnowledgeV2Record>()).Where(x => x != null).ToList();
+            var localInput = (localRecords ?? Enumerable.Empty<KnowledgeV2Record>()).Where(x => x != null).ToList();
+            var deletedEvidence = DeletedEvidenceKeys(cloudInput.Concat(localInput));
+            cloudRecords = NormalizeEvidenceDeletes(cloudInput, deletedEvidence);
+            localRecords = NormalizeEvidenceDeletes(localInput, deletedEvidence);
+
             var merged = new List<KnowledgeV2Record>();
             var cloudById = new Dictionary<string, KnowledgeV2Record>(StringComparer.Ordinal);
             var recordsByHumanEvidence = new Dictionary<string, KnowledgeV2Record>(StringComparer.Ordinal);
@@ -417,14 +521,23 @@ namespace Bot.Knowledge
             {
                 if (raw == null) continue;
                 var record = CloneRecord(raw);
-                var evidenceId = AutoPublishedEvidenceKey(record);
+                // Never collapse tombstones with different IDs.
+                var evidenceId = IsDeleteTombstone(record) ? string.Empty : AutoPublishedEvidenceKey(record);
                 KnowledgeV2Record existingEvidence;
                 if (evidenceId.Length > 0 && recordsByHumanEvidence.TryGetValue(evidenceId, out existingEvidence))
                 {
                     if (SameRecordContent(existingEvidence, record))
                         MergeRecordMetadata(existingEvidence, record);
-                    else
-                        AddCandidate(merged, mergedIds, record, record.Id);
+                    // The server requires every previously committed ID to remain present.
+                    // Do not tombstone this duplicate: an evidence-key tombstone would delete
+                    // the canonical active record too. Retain a disabled candidate at its ID.
+                    var duplicate = CloneRecord(record);
+                    duplicate.SourceType = "cloud_sync_conflict_candidate";
+                    duplicate.SourceId = record.Id;
+                    duplicate.Enabled = false;
+                    duplicate.Status = "candidate";
+                    AddUnique(merged, mergedIds, duplicate);
+                    cloudById[duplicate.Id] = duplicate;
                     continue;
                 }
 
@@ -437,7 +550,7 @@ namespace Bot.Knowledge
             foreach (var local in localRecords ?? Enumerable.Empty<KnowledgeV2Record>())
             {
                 if (local == null) continue;
-                var evidenceId = AutoPublishedEvidenceKey(local);
+                var evidenceId = IsDeleteTombstone(local) ? string.Empty : AutoPublishedEvidenceKey(local);
                 var id = (local.Id ?? string.Empty).Trim();
                 KnowledgeV2Record cloud;
                 if (id.Length > 0 && cloudById.TryGetValue(id, out cloud))
@@ -519,7 +632,7 @@ namespace Bot.Knowledge
                     continue;
                 }
 
-                if (preserveLocalOnly)
+                if (preserveLocalOnly || IsDeleteTombstone(local))
                 {
                     var copy = CloneRecord(local);
                     AddUnique(merged, mergedIds, copy);
@@ -531,6 +644,30 @@ namespace Bot.Knowledge
                 }
             }
             return merged;
+        }
+
+        private static HashSet<string> DeletedEvidenceKeys(IEnumerable<KnowledgeV2Record> records)
+        {
+            return new HashSet<string>((records ?? Enumerable.Empty<KnowledgeV2Record>())
+                .Where(IsDeleteTombstone).Select(AutoPublishedEvidenceKey)
+                .Where(x => x.Length > 0), StringComparer.Ordinal);
+        }
+
+        private static List<KnowledgeV2Record> NormalizeEvidenceDeletes(
+            IEnumerable<KnowledgeV2Record> records, HashSet<string> deletedEvidence)
+        {
+            return (records ?? Enumerable.Empty<KnowledgeV2Record>())
+                .Where(x => x != null).Select(record =>
+                {
+                    if (IsDeleteTombstone(record)
+                        || !deletedEvidence.Contains(AutoPublishedEvidenceKey(record)))
+                        return record;
+                    var tombstone = CloneRecord(record);
+                    tombstone.Enabled = false;
+                    tombstone.Status = "deleted";
+                    // Do not invent a timestamp or change the original ID/evidence key.
+                    return tombstone;
+                }).ToList();
         }
 
         private static bool IsDeleteTombstone(KnowledgeV2Record record)
@@ -559,7 +696,12 @@ namespace Bot.Knowledge
                 return;
             }
 
-            var sourceFingerprint=Fingerprint(new[]{source});
+            // Retry metadata and usage counters are not a different business answer.
+            // Stabilize the candidate identity across repeated syncs of the same content.
+            var identity = CloneRecord(source);
+            identity.UseCount = identity.AcceptedCount = identity.CorrectionCount = identity.WithdrawCount = 0;
+            identity.CreatedAt = identity.UpdatedAt = identity.LastVerifiedAt = DateTime.MinValue;
+            var sourceFingerprint=Fingerprint(new[]{identity});
             candidate.Id="cloud-conflict-"+sourceFingerprint.Substring(0,24);
             candidate.Title="云同步冲突待审核："+Safe(source.Title,180);
             candidate.SourceType="cloud_sync_conflict_candidate";
@@ -568,6 +710,14 @@ namespace Bot.Knowledge
             candidate.Status="candidate";
             candidate.Authority=Math.Min(candidate.Authority,0.85);
             candidate.Confidence=Math.Min(candidate.Confidence,0.85);
+            var existing = merged.FirstOrDefault(x => string.Equals(x.Id, candidate.Id, StringComparison.Ordinal));
+            if (existing != null)
+            {
+                // A deleted conflict candidate must never reappear on another retry.
+                if (!IsDeleteTombstone(existing) && SameRecordContent(existing, candidate))
+                    MergeRecordMetadata(existing, candidate);
+                return;
+            }
             AddUnique(merged,ids,candidate);
         }
 

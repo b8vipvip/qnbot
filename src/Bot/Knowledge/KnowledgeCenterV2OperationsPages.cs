@@ -1,4 +1,7 @@
+using Bot.ShopScope;
+using Bot.ChromeNs;
 using Microsoft.Win32;
+using Newtonsoft.Json.Linq;
 using Newtonsoft.Json;
 using System;
 using System.Collections.Generic;
@@ -357,6 +360,8 @@ namespace Bot.Knowledge
         public string ExportedAt { get; set; }
         public List<KnowledgeV2Record> Records { get; set; }
         public KnowledgeV2Settings Settings { get; set; }
+        public string SourceShopKey { get; set; }
+        public List<KnowledgeV2FeedbackEventRow> FeedbackEvents { get; set; }
 
         public KnowledgeV2PortablePackage()
         {
@@ -369,12 +374,14 @@ namespace Bot.Knowledge
     {
         private readonly Window _owner;
         private readonly string _seller;
+        private readonly string _shopKey;
         private TextBlock _status;
 
-        public KnowledgeV2ImportExportPage(Window owner, string seller)
+        public KnowledgeV2ImportExportPage(Window owner, string seller, string shopKey)
         {
             _owner = owner;
             _seller = seller ?? string.Empty;
+            _shopKey = (shopKey ?? string.Empty).Trim();
             Build();
             Loaded += delegate { RefreshView(); };
         }
@@ -384,10 +391,35 @@ namespace Bot.Knowledge
             if (string.IsNullOrWhiteSpace(_seller)) return;
             try
             {
-                var stats = KnowledgeEngineV2Service.GetStats(_seller);
-                _status.Text = "当前 V2 知识 " + stats.Total + " 条；数据库：" + stats.DatabasePath;
+                using (ShopSettingsScope.Enter(RequireShop()))
+                {
+                    var stats = KnowledgeEngineV2Service.GetStats(_seller);
+                    _status.Text = "当前 V2 知识 " + stats.Total + " 条；数据库：" + stats.DatabasePath;
+                }
             }
             catch (Exception ex) { _status.Text = "读取状态失败：" + ex.Message; }
+        }
+
+        private ShopContext RequireShop()
+        {
+            if (string.IsNullOrWhiteSpace(_shopKey))
+                throw new InvalidOperationException("知识包操作缺少精确 ShopKey。");
+            var shop = ShopContextLocator.ResolveRuntimeByShopKey(_shopKey);
+            if (shop == null || !shop.HasStableSellerId
+                || !string.Equals(shop.ShopKey, _shopKey, StringComparison.Ordinal)
+                || (!DirectOrderIdentityResolver.IdentityEquals(shop.SellerNick, _seller)
+                    && !DirectOrderIdentityResolver.IdentityEquals(shop.DisplayName, _seller)))
+                throw new InvalidOperationException("知识包操作的店铺身份不匹配。");
+            return shop;
+        }
+
+        private void InShop(Action action)
+        {
+            try
+            {
+                using (ShopSettingsScope.Enter(RequireShop())) action();
+            }
+            catch (Exception ex) { MessageBox.Show(_owner, "知识库操作失败：" + ex.Message); }
         }
 
         private void Build()
@@ -396,17 +428,19 @@ namespace Bot.Knowledge
             root.Children.Add(new TextBlock { Text = "导入导出", FontSize = 20, FontWeight = FontWeights.SemiBold });
             root.Children.Add(new TextBlock
             {
-                Text = "完整包包含 V2 全部结构化知识及 Knowledge Engine V2 设置。导入前会自动备份现有 V2 数据。",
+                Text = "完整包包含 V2 结构化知识、检索设置及本店反馈事件（可能包含买家消息，请妥善保管）。反馈仅恢复到原店铺，按事件ID合并去重。跨店迁移请使用仅导出结构化知识。",
                 TextWrapping = TextWrapping.Wrap,
                 Foreground = Brushes.DimGray,
                 Margin = new Thickness(0, 5, 0, 14)
             });
             var actions = new WrapPanel();
-            var export = Btn("导出V2完整包", 124); export.Click += delegate { ExportPackage(); };
-            var import = Btn("导入V2完整包", 124); import.Click += delegate { ImportPackage(); };
-            var exportRecords = Btn("仅导出结构化知识", 142); exportRecords.Click += delegate { ExportRecords(); };
-            var rebuild = Btn("从旧知识重新迁移", 140); rebuild.Click += delegate { RebuildLegacy(); };
-            actions.Children.Add(export); actions.Children.Add(import); actions.Children.Add(exportRecords); actions.Children.Add(rebuild);
+            var export = Btn("导出V2完整包", 124); export.Click += delegate { InShop(ExportPackage); };
+            var import = Btn("导入V2完整包", 124); import.Click += delegate { InShop(ImportPackage); };
+            var merge = Btn("合并V2知识包", 124); merge.Click += delegate { InShop(() => ImportPackage("merge")); };
+            var append = Btn("追加V2知识包", 124); append.Click += delegate { InShop(() => ImportPackage("append")); };
+            var exportRecords = Btn("仅导出结构化知识", 142); exportRecords.Click += delegate { InShop(ExportRecords); };
+            var rebuild = Btn("重建V2检索索引", 140); rebuild.Click += delegate { InShop(RebuildIndex); };
+            actions.Children.Add(export); actions.Children.Add(import); actions.Children.Add(merge); actions.Children.Add(append); actions.Children.Add(exportRecords); actions.Children.Add(rebuild);
             root.Children.Add(actions);
             _status = new TextBlock { Margin = new Thickness(0, 16, 0, 0), TextWrapping = TextWrapping.Wrap };
             root.Children.Add(_status);
@@ -444,15 +478,26 @@ namespace Bot.Knowledge
                 };
                 if (dialog.ShowDialog(_owner) != true) return;
                 File.WriteAllText(dialog.FileName,
-                    JsonConvert.SerializeObject(KnowledgeEngineV2Repository.LoadAll(_seller), Formatting.Indented),
+                    JsonConvert.SerializeObject(new KnowledgeV2PortablePackage
+                    {
+                        SchemaVersion = KnowledgeEngineV2Constants.SchemaVersion,
+                        ExportedAt = DateTime.Now.ToString("yyyy-MM-dd HH:mm:ss"),
+                        Records = KnowledgeEngineV2Repository.LoadAll(_seller),
+                        Settings = null,
+                        FeedbackEvents = null
+                    }, Formatting.Indented),
                     new System.Text.UTF8Encoding(false));
                 _status.Text = "结构化知识已导出：" + dialog.FileName;
             }
             catch (Exception ex) { MessageBox.Show(_owner, "导出失败：" + ex.Message); }
         }
 
-        private void ImportPackage()
+        private void ImportPackage() { ImportPackage("replace"); }
+
+        private void ImportPackage(string mode)
         {
+            var replace = mode == "replace";
+            var append = mode == "append";
             try
             {
                 var dialog = new OpenFileDialog
@@ -461,59 +506,169 @@ namespace Bot.Knowledge
                     Filter = "JSON文件 (*.json)|*.json|所有文件 (*.*)|*.*"
                 };
                 if (dialog.ShowDialog(_owner) != true) return;
-                var package = JsonConvert.DeserializeObject<KnowledgeV2PortablePackage>(
+                var package = ParseValidatedPackage(
                     File.ReadAllText(dialog.FileName, System.Text.Encoding.UTF8));
-                if (package == null || package.Records == null)
-                    throw new InvalidDataException("文件不是有效的 Knowledge Center V2 完整包。");
-                if (package.SchemaVersion > KnowledgeEngineV2Constants.SchemaVersion)
-                    throw new InvalidDataException("该知识包版本高于当前客户端，请先升级客户端。");
+                if (package.FeedbackEvents != null && package.FeedbackEvents.Count > 0
+                    && !string.Equals(package.SourceShopKey, _shopKey, StringComparison.Ordinal))
+                    throw new InvalidDataException("该完整包包含其他店铺反馈事件，禁止跨店恢复。");
+                if (package.FeedbackEvents != null)
+                {
+                    var shop = RequireShop();
+                    if (package.FeedbackEvents.Any(x => !DirectOrderIdentityResolver.IdentityEquals(x.Seller, shop.SellerNick)
+                        && !DirectOrderIdentityResolver.IdentityEquals(x.Seller, shop.DisplayName)))
+                        throw new InvalidDataException("知识包反馈卖家身份不匹配。");
+                }
                 if (MessageBox.Show(_owner,
-                    "将用导入包替换当前 V2 结构化知识。导入前会自动备份现有数据。是否继续？",
+                    "将" + (replace ? "替换" : append ? "仅追加新ID到" : "合并到") + "店铺 " + _seller
+                    + "（ShopKey: " + _shopKey + "）的 V2 知识，导入包含 " + package.Records.Count + " 条记录。"
+                    + (replace && package.Records.Count == 0 ? "注意：该包为空，将清空当前知识。" : string.Empty)
+                    + (replace ? "未包含的旧记录将写入删除标记。" : "保留现有知识及设置；合并时不同内容保留为禁用候选，追加不覆盖已有ID。")
+                    + "已删除的ID不会自动复活。导入前自动备份。是否继续？",
                     "导入完整包", MessageBoxButton.YesNo, MessageBoxImage.Warning) != MessageBoxResult.Yes) return;
 
-                var backup = CreateAutomaticBackup();
-                KnowledgeEngineV2Repository.ReplaceAll(_seller, package.Records);
-                if (package.Settings != null)
+                var before = BuildPackage();
+                var expectedFingerprint = KnowledgeEngineV2Repository.ComputeCloudSyncFingerprint(before.Records);
+                var replacement = replace ? BuildImportReplacement(before.Records, package.Records)
+                    : KnowledgeV2CloudSyncService.MergeCloudAndLocal(before.Records,
+                        append ? package.Records.Where(x => !before.Records.Any(old => old.Id == x.Id)) : package.Records,
+                        preserveLocalOnly: true);
+                var backup = CreateAutomaticBackup(before);
+                if (!KnowledgeEngineV2Repository.TryReplaceAllIfUnchanged(_seller, expectedFingerprint, replacement))
+                    throw new InvalidOperationException("备份期间知识库已被自动学习或其他设备修改；未覆盖任何知识，请重新导入。");
+                if (replace && package.Settings != null)
                     KnowledgeEngineV2Service.SetSettings(_seller, package.Settings.Enabled, package.Settings.Mode,
                         package.Settings.DirectThreshold, package.Settings.MinConfidence);
+                // In additive modes evidence may describe a conflicting answer or an
+                // incoming ID that was deduplicated. Only restore feedback when the full
+                // package is restored, preserving its original record IDs.
+                var restoredFeedback = !replace || package.FeedbackEvents == null || package.FeedbackEvents.Count == 0 ? 0
+                    : KnowledgeEngineV2FeedbackService.MergeBackupEvents(_seller, package.SourceShopKey, package.FeedbackEvents);
                 KnowledgeEngineV2Service.Warm(_seller);
-                _status.Text = "导入完成，共 " + package.Records.Count + " 条。导入前备份：" + backup;
+                _status.Text = "导入完成，当前共 " + replacement.Count + " 条（含删除标记及候选）；新增反馈 " + restoredFeedback
+                    + " 条。" + (!replace ? "合并/追加未修改检索设置或恢复反馈事件。" : "") + " 导入前备份：" + backup;
             }
             catch (Exception ex) { MessageBox.Show(_owner, "导入失败：" + ex.Message); }
         }
 
-        private void RebuildLegacy()
+        internal static List<KnowledgeV2Record> BuildImportReplacement(
+            IEnumerable<KnowledgeV2Record> current, IEnumerable<KnowledgeV2Record> incoming)
         {
-            if (MessageBox.Show(_owner,
-                "将清空 V2 数据并从当前旧知识库重新迁移。建议先导出 V2 完整包。是否继续？",
-                "重新迁移", MessageBoxButton.YesNo, MessageBoxImage.Warning) != MessageBoxResult.Yes) return;
+            var rows = (incoming ?? Enumerable.Empty<KnowledgeV2Record>())
+                .ToDictionary(x => x.Id, StringComparer.Ordinal);
+            foreach (var old in current ?? Enumerable.Empty<KnowledgeV2Record>())
+            {
+                if (old == null || string.IsNullOrWhiteSpace(old.Id)) continue;
+                if (string.Equals(old.Status, "deleted", StringComparison.OrdinalIgnoreCase))
+                {
+                    // Explicit deletion remains authoritative even when an older package is imported.
+                    rows[old.Id] = old;
+                    continue;
+                }
+                if (rows.ContainsKey(old.Id)) continue;
+                var tombstone = JsonConvert.DeserializeObject<KnowledgeV2Record>(JsonConvert.SerializeObject(old));
+                tombstone.Enabled = false;
+                tombstone.Status = "deleted";
+                tombstone.UpdatedAt = DateTime.Now;
+                rows.Add(tombstone.Id, tombstone);
+            }
+            // A previously deleted human-evidence source must not return under another random ID.
+            var deletedEvidence = new HashSet<string>(rows.Values
+                .Where(x => string.Equals(x.Status, "deleted", StringComparison.OrdinalIgnoreCase)
+                    && KnowledgeV2AuthorityPolicy.IsAutoPublishedHumanEvidenceSource(x.SourceType))
+                .Select(x => (x.SourceId ?? string.Empty).Trim()).Where(x => x.Length > 0), StringComparer.Ordinal);
+            foreach (var row in rows.Values)
+            {
+                if (!KnowledgeV2AuthorityPolicy.IsAutoPublishedHumanEvidenceSource(row.SourceType)
+                    || !deletedEvidence.Contains((row.SourceId ?? string.Empty).Trim())) continue;
+                row.Enabled = false;
+                row.Status = "deleted";
+            }
+            return rows.Values.ToList();
+        }
+
+        internal static KnowledgeV2PortablePackage ParseValidatedPackage(string json)
+        {
+            // Constructor defaults must not turn arbitrary JSON into an empty replacement.
+            var root = JObject.Parse(json);
+            var version = root.GetValue("SchemaVersion", StringComparison.OrdinalIgnoreCase);
+            var rows = root.GetValue("Records", StringComparison.OrdinalIgnoreCase) as JArray;
+            if (version == null || version.Type != JTokenType.Integer
+                || version.Value<long>() != KnowledgeEngineV2Constants.SchemaVersion || rows == null)
+                throw new InvalidDataException("文件缺少受支持的 V2 版本或 Records 数组。");
+
+            var ids = new HashSet<string>(StringComparer.Ordinal);
+            foreach (var token in rows)
+            {
+                var row = token as JObject;
+                var id = row == null ? null : row.GetValue("Id", StringComparison.OrdinalIgnoreCase);
+                var title = row == null ? null : row.GetValue("Title", StringComparison.OrdinalIgnoreCase);
+                var answer = row == null ? null : row.GetValue("Answer", StringComparison.OrdinalIgnoreCase);
+                if (id == null || id.Type != JTokenType.String || string.IsNullOrWhiteSpace((string)id)
+                    || !ids.Add(((string)id).Trim())
+                    || title == null || title.Type != JTokenType.String
+                    || answer == null || answer.Type != JTokenType.String)
+                    throw new InvalidDataException("知识包包含无效记录或重复 ID，未替换现有知识。");
+            }
+
+            var package = root.ToObject<KnowledgeV2PortablePackage>();
+            foreach (var record in package.Records)
+                record.Id = record.Id.Trim();
+            var feedback = root.GetValue("FeedbackEvents", StringComparison.OrdinalIgnoreCase);
+            if (feedback != null && feedback.Type != JTokenType.Null && !(feedback is JArray))
+                throw new InvalidDataException("反馈事件必须为数组。");
+            KnowledgeEngineV2FeedbackService.ValidateBackupEvents(package.FeedbackEvents, package.Records);
+            var settings = root.GetValue("Settings", StringComparison.OrdinalIgnoreCase);
+            if (settings == null || settings.Type == JTokenType.Null)
+                package.Settings = null;
+            else
+            {
+                var obj = settings as JObject;
+                if (obj == null || obj.GetValue("DirectThreshold", StringComparison.OrdinalIgnoreCase) == null
+                    || obj.GetValue("MinConfidence", StringComparison.OrdinalIgnoreCase) == null
+                    || package.Settings == null
+                    || double.IsNaN(package.Settings.DirectThreshold) || double.IsInfinity(package.Settings.DirectThreshold)
+                    || double.IsNaN(package.Settings.MinConfidence) || double.IsInfinity(package.Settings.MinConfidence))
+                    throw new InvalidDataException("知识包包含无效的 V2 检索阈值。");
+            }
+            return package;
+        }
+
+        private void RebuildIndex()
+        {
             try
             {
                 var backup = CreateAutomaticBackup();
-                KnowledgeEngineV2Service.RebuildFromLegacy(_seller);
-                _status.Text = "已从旧知识重新迁移。操作前备份：" + backup;
+                KnowledgeEngineV2Service.Invalidate(_seller);
+                KnowledgeEngineV2Service.Warm(_seller);
+                var stats = KnowledgeEngineV2Service.GetStats(_seller);
+                _status.Text = "已重建 Knowledge V2 检索索引；当前知识 " + stats.Total
+                    + " 条。数据未清空。操作前备份：" + backup;
             }
-            catch (Exception ex) { MessageBox.Show(_owner, "重新迁移失败：" + ex.Message); }
+            catch (Exception ex) { MessageBox.Show(_owner, "重建V2索引失败：" + ex.Message); }
         }
 
         private KnowledgeV2PortablePackage BuildPackage()
         {
+            var records = KnowledgeEngineV2Repository.LoadAll(_seller);
+            var ids = new HashSet<string>(records.Select(x => x.Id), StringComparer.Ordinal);
             return new KnowledgeV2PortablePackage
             {
                 SchemaVersion = KnowledgeEngineV2Constants.SchemaVersion,
                 ExportedAt = DateTime.Now.ToString("yyyy-MM-dd HH:mm:ss"),
-                Records = KnowledgeEngineV2Repository.LoadAll(_seller),
-                Settings = KnowledgeEngineV2Service.GetSettingsView(_seller)
+                Records = records,
+                Settings = KnowledgeEngineV2Service.GetSettingsView(_seller),
+                SourceShopKey = _shopKey,
+                FeedbackEvents = KnowledgeEngineV2FeedbackService.ExportEvents(_seller).Where(x => ids.Contains(x.KnowledgeId)).ToList()
             };
         }
 
-        private string CreateAutomaticBackup()
+        private string CreateAutomaticBackup(KnowledgeV2PortablePackage snapshot = null)
         {
             var dbPath = KnowledgeEngineV2Repository.GetDatabasePath(_seller);
             var root = Path.Combine(Path.GetDirectoryName(dbPath) ?? string.Empty, "backups");
             Directory.CreateDirectory(root);
-            var path = Path.Combine(root, "knowledge-center-v2-before-import-" + DateTime.Now.ToString("yyyyMMdd-HHmmss") + ".json");
-            File.WriteAllText(path, JsonConvert.SerializeObject(BuildPackage(), Formatting.Indented), new System.Text.UTF8Encoding(false));
+            var path = Path.Combine(root, "knowledge-center-v2-before-import-" + DateTime.Now.ToString("yyyyMMdd-HHmmss-fff") + "-" + Guid.NewGuid().ToString("N") + ".json");
+            File.WriteAllText(path, JsonConvert.SerializeObject(snapshot ?? BuildPackage(), Formatting.Indented), new System.Text.UTF8Encoding(false));
             return path;
         }
 
@@ -527,7 +682,7 @@ namespace Bot.Knowledge
     {
         private readonly Window _owner;
         private readonly string _seller;
-        private CheckBox _enabled;
+        private readonly string _shopKey;
         private ComboBox _mode;
         private TextBox _threshold;
         private TextBox _confidence;
@@ -537,8 +692,22 @@ namespace Bot.Knowledge
         {
             _owner = owner;
             _seller = seller ?? string.Empty;
+            _shopKey = KnowledgeCenterV2Context.ResolveShopKey(owner, _seller);
             Build();
             Loaded += delegate { RefreshView(); };
+        }
+
+        private T InShop<T>(Func<T> action)
+        {
+            if (string.IsNullOrWhiteSpace(_shopKey))
+                throw new InvalidOperationException("知识设置缺少精确 ShopKey。");
+            var shop = ShopContextLocator.ResolveRuntimeByShopKey(_shopKey);
+            if (shop == null || !shop.HasStableSellerId
+                || !string.Equals(shop.ShopKey, _shopKey, StringComparison.Ordinal)
+                || (!DirectOrderIdentityResolver.IdentityEquals(shop.SellerNick, _seller)
+                    && !DirectOrderIdentityResolver.IdentityEquals(shop.DisplayName, _seller)))
+                throw new InvalidOperationException("知识设置店铺身份不匹配。");
+            using (ShopSettingsScope.Enter(shop)) return action();
         }
 
         public void RefreshView()
@@ -546,9 +715,9 @@ namespace Bot.Knowledge
             if (string.IsNullOrWhiteSpace(_seller)) return;
             try
             {
-                var settings = KnowledgeEngineV2Service.GetSettingsView(_seller);
-                var stats = KnowledgeEngineV2Service.GetStats(_seller);
-                _enabled.IsChecked = settings.Enabled;
+                var snapshot = InShop(() => new { Settings = KnowledgeEngineV2Service.GetSettingsView(_seller), Stats = KnowledgeEngineV2Service.GetStats(_seller) });
+                var settings = snapshot.Settings;
+                var stats = snapshot.Stats;
                 _mode.Text = KnowledgeEngineV2Constants.ModeProduction;
                 _threshold.Text = settings.DirectThreshold.ToString("0.00");
                 _confidence.Text = settings.MinConfidence.ToString("0.00");
@@ -565,13 +734,17 @@ namespace Bot.Knowledge
             panel.Children.Add(new TextBlock { Text = "Knowledge Engine V2 设置", FontSize = 20, FontWeight = FontWeights.SemiBold });
             panel.Children.Add(new TextBlock
             {
-                Text = "影子观察模式已移除。已批准的知识可立即参与生产直答，仍保留高风险、冲突和订单流程保护。", 
+                Text = "Knowledge V2 是唯一知识库和唯一检索引擎，始终启用。未命中可靠知识时交由 AI 结合当前对话处理；高风险、冲突和订单流程保护始终生效。", 
                 TextWrapping = TextWrapping.Wrap,
                 Foreground = Brushes.DimGray,
                 Margin = new Thickness(0, 5, 0, 14)
             });
-            _enabled = new CheckBox { Content = "启用 Knowledge Engine V2", Margin = new Thickness(0, 0, 0, 10) };
-            panel.Children.Add(_enabled);
+            panel.Children.Add(new TextBlock
+            {
+                Text = "运行状态：始终启用（不可关闭）",
+                FontWeight = FontWeights.SemiBold,
+                Margin = new Thickness(0, 0, 0, 10)
+            });
             _mode = new ComboBox { Visibility = Visibility.Collapsed };
             _mode.Items.Add(KnowledgeEngineV2Constants.ModeProduction);
             _mode.SelectedIndex = 0;
@@ -587,8 +760,13 @@ namespace Bot.Knowledge
             var warm = new Button { Content = "立即预热索引", Width = 110, Height = 32 };
             warm.Click += delegate
             {
-                Task.Run(() => KnowledgeEngineV2Service.Warm(_seller));
-                _stats.Text = "索引预热已提交。";
+                _stats.Text = "正在预热本店索引。";
+                Task.Run(() => InShop(() => { KnowledgeEngineV2Service.Warm(_seller); return true; }))
+                    .ContinueWith(t => Dispatcher.BeginInvoke(new Action(() =>
+                    {
+                        if (t.IsFaulted) _stats.Text = "预热失败：" + t.Exception.GetBaseException().Message;
+                        else RefreshView();
+                    })));
             };
             actions.Children.Add(save); actions.Children.Add(warm);
             panel.Children.Add(actions);
@@ -615,7 +793,11 @@ namespace Bot.Knowledge
             }
             try
             {
-                KnowledgeEngineV2Service.SetSettings(_seller, _enabled.IsChecked == true, KnowledgeEngineV2Constants.ModeProduction, threshold, confidence);
+                InShop(() =>
+                {
+                    KnowledgeEngineV2Service.SetSettings(_seller, true, KnowledgeEngineV2Constants.ModeProduction, threshold, confidence);
+                    return true;
+                });
                 RefreshView();
                 _stats.Text = "设置已保存。" + _stats.Text;
             }

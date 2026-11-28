@@ -20,7 +20,7 @@ def test_v2_is_in_the_only_text_reply_path_before_ai_generation():
     pipeline = read("src/Bot/ChromeNs/BuyerStreamingReplyPipeline.cs")
     method = runtime[
         runtime.index("internal static async Task<bool> TryHandleAsync"):
-        runtime.index("private static bool IsApprovedMatchForLogging")
+        runtime.index("internal static bool IsSelectedKnowledgeCurrent")
     ]
     entry = pipeline[pipeline.index("private static async Task ProcessTextBurstStreamingAsync"):]
     assert "KnowledgeEngineV2RuntimeBridge.TryHandleWithContextAsync(qn, lease)" in entry
@@ -47,7 +47,8 @@ def test_manual_bot_answer_edit_persists_reviewed_v2_answer_and_refreshes_runtim
     assert "TrySaveReviewedDirectAnswer(" in editor
     assert 'record.SourceType = "manual_reviewed_direct";' in repository
     assert "SaveRecordsInTransaction(new List<object> { ToRow(record), revision });" in repository
-    assert "MirrorOneToLegacy(shop, record);" in repository
+    assert "MirrorOneToLegacy" not in repository
+    assert "BotFeatureStore.SaveKnowledgeBase" not in repository
     assert "KnowledgeEngineV2Service.ApplyRecordUpdate(seller, record)" in repository
     assert "internal static void ApplyRecordUpdate" in incremental
     assert '"manual_reviewed_direct"' in public
@@ -71,7 +72,8 @@ def test_unverified_broad_session_suggestions_remain_review_only_but_verified_co
     session = read("src/Bot/ChromeNs/ConversationSessionLearningService.cs")
     assert "private const bool EnableAutomaticWrites = false;" in session
     assert "private const bool EnableVerifiedCorpusCorrectionWrites = true;" in session
-    assert "ApplyVerifiedCorpusCorrections(session, corpusAnalysis, expectedCurrentFingerprint, out corpusSkipped)" in session
+    assert "session, corpusAnalysis, turns, cards, expectedCurrentFingerprint, out corpusSkipped)" in session
+    assert "HasVerifiedCorrectionTranscript(candidate, turns, cards)" in session
     assert "EnableVerifiedCorpusNewKnowledgeWrites = true" in session
     assert "ApplyVerifiedCorpusNewKnowledge(" in session
     assert "CanAutoApplyVerifiedCorpusCorrection" in session
@@ -108,20 +110,20 @@ def test_v2_runtime_initialization_and_working_memory_are_shop_scoped():
     runtime = read("src/Bot/ChromeNs/KnowledgeEngineV2RuntimeBridge.cs")
     public = read("src/Bot/Knowledge/KnowledgeEngineV2.Service.Public.cs")
     index = read("src/Bot/Knowledge/KnowledgeEngineV2.Service.Index.cs")
+
     assert "shopScope.ShopKey, burst.ShopKey" in runtime
-    assert "PreparedShopKeys.TryAdd(shopKey, 1)" in runtime
     assert "WarmingShopKeys.TryAdd(shopKey, 1)" in runtime
+    assert "ShopContextLocator.ResolveRuntimeByShopKey(shopKey)" in runtime
     assert "ShopSettingsScope.Enter(shop, false)" in runtime
     assert "GetWorkingMemory(shop.ShopKey, seller, buyer)" in public
     assert "UpdateWorkingMemory(shop.ShopKey, seller, buyer, query)" in public
     assert "WorkingKey(string shopKey, string seller, string buyer)" in index
 
-
 def test_duplicate_manual_exact_aliases_fail_closed():
     public = read("src/Bot/Knowledge/KnowledgeEngineV2.Service.Public.cs")
     assert "var manualExactMatches = rankedMatches.Where(IsApprovedProductionMatch)" in public
     assert "var manualExactConflict = manualExactMatches.Count > 1;" in public
-    assert "manualExactConflict || (manualExact == null && HasConflict(best, second))" in public
+    assert "allProductionMatches.Any(x => !ReferenceEquals(x, best) && HasConflict(best, x))" in public
 
 
 def test_durable_manual_save_warms_a_cold_snapshot_before_next_buyer_question():
@@ -130,9 +132,9 @@ def test_durable_manual_save_warms_a_cold_snapshot_before_next_buyer_question():
         incremental.index("internal static void ApplyRecordUpdate("):
         incremental.index("internal static void ApplyRecordDelete(")
     ]
-    assert "if (!Snapshots.TryGetValue(shop.ShopKey, out current) || current == null)" in method
+    assert "if (!Snapshots.TryGetValue(shopKey, out current) || current == null)" in method
     assert "Warm(seller);" in method
-    assert "just-committed SQLite row" in method
+    assert "KnowledgeEngineV2Repository.LoadCommittedRecord(seller, id)" in method
 
 
 def test_manual_takeover_auto_learning_requires_native_buyer_and_human_message_ids():

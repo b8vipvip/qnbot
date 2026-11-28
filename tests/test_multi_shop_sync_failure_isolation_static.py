@@ -18,15 +18,15 @@ def test_knowledge_v2_cloud_sync_isolates_profile_failures_per_shop():
     assert "跳过异常店铺并继续处理其他店铺" in queue_all
 
 
-def test_legacy_knowledge_and_store_rule_sync_isolate_each_shop_failure():
-    knowledge = read("src/Bot/Knowledge/KnowledgeCloudSyncService.cs")
+def test_v2_knowledge_and_store_rule_sync_isolate_each_shop_failure():
+    knowledge = read("src/Bot/Knowledge/KnowledgeV2CloudSyncService.cs")
     rules = read("src/Bot/Knowledge/StoreRuleCloudSyncService.cs")
     for source, message in (
-        (knowledge, "知识库云同步跳过异常店铺并继续"),
+        (knowledge, "Knowledge V2 云同步跳过异常店铺并继续"),
         (rules, "店铺规则云同步跳过异常店铺并继续"),
     ):
         queue_all = source.split("private static void QueueAll()", 1)[1].split(
-            "private static void QueueSync(ShopContext shop)", 1
+            "private static void Queue(ShopContext shop)" if source is knowledge else "private static void QueueSync(ShopContext shop)", 1
         )[0]
         assert "foreach (var profile in profiles ?? new List<ShopProfile>())" in queue_all
         assert "profile.ToContext()" in queue_all

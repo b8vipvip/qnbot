@@ -50,26 +50,26 @@ def test_notification_tab_gets_local_policy_button_and_manager():
 
 
 def test_all_knowledge_rule_lists_have_bulk_management_controls():
-    source = read("src/Bot/Knowledge/BulkListManagementUi.cs")
-    assert "KnowledgeManagerControl" in source
-    assert "KnowledgePolicyProfileWindow" in source
-    assert "StorePromptProfileWindow" in source
-    assert "StoreRuleListWindow" in source
-    assert "导入（多模式）" in source
-    assert "全选当前" in source
-    assert "删除所选" in source
-    assert "清空全部" in source
-    assert "BulkImportMode.Replace" in source
-    assert "BulkImportMode.Merge" in source
-    assert "BulkImportMode.Append" in source
-    assert "knowledge-before-import" in source
-    assert "knowledge-policies-before-import" in source
-    assert "可靠度学习统计保留" in source
+    records = read("src/Bot/Knowledge/KnowledgeCenterV2RecordsPage.cs")
+    io = read("src/Bot/Knowledge/KnowledgeCenterV2OperationsPages.cs")
+    handoff = read("src/Bot/Options/HandoffPolicyUi.cs")
+    assert not (ROOT / "src/Bot/Knowledge/BulkListManagementUi.cs").exists()
+    assert "全选当前" in records and "删除所选" in records
+    assert "SelectionMode = DataGridSelectionMode.Extended" in records
+    assert "TryDeleteEditorRecords" in records
+    for mode in ("replace", "merge", "append"):
+        assert f'ImportPackage("{mode}")' in io
+    assert "CreateAutomaticBackup(before)" in io
+    assert "TryReplaceAllIfUnchanged" in io
+    assert "FeedbackEvents" in io
+    for label in ("全选", "取消全选", "删除所选", "清空全部"):
+        assert label in handoff
 
 
 def test_new_windows_files_are_included_in_all_wpf_builds():
     props = read("src/Bot/Directory.Build.props")
-    assert "Knowledge\\BulkListManagementUi.cs" in props
+    assert "Knowledge\\KnowledgeCenterV2RecordsPage.cs" in props
+    assert "ChromeNs\\BulkListManagementUiBridge.cs" in props
     assert "Options\\HandoffPolicyUi.cs" in props
     assert "ChromeNs\\HandoffPolicyLegacyMigrationService.cs" in props
 

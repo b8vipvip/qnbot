@@ -82,7 +82,7 @@ namespace Bot.Knowledge
         public string Value { get; set; }
     }
 
-    internal sealed class KnowledgeV2Record
+    public sealed class KnowledgeV2Record
     {
         private double _confidence;
 
@@ -103,6 +103,10 @@ namespace Bot.Knowledge
         public string RiskLevel { get; set; }
         public string SourceType { get; set; }
         public string SourceId { get; set; }
+        // Import-only evidence tokens are mapped to exact local source message IDs
+        // before promotion; never persist model-supplied tokens as knowledge facts.
+        [JsonIgnore]
+        public List<string> ImportEvidenceTokens { get; set; }
         public double Authority { get; set; }
         public double Confidence
         {
@@ -127,6 +131,7 @@ namespace Bot.Knowledge
             Exclusions = new List<string>();
             RequiredContext = new List<string>();
             ProductIds = new List<string>();
+            ImportEvidenceTokens = new List<string>();
         }
 
         public string ConfidenceText
@@ -199,6 +204,11 @@ namespace Bot.Knowledge
     internal sealed class KnowledgeV2Query
     {
         public string Original { get; set; }
+        // Original buyer wording is retained separately when V2 retrieval uses a
+        // context-resolved query; it is for trace/prompt display, not scoring.
+        public string UserOriginal { get; set; }
+        // Populated only from the verified order ledger, never buyer/OCR text.
+        internal string VerifiedCommerceScope { get; set; }
         public string Normalized { get; set; }
         public string Intent { get; set; }
         public string Subject { get; set; }
@@ -235,6 +245,8 @@ namespace Bot.Knowledge
         public string Answer { get; set; }
         public KnowledgeV2Query Query { get; set; }
         public List<KnowledgeV2Match> Matches { get; set; }
+        // The selected match can differ from the score-ranked display list.
+        public KnowledgeV2Match SelectedMatch { get; set; }
         public int CandidateCount { get; set; }
         public long ParseMs { get; set; }
         public long RecallMs { get; set; }

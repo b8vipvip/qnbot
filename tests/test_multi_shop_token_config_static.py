@@ -68,7 +68,7 @@ def test_control_plane_url_is_program_level_with_built_in_default_and_legacy_mig
 
 def test_shop_binding_page_owns_token_management_and_portable_shop_transfer():
     ui = read("src/Bot/Options/ShopBindingOptionsControl.cs")
-    sync = read("src/Bot/Knowledge/KnowledgeCloudSyncService.cs")
+    sync = read("src/Bot/Knowledge/KnowledgeV2CloudSyncService.cs")
     assert 'Label("Bot 服务端（程序内置）")' in ui
     assert 'Label("本店 Bot 服务端地址")' not in ui
     assert "_connection.SetServerUrl" not in ui
@@ -90,8 +90,8 @@ def test_shop_binding_page_owns_token_management_and_portable_shop_transfer():
     assert "立即同步知识库" in ui
     assert "保存令牌并立即同步知识库" not in ui
     assert "_token" not in ui
-    assert "KnowledgeCloudSyncService.SyncNowAsync(_shop)" in ui
-    assert "KnowledgeCloudSyncService.SetEnabledForShop" in ui
+    assert "KnowledgeV2CloudSyncService.SyncNowAsync(_shop)" in ui
+    assert "KnowledgeV2CloudSyncService.SetEnabledForShop" in ui
     assert "IsEnabledForShop" in sync
     assert "SyncNowAsync" in sync
     assert "ShopSettingsScope.Enter(shop)" in sync
@@ -272,7 +272,7 @@ def test_build_includes_shop_scope_and_botlib_router_sources():
 
 def test_web_cloud_and_backup_use_per_shop_connection_store_without_global_token():
     web = read("src/Bot/ChromeNs/BotWebConsoleSyncService.cs")
-    knowledge = read("src/Bot/Knowledge/KnowledgeCloudSyncService.cs")
+    knowledge = read("src/Bot/Knowledge/KnowledgeV2CloudSyncService.cs")
     backup = read("src/Bot/Knowledge/ClientDataCloudBackupService.cs")
     for source in (web, knowledge, backup):
         assert "ShopControlPlaneConnectionStore" in source

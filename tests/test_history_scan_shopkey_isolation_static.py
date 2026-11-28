@@ -58,3 +58,13 @@ def test_history_scan_reuses_the_already_verified_shopkey_for_history_store_read
     scan = read("src/Bot/Knowledge/ChatHistoryScanService.cs")
     assert "BotConversationHistoryStore.LoadRecentBySeller(shopKey, seller, 5000)" in scan
     assert "var shopKey = ShopIdentityResolver.Resolve(qn.Seller).ShopKey" not in scan
+
+def test_resumable_scan_checks_authoritative_cdp_before_each_history_page_and_checkpoint():
+    scan = read("src/Bot/Knowledge/ChatHistoryScanService.cs")
+    method = scan.split("public async Task<ChatHistoryScanResult> ScanBuyerMessagesAsync(", 1)[1].split("public async Task<ChatHistoryScanResult> ScanAndImportAsync(", 1)[0]
+    assert "IsAuthoritativeShopSession(shopKey, scanSessionId)" in method
+    assert "reason => evidence.Excluded(reason), requireOriginalSession)" in method
+    assert "requireOriginalSession();\n                        if (successful.Add(buyer))" in method
+    assert "&& isOriginalSession()" in method
+    assert "history_pagination_incomplete:missing_message_array" in scan
+    assert "history_seller_identity_mismatch" in scan

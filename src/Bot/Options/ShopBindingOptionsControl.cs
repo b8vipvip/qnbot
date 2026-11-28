@@ -25,6 +25,7 @@ namespace Bot.Options
         private CheckBox _knowledgeCloudSync;
         private Button _manageToken;
         private Button _exportAll;
+        private Button _cloudBackup;
         private Button _importAll;
         private Button _importLegacy;
         private Button _syncKnowledge;
@@ -68,7 +69,7 @@ namespace Bot.Options
                     ? Visibility.Collapsed
                     : Visibility.Visible;
                 _allowNicknameFallback.IsChecked = false;
-                _knowledgeCloudSync.IsChecked = KnowledgeCloudSyncService.IsEnabledForShop(_shop);
+                _knowledgeCloudSync.IsChecked = KnowledgeV2CloudSyncService.IsEnabledForShop(_shop);
                 ResetDiagnostics();
                 SetEnabled(true);
                 RefreshTokenStatus();
@@ -100,7 +101,7 @@ namespace Bot.Options
             {
                 // Token changes are committed immediately and only through the dedicated
                 // management dialog. Saving the page must never silently replace a token.
-                KnowledgeCloudSyncService.SetEnabledForShop(
+                KnowledgeV2CloudSyncService.SetEnabledForShop(
                     _shop,
                     _knowledgeCloudSync.IsChecked == true,
                     queueCloudSync);
@@ -183,7 +184,7 @@ namespace Bot.Options
             if (_connection == null) return;
             _serverUrl.Text = _connection.GetServerUrl();
             _allowNicknameFallback.IsChecked = false;
-            _knowledgeCloudSync.IsChecked = _shop != null && KnowledgeCloudSyncService.IsEnabledForShop(_shop);
+            _knowledgeCloudSync.IsChecked = _shop != null && KnowledgeV2CloudSyncService.IsEnabledForShop(_shop);
             ResetDiagnostics();
             _status.Text = "已恢复界面内容；不会删除本店令牌或云端知识。服务端地址由程序统一提供。";
             _status.Foreground = Brushes.Gray;
@@ -413,6 +414,9 @@ namespace Bot.Options
             _importAll = MakeButton("导入全店信息", 140);
             _importAll.Click += ImportAll_Click;
             transferButtons.Children.Add(_importAll);
+            _cloudBackup = MakeButton("本店云备份/换机", 150);
+            _cloudBackup.Click += OpenCloudBackup_Click;
+            transferButtons.Children.Add(_cloudBackup);
             transferPanel.Children.Add(transferButtons);
             panel.Children.Add(transferCard);
 
@@ -528,9 +532,11 @@ namespace Bot.Options
 
                 _status.Text = "正在连接服务端并同步本店云端知识库...";
                 _status.Foreground = Brushes.SteelBlue;
-                await KnowledgeCloudSyncService.SyncNowAsync(_shop);
-                _status.Text = "本店云端知识库同步完成。可以进入“知识库”页面核对条目；写入前的本机版本会保留在本店 backup 目录。";
-                _status.Foreground = Brushes.SeaGreen;
+                var converged = await KnowledgeV2CloudSyncService.SyncNowAsync(_shop);
+                _status.Text = converged
+                    ? "本店云端知识库同步完成。可以进入“知识库”页面核对条目；写入前的本机版本会保留在本店 backup 目录。"
+                    : "本次同步尚未收敛（可能存在并发修改或待上传的合并结果），后台将继续同步；请稍后核对。";
+                _status.Foreground = converged ? Brushes.SeaGreen : Brushes.SteelBlue;
             }
             catch (Exception ex)
             {
@@ -837,10 +843,32 @@ namespace Bot.Options
             _status.Foreground = string.IsNullOrWhiteSpace(fingerprint) ? Brushes.Gray : Brushes.SeaGreen;
         }
 
+        private void OpenCloudBackup_Click(object sender, RoutedEventArgs e)
+        {
+            var shop = _shop;
+            if (shop == null || !shop.HasStableSellerId) return;
+            try
+            {
+                using (ShopSettingsScope.Enter(shop))
+                {
+                    var window = new ClientDataBackupWindow(shop);
+                    var owner = Window.GetWindow(this);
+                    if (owner != null) window.Owner = owner;
+                    ShopScopedUiBridge.Attach(window, shop);
+                    window.ShowDialog();
+                }
+            }
+            catch (Exception ex)
+            {
+                MessageBox.Show("无法打开本店云备份：" + ex.Message, "云备份", MessageBoxButton.OK, MessageBoxImage.Warning);
+            }
+        }
+
         private void SetEnabled(bool enabled)
         {
             _manageToken.IsEnabled = enabled;
             _exportAll.IsEnabled = enabled;
+            _cloudBackup.IsEnabled = enabled && _shop != null && _shop.HasStableSellerId;
             _importAll.IsEnabled = enabled;
             _importLegacy.IsEnabled = enabled;
             _syncKnowledge.IsEnabled = enabled;

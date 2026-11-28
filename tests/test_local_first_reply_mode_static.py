@@ -41,32 +41,39 @@ def test_message_strategy_ui_exposes_ai_first_and_local_first():
     assert '买家5分钟无新消息后' in ui
 
 
-def test_local_first_high_confidence_knowledge_returns_before_any_ai_call():
+def test_local_first_high_confidence_v2_knowledge_returns_before_ai():
+    runtime = read("src/Bot/ChromeNs/KnowledgeEngineV2RuntimeBridge.cs")
     pipeline = read("src/Bot/ChromeNs/BuyerStreamingReplyPipeline.cs")
-
-    plan_at = pipeline.index("var plan = await SmartReplyRouterService.BuildPlanAsync(seller, buyer, question, token)")
-    local_at = pipeline.index("replyMode == BotReplyMode.LocalFirst", plan_at)
-    direct_at = pipeline.index("plan.Route == SmartReplyRouteKind.DirectKnowledge", local_at)
-    return_at = pipeline.index("return directAnswer;", direct_at)
-    endpoints_at = pipeline.index("var endpoints = AiEndpointStore.GetEnabledEndpoints()", return_at)
-
-    assert plan_at < local_at < direct_at < return_at < endpoints_at
-    assert 'RegisterAnswerSource(seller, buyer, question, directAnswer, "智能路由-本地直答")' in pipeline
-    assert "本地优先高置信知识直答" in pipeline
-
-
-def test_ai_first_does_not_short_circuit_on_direct_knowledge_match():
-    pipeline = read("src/Bot/ChromeNs/BuyerStreamingReplyPipeline.cs")
-    direct_block = pipeline[
-        pipeline.index("var replyMode = ReplyModeService.GetMode(seller)"):
-        pipeline.index("var endpoints = AiEndpointStore.GetEnabledEndpoints()")
+    route = runtime[
+        runtime.index("internal static async Task<KnowledgeV2RuntimeResult> TryHandleWithContextAsync"):
+        runtime.index("internal static string BuildContextPromptAddon")
     ]
 
-    assert "replyMode == BotReplyMode.LocalFirst" in direct_block
-    assert "BotReplyMode.AiFirst" not in direct_block
-    assert "return directAnswer;" in direct_block
-    assert "StreamMessagesAsync(messages, token, partial)" in pipeline
+    resolve = route.index("KnowledgeEngineV2Service.Resolve(")
+    mode = route.index("ReplyModeService.IsLocalFirst(burst.SellerNick)")
+    direct = route.index("SendTextWithRetryAsync")
+    assert resolve < mode < direct
+    assert "KnowledgeEngineV2RuntimeBridge.TryHandleWithContextAsync(qn, lease)" in pipeline
+    assert pipeline.index("KnowledgeEngineV2RuntimeBridge.TryHandleWithContextAsync(qn, lease)") < pipeline.index(
+        "StreamingBuyerAnswerService.GetAnswerAsync("
+    )
+    assert "if (decision == null || !decision.CanDirectReply" in route
+    assert "KnowledgeV2RuntimeResult.HandledResult()" in route
 
+def test_ai_first_keeps_approved_v2_knowledge_as_context_and_does_not_direct_send():
+    runtime = read("src/Bot/ChromeNs/KnowledgeEngineV2RuntimeBridge.cs")
+    route = runtime[
+        runtime.index("internal static async Task<KnowledgeV2RuntimeResult> TryHandleWithContextAsync"):
+        runtime.index("internal static string BuildContextPromptAddon")
+    ]
+
+    guard = route.index("if (!ReplyModeService.IsLocalFirst(burst.SellerNick))")
+    direct_send = route.index("SendTextWithRetryAsync")
+    assert guard < direct_send
+    assert "var aiFirstContext = BuildContextPromptAddon(decision);" in route
+    assert "return KnowledgeV2RuntimeResult.Continue(aiFirstContext, decision);" in route
+    assert "KnowledgeV2RuntimeResult.HandledResult()" in route
+    assert "OfflineFallbackDecision" in runtime
 
 def test_handoff_and_fixed_rules_still_run_before_local_knowledge():
     pipeline = read("src/Bot/ChromeNs/BuyerStreamingReplyPipeline.cs")
@@ -92,24 +99,28 @@ def test_local_first_session_learning_waits_five_minutes_and_uses_full_transcrip
     assert "MyOpenAI.CallStructuredChat" in learning
 
 
-def test_local_first_ai_review_can_synthesize_safe_reusable_qa_and_deduplicates_it():
-    learning = read("src/Bot/ChromeNs/ConversationSessionLearningService.cs")
-    reviewed = read("src/Bot/ChromeNs/ReviewedKnowledgeLearningService.cs")
+def test_local_first_misses_continue_to_ai_and_session_learning_remains_v2_only():
+    runtime = read("src/Bot/ChromeNs/KnowledgeEngineV2RuntimeBridge.cs")
+    pipeline = read("src/Bot/ChromeNs/BuyerStreamingReplyPipeline.cs")
+    session = read("src/Bot/ChromeNs/ConversationSessionLearningService.cs")
 
-    assert "conversation_synthesis" in learning
-    assert "suggestion.Confidence < 0.92" in learning
-    assert "DeduplicateSuggestions" in learning
-    assert ".GroupBy(" in learning
-    assert 'localFirst ? "本地优先-会话AI复盘" : "人工接待复盘"' in learning
-    assert "ContainsHighRisk" in learning
+    route = runtime[
+        runtime.index("internal static async Task<KnowledgeV2RuntimeResult> TryHandleWithContextAsync"):
+        runtime.index("internal static string BuildContextPromptAddon")
+    ]
+    finalize = session[
+        session.index("private static async Task FinalizeAsync"):
+        session.index("private static async Task<JObject> AnalyzeAsync")
+    ]
 
-    # Knowledge-store dedupe remains the second line of defence across different sessions.
-    assert "FindExisting(list, question)" in reviewed
-    assert "bestScore >= 0.92" in reviewed
-    assert "KnowledgeAiService.ContentHash" in reviewed
-    assert 'existingSource.Contains("会话AI复盘")' in reviewed
-    assert "知识库已存在相同问答内容，已去重，不重复新增" in reviewed
-
+    assert "ReplyModeService.IsLocalFirst(burst.SellerNick)" in route
+    assert "if (decision == null || !decision.CanDirectReply" in route
+    assert "KnowledgeV2RuntimeResult.Continue(contextPromptAddon)" in route
+    assert "StreamingBuyerAnswerService.GetAnswerAsync(" in pipeline
+    assert "AnalyzeKnowledgeCorpusAsync(" in finalize
+    assert "ApplyVerifiedCorpusNewKnowledge(" in finalize
+    assert "KnowledgeEngineV2Repository.TryCreateVerifiedSessionKnowledge(" in session
+    assert "BotFeatureStore.SaveKnowledgeBase" not in session
 
 def test_ai_first_keeps_conservative_human_evidence_learning_policy():
     learning = read("src/Bot/ChromeNs/ConversationSessionLearningService.cs")

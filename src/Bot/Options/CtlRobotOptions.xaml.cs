@@ -381,9 +381,7 @@ namespace Bot.Options
     public class FeatureSettingsWindow : Window
     {
         private readonly TabControl _tabs;
-        private ObservableCollection<KnowledgeBaseEntry> _kbItems;
         private ObservableCollection<ComplianceItem> _complianceItems;
-        private DataGrid _kbGrid;
         private DataGrid _complianceGrid;
         private TextBox _manualKeywords;
         private TextBox _noAutoKeywords;
@@ -424,7 +422,6 @@ namespace Bot.Options
         private TextBox _maxLength;
         private TextBox _bannedWords;
         private TextBox _requiredPrefix;
-        private CheckBox _enableKb;
         private CheckBox _oneSentence;
         private TextBox _licensee;
         private TextBox _licenseKey;
@@ -518,18 +515,15 @@ namespace Bot.Options
 
         private UIElement BuildKnowledgeTab()
         {
-            var currentKnowledge = BotFeatureStore.GetKnowledgeBase();
             var panel = new StackPanel { Margin = new Thickness(18) };
             panel.Children.Add(new TextBlock
             {
-                Text = "知识库已升级为独立中心。智能导入、问答搜索、编辑、JSON导入导出都在新中心中完成，仍然使用同一个 BotFeatureStore 数据源。",
+                Text = "本客户端仅使用 Knowledge V2。知识检索、图片知识、历史聊天学习、导入导出、冲突处理和运行时索引均统一在 Knowledge V2 中管理。",
                 TextWrapping = TextWrapping.Wrap,
                 Foreground = new SolidColorBrush(Color.FromRgb(75, 85, 99)),
                 Margin = new Thickness(0, 0, 0, 12)
             });
-            panel.Children.Add(new TextBlock { Text = "知识数量：" + currentKnowledge.Count, FontWeight = FontWeights.Bold, Margin = new Thickness(0, 0, 0, 6) });
-            panel.Children.Add(new TextBlock { Text = "分类数量：" + currentKnowledge.Select(x => x.Category ?? string.Empty).Where(x => x.Length > 0).Distinct().Count(), FontWeight = FontWeights.Bold, Margin = new Thickness(0, 0, 0, 16) });
-            var open = MakeButton("打开知识库中心", 140);
+            var open = MakeButton("打开 Knowledge V2 知识库", 190);
             open.Click += (s, e) => KnowledgeCenterWindow.MyShow(this);
             panel.Children.Add(open);
             return Card(panel);
@@ -792,8 +786,16 @@ namespace Bot.Options
         {
             var cfg = BotFeatureStore.GetMessagePolicy();
             var sp = new StackPanel { Margin = new Thickness(8) };
-            _enableKb = new CheckBox { Content = "启用知识库注入", IsChecked = cfg.EnableKnowledgeBase, Margin = new Thickness(0, 0, 0, 8) };
-            sp.Children.Add(_enableKb);
+            var storeRules = MakeButton("店铺规则中心", 110);
+            storeRules.Click += (s, e) => Bot.Knowledge.StorePromptProfileUi.Show(this);
+            sp.Children.Add(storeRules);
+            sp.Children.Add(new TextBlock
+            {
+                Text = "店铺规则中心独立管理当前 ShopKey 的业务规则与 AI 提示词，不属于知识库数据。",
+                TextWrapping = TextWrapping.Wrap,
+                Foreground = Brushes.DimGray,
+                Margin = new Thickness(0, 0, 0, 10)
+            });
             _oneSentence = new CheckBox { Content = "强制短句回复，避免长篇解释", IsChecked = cfg.OneSentence, Margin = new Thickness(0, 0, 0, 8) };
             sp.Children.Add(_oneSentence);
             var row = new StackPanel { Orientation = Orientation.Horizontal, Margin = new Thickness(0, 0, 0, 8) };
@@ -909,11 +911,6 @@ namespace Bot.Options
         {
             try
             {
-                if (_kbGrid != null)
-                {
-                    _kbGrid.CommitEdit(DataGridEditingUnit.Cell, true);
-                    _kbGrid.CommitEdit(DataGridEditingUnit.Row, true);
-                }
                 if (_complianceGrid != null)
                 {
                     _complianceGrid.CommitEdit(DataGridEditingUnit.Cell, true);
@@ -930,7 +927,6 @@ namespace Bot.Options
             try
             {
                 CommitFeatureGrids();
-                if (_kbItems != null) BotFeatureStore.SaveKnowledgeBase(_kbItems.ToList());
                 if (_rulesEnabled != null)
                 {
                     BotFeatureStore.SaveAutoReplyRules(BuildRuleConfigFromUi());
@@ -941,7 +937,6 @@ namespace Bot.Options
                     int.TryParse(_maxLength == null ? "60" : _maxLength.Text, out max);
                     BotFeatureStore.SaveMessagePolicy(new MessagePolicyConfig
                     {
-                        EnableKnowledgeBase = _enableKb != null && (_enableKb.IsChecked ?? true),
                         OneSentence = _oneSentence != null && (_oneSentence.IsChecked ?? true),
                         Tone = (_tone.SelectedItem ?? "自然亲切").ToString(),
                         MaxAnswerLength = max <= 0 ? 60 : max,
@@ -975,59 +970,6 @@ namespace Bot.Options
                     "save_all", false, ex);
                 Log.Exception(ex);
                 _status.Text = "保存失败：" + ex.Message;
-            }
-        }
-
-        private void ImportKnowledge()
-        {
-            try
-            {
-                var dlg = new OpenFileDialog { Title = "导入知识库", Filter = "JSON文件 (*.json)|*.json|所有文件 (*.*)|*.*" };
-                if (dlg.ShowDialog() != true) return;
-                var list = JsonConvert.DeserializeObject<List<KnowledgeBaseEntry>>(File.ReadAllText(dlg.FileName, Encoding.UTF8));
-                if (list == null) throw new Exception("JSON中没有知识库数据");
-                var overwrite = MessageBox.Show("是否覆盖全部知识？\n\n选择“否”将追加导入并按问题去重。", "导入方式", MessageBoxButton.YesNoCancel, MessageBoxImage.Question);
-                if (overwrite == MessageBoxResult.Cancel) return;
-                if (overwrite == MessageBoxResult.Yes)
-                {
-                    _kbItems.Clear();
-                    foreach (var it in list) _kbItems.Add(it);
-                    _status.Text = "知识库已覆盖导入，请保存。";
-                }
-                else
-                {
-                    var seen = new HashSet<string>(_kbItems.Select(x => KnowledgeAiService.NormalizeQuestion(x.Title)));
-                    var added = 0;
-                    foreach (var it in list)
-                    {
-                        var key = KnowledgeAiService.NormalizeQuestion(it.Title);
-                        if (seen.Contains(key)) continue;
-                        _kbItems.Add(it);
-                        seen.Add(key);
-                        added++;
-                    }
-                    _status.Text = "知识库已追加导入 " + added + " 条，请保存。";
-                }
-            }
-            catch (Exception ex)
-            {
-                _status.Text = "导入失败：" + ex.Message;
-            }
-        }
-
-        private void ExportKnowledge()
-        {
-            try
-            {
-                CommitFeatureGrids();
-                var dlg = new SaveFileDialog { Title = "导出知识库", FileName = "qianniu-knowledge-base.json", Filter = "JSON文件 (*.json)|*.json|所有文件 (*.*)|*.*" };
-                if (dlg.ShowDialog() != true) return;
-                File.WriteAllText(dlg.FileName, JsonConvert.SerializeObject(_kbItems.ToList(), Formatting.Indented), Encoding.UTF8);
-                _status.Text = "知识库已导出：" + dlg.FileName;
-            }
-            catch (Exception ex)
-            {
-                _status.Text = "导出失败：" + ex.Message;
             }
         }
 
@@ -1381,34 +1323,6 @@ namespace Bot.ChromeNs
         }
     }
 
-    public class KnowledgeBaseEntry
-    {
-        public bool Enabled { get; set; }
-        public string Category { get; set; }
-        public string Title { get; set; }
-        public string Keywords { get; set; }
-        public string Answer { get; set; }
-        public string UpdatedAt { get; set; }
-        public string Id { get; set; }
-        public string CreatedAt { get; set; }
-        public bool AiGenerated { get; set; }
-        public string SourceType { get; set; }
-
-        public KnowledgeBaseEntry()
-        {
-            Enabled = true;
-            Category = "通用";
-            Title = string.Empty;
-            Keywords = string.Empty;
-            Answer = string.Empty;
-            UpdatedAt = DateTime.Now.ToString("yyyy-MM-dd HH:mm:ss");
-            CreatedAt = UpdatedAt;
-            Id = string.Empty;
-            AiGenerated = false;
-            SourceType = string.Empty;
-        }
-    }
-
     public class AutoReplyRuleConfig
     {
         public bool Enabled { get; set; }
@@ -1500,7 +1414,6 @@ namespace Bot.ChromeNs
 
     public class MessagePolicyConfig
     {
-        public bool EnableKnowledgeBase { get; set; }
         public bool OneSentence { get; set; }
         public string Tone { get; set; }
         public int MaxAnswerLength { get; set; }
@@ -1511,7 +1424,6 @@ namespace Bot.ChromeNs
         {
             return new MessagePolicyConfig
             {
-                EnableKnowledgeBase = true,
                 OneSentence = true,
                 Tone = "自然亲切",
                 MaxAnswerLength = 60,
@@ -1555,7 +1467,6 @@ namespace Bot.ChromeNs
     public static class BotFeatureStore
     {
         private const string Scope = "feature";
-        private const string KnowledgeKey = "KnowledgeBaseJson";
         private const string RuleKey = "AutoReplyRulesJson";
         private const string PolicyKey = "MessagePolicyJson";
         private const string LicenseKey = "LicenseJson";
@@ -1578,18 +1489,6 @@ namespace Bot.ChromeNs
             if (string.IsNullOrWhiteSpace(json)) return def;
             try { return JsonConvert.DeserializeObject<T>(json); }
             catch { return def; }
-        }
-
-        public static List<KnowledgeBaseEntry> GetKnowledgeBase()
-        {
-            var list = Read(KnowledgeKey, new List<KnowledgeBaseEntry>());
-            if (list == null) list = new List<KnowledgeBaseEntry>();
-            return list;
-        }
-
-        public static void SaveKnowledgeBase(List<KnowledgeBaseEntry> list)
-        {
-            SaveJson(KnowledgeKey, JsonConvert.SerializeObject(list ?? new List<KnowledgeBaseEntry>(), Formatting.Indented));
         }
 
         public static int GetSmartImportTimeoutSeconds()
@@ -1791,64 +1690,19 @@ namespace Bot.ChromeNs
             return "每天 " + start + "–" + end;
         }
 
-        private static List<KnowledgeBaseEntry> MatchKnowledge(string question)
-        {
-            var list = GetKnowledgeBase();
-            var rt = new List<KnowledgeBaseEntry>();
-            foreach (var item in list)
-            {
-                if (item == null || !item.Enabled) continue;
-                string hit;
-                if (ContainsAny(question, item.Keywords + "," + item.Title, out hit)) rt.Add(item);
-                if (rt.Count >= 6) break;
-            }
-            return rt;
-        }
-
         public static string BuildPromptAddon(string question)
-        {
-            // One-argument callers must fail closed: without an exact active shop
-            // scope, do not inject legacy KB snippets into an AI prompt.
-            var includeLegacyKnowledge = false;
-            try
-            {
-                var currentScope = ShopSettingsScope.Current;
-                if (currentScope != null)
-                    includeLegacyKnowledge = !KnowledgeEngineV2Service.IsEnabled(currentScope.SellerNick);
-            }
-            catch
-            {
-                includeLegacyKnowledge = false;
-            }
-            return BuildPromptAddon(question, includeLegacyKnowledge);
-        }
-
-        public static string BuildPromptAddon(string question, bool includeKnowledgeBase)
         {
             var policy = GetMessagePolicy();
             var sb = new StringBuilder();
             sb.AppendLine();
             sb.AppendLine("店铺回复策略：");
+            sb.AppendLine("- 知识检索由 Knowledge V2 独立负责；此处只提供输出风格与安全约束，不读取旧知识库。");
             sb.AppendLine("- 语气风格：" + policy.Tone + "。");
             if (policy.OneSentence) sb.AppendLine("- 回复尽量控制为一句话，不要长篇解释。");
             if (policy.MaxAnswerLength > 0) sb.AppendLine("- 回复长度不超过 " + policy.MaxAnswerLength + " 个中文字符左右。");
             if (!string.IsNullOrWhiteSpace(policy.RequiredPrefix)) sb.AppendLine("- 必要时使用固定前缀：" + policy.RequiredPrefix);
             if (!string.IsNullOrWhiteSpace(policy.BannedWords)) sb.AppendLine("- 不要使用这些词：" + policy.BannedWords);
             sb.AppendLine("- 价格、库存、物流、订单、退款、赔偿等以平台页面和人工确认为准，不要编造。");
-
-            if (includeKnowledgeBase && policy.EnableKnowledgeBase)
-            {
-                var matches = MatchKnowledge(question);
-                if (matches.Count > 0)
-                {
-                    sb.AppendLine();
-                    sb.AppendLine("命中的店铺知识库：");
-                    foreach (var item in matches)
-                    {
-                        sb.AppendLine("【" + item.Category + "】" + item.Title + "：" + item.Answer);
-                    }
-                }
-            }
             return sb.ToString();
         }
 

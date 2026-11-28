@@ -20,8 +20,9 @@ def test_text_ai_budget_finishes_before_absolute_generation_watchdog():
     assert "StructuredFallbackSeconds" not in pipeline
     assert "timeoutCts" not in pipeline
     assert "The caller's generation token is the only client-side timeout owner." in pipeline
-    assert "SmartReplyRouterService.CanUseOfflineKnowledgeFallback(plan)" in pipeline
-    assert "AI失败离线安全兜底" in pipeline
+    assert "TryResolveV2OfflineFallback(" in pipeline
+    assert "Knowledge V2 AI故障兜底" in pipeline
+    assert "SmartReplyRouterService.CanUseOfflineKnowledgeFallback(plan)" not in pipeline
     assert "AbsoluteGenerationAgeSeconds = BuyerStreamingReplyPipeline.TotalAiBudgetSeconds + 20" in agent
     assert "BuyerSessionAgent.AbsoluteGenerationAgeSeconds" in watchdog
 

@@ -21,6 +21,7 @@ using System.Threading;
 using System.Threading.Tasks;
 using System.Windows;
 using System.Windows.Controls;
+using System.Windows.Media;
 
 namespace Bot.Knowledge
 {
@@ -28,97 +29,26 @@ namespace Bot.Knowledge
     {
         internal string RequestedSeller { get; set; }
         internal string RequestedShopKey { get; set; }
-        private readonly TabControl _tabs;
-        private readonly KnowledgeImportControl _import;
-        private readonly KnowledgeManagerControl _manager;
-        private readonly AiOptimizationHistoryControl _optimizationHistory;
 
         public KnowledgeCenterWindow()
         {
-            Title = "AI客服 - 知识库";
-            Width = 1100;
-            Height = 720;
+            Title = "知识库";
+            Width = 1320;
+            Height = 820;
+            MinWidth = 1100;
+            MinHeight = 720;
             WindowStartupLocation = WindowStartupLocation.CenterOwner;
-            var root = new DockPanel();
-            Content = root;
-            var toolbar = new WrapPanel { Margin = new Thickness(10, 10, 10, 4) };
-            DockPanel.SetDock(toolbar, Dock.Top);
-            var importPackage = new Button { Content = "导入知识库完整包", Width = 140, Height = 30, Margin = new Thickness(0, 0, 8, 0) };
-            var exportPackage = new Button { Content = "导出知识库完整包", Width = 140, Height = 30, Margin = new Thickness(0, 0, 8, 0) };
-            toolbar.Children.Add(importPackage);
-            toolbar.Children.Add(exportPackage);
-            root.Children.Add(toolbar);
-            _tabs = new TabControl();
-            root.Children.Add(_tabs);
-            _manager = new KnowledgeManagerControl();
-            _import = new KnowledgeImportControl(delegate { ShowManager(); });
-            _optimizationHistory = new AiOptimizationHistoryControl();
-            _tabs.Items.Add(new TabItem { Header = "智能导入", Content = _import });
-            _tabs.Items.Add(new TabItem { Header = "问答管理", Content = _manager });
-            _tabs.Items.Add(new TabItem { Header = "AI优化记录", Content = _optimizationHistory });
-            importPackage.Click += (s, e) =>
+            Background = Brushes.White;
+            // Register the V2-only Loaded handler before the window is shown.
+            // No V1 manager/import controls are constructed or read during startup.
+            KnowledgeCenterV2UiBridge.Initialize();
+            Content = new TextBlock
             {
-                if (RulePolicyImportExportUi.ImportKnowledgePackage(this))
-                {
-                    _manager.RefreshData();
-                    ShowManager();
-                }
+                Text = "正在加载知识库…",
+                Margin = new Thickness(28),
+                FontSize = 16,
+                Foreground = Brushes.Gray
             };
-            exportPackage.Click += (s, e) => RulePolicyImportExportUi.ExportKnowledgePackage(this);
-        }
-
-        public void ShowManager()
-        {
-            _manager.RefreshData();
-            _tabs.SelectedIndex = 1;
-        }
-
-        public void ShowOptimizationHistory()
-        {
-            _optimizationHistory.RefreshData();
-            _tabs.SelectedIndex = 2;
-        }
-
-        public void NavigateToManager(string seller, string buyer, string question, string answer)
-        {
-            ShowManager();
-            if (_manager.LocateEntry(seller, buyer, question, answer)) return;
-            MessageBox.Show(this,
-                "没有找到完全对应的知识条目，已按当前问题或答案显示搜索结果。",
-                "知识库定位", MessageBoxButton.OK, MessageBoxImage.Information);
-        }
-
-        public static void ShowBotReplySourceAndLocate(Window owner, string seller, string answer, bool presetManager = false)
-        {
-            if (string.IsNullOrWhiteSpace(seller)) return;
-            // A seller identity must exist in the currently connected shop before
-            // opening an editor. Never silently fall back to another open shop.
-            try { Bot.ShopScope.ShopContextLocator.ResolveRuntimeBySellerNick(seller); }
-            catch (Exception ex)
-            {
-                MessageBox.Show(owner, "无法定位消息所属店铺：" + ex.Message, "Bot 来源管理",
-                    MessageBoxButton.OK, MessageBoxImage.Warning);
-                return;
-            }
-            var wnd = new KnowledgeCenterWindow { RequestedSeller = seller };
-            if (owner != null) wnd.Owner = owner;
-            wnd.Loaded += (s, e) => wnd.Dispatcher.BeginInvoke(
-                new Action(() =>
-                {
-                    var shell = wnd.Content as KnowledgeCenterV2Shell;
-                    if (shell != null)
-                    {
-                        if (presetManager) shell.OpenPresetManager(answer);
-                        else shell.OpenReplySource(answer);
-                    }
-                }), System.Windows.Threading.DispatcherPriority.ContextIdle);
-            wnd.Show();
-        }
-
-        protected override void OnClosed(EventArgs e)
-        {
-            if (_import != null) _import.CancelForWindowClose();
-            base.OnClosed(e);
         }
 
         public static void MyShow(Window owner)
@@ -128,96 +58,41 @@ namespace Bot.Knowledge
             wnd.Show();
         }
 
-        /// <summary>
-        /// Open V2 from a seller-locked settings window. Never silently fall
-        /// back to another active QN account when settings belong to a different
-        /// shop; preserving the ShopKey is essential for multi-seller clients.
-        /// </summary>
         internal static KnowledgeCenterWindow ShowForSeller(
             Window owner, string seller, string shopKey = "")
         {
             seller = (seller ?? string.Empty).Trim();
             shopKey = (shopKey ?? string.Empty).Trim();
             if (seller.Length == 0)
-                throw new InvalidOperationException("未识别当前店铺，无法打开知识中心。");
+                throw new InvalidOperationException("未识别当前店铺，无法打开知识库。");
             var shop = shopKey.Length == 0
-                ? Bot.ShopScope.ShopContextLocator.ResolveRuntimeBySellerNick(seller)
-                : Bot.ShopScope.ShopContextLocator.ResolveRuntimeByShopKey(shopKey);
-            if (shop == null)
-                throw new InvalidOperationException("当前店铺未建立有效的 ShopKey，无法打开知识中心。");
-
-            var resolvedSeller = (shop.SellerNick ?? string.Empty).Trim();
-            if (resolvedSeller.Length == 0)
-            {
-                var exactQn = Bot.ShopScope.ShopContextLocator.FindConnectedQnByShopKey(shop.ShopKey);
-                resolvedSeller = exactQn == null || exactQn.Seller == null
-                    ? string.Empty
-                    : (exactQn.Seller.Nick ?? string.Empty).Trim();
-            }
-            var sellerMatches = string.Equals(resolvedSeller, seller, StringComparison.Ordinal)
-                || (shop.HasStableSellerId && resolvedSeller.Length == 0);
-            if (!sellerMatches && !shop.HasStableSellerId && resolvedSeller.Length > 0)
-                sellerMatches = string.Equals(
-                    Bot.ShopScope.ShopKeyGenerator.NormalizeFallbackNickname(resolvedSeller),
-                    Bot.ShopScope.ShopKeyGenerator.NormalizeFallbackNickname(seller),
-                    StringComparison.Ordinal);
-            if (!sellerMatches)
-                throw new InvalidOperationException("卖家昵称与目标ShopKey不匹配，已阻止跨店打开知识中心。");
+                ? ShopContextLocator.ResolveRuntimeBySellerNick(seller)
+                : ShopContextLocator.ResolveRuntimeByShopKey(shopKey);
+            if (shop == null || !shop.HasStableSellerId
+                || !string.Equals((shop.SellerNick ?? string.Empty).Trim(), seller, StringComparison.Ordinal))
+                throw new InvalidOperationException("Seller与目标ShopKey不匹配，已阻止跨店打开知识库。");
 
             var window = new KnowledgeCenterWindow
             {
                 RequestedSeller = seller,
                 RequestedShopKey = shop.ShopKey
             };
-            Bot.ShopScope.ShopScopedUiBridge.Attach(window, shop);
+            ShopScopedUiBridge.Attach(window, shop);
             if (owner != null) window.Owner = owner;
             window.Show();
             return window;
         }
 
-        public static void ShowManagerAndLocate(
-            Window owner, string seller, string buyer, string question, string answer,
-            string shopKey = "")
+        public static void ShowBotReplySourceAndLocate(
+            Window owner, string seller, string answer, bool presetManager = false)
         {
-            Bot.ShopScope.ShopContext shop;
-            try
-            {
-                shop = string.IsNullOrWhiteSpace(shopKey)
-                    ? Bot.ShopScope.ShopContextLocator.ResolveRuntimeBySellerNick(seller)
-                    : Bot.ShopScope.ShopContextLocator.ResolveRuntimeByShopKey(shopKey);
-            }
+            if (string.IsNullOrWhiteSpace(seller)) return;
+            ShopContext shop;
+            try { shop = ShopContextLocator.ResolveRuntimeBySellerNick(seller); }
             catch (Exception ex)
             {
-                MessageBox.Show(owner, "无法确认该Bot消息所属店铺：" + ex.Message,
-                    "知识库定位", MessageBoxButton.OK, MessageBoxImage.Warning);
-                return;
-            }
-
-            seller = (seller ?? string.Empty).Trim();
-            if (seller.Length == 0)
-            {
-                MessageBox.Show(owner, "Bot消息缺少卖家身份，已阻止打开知识库。",
-                    "知识库定位", MessageBoxButton.OK, MessageBoxImage.Warning);
-                return;
-            }
-            var expectedSeller = (shop.SellerNick ?? string.Empty).Trim();
-            if (expectedSeller.Length == 0)
-            {
-                var exactQn = Bot.ShopScope.ShopContextLocator.FindConnectedQnByShopKey(shop.ShopKey);
-                expectedSeller = exactQn == null || exactQn.Seller == null
-                    ? string.Empty : (exactQn.Seller.Nick ?? string.Empty).Trim();
-            }
-            var sellerMatches = string.Equals(expectedSeller, seller, StringComparison.Ordinal)
-                || (shop.HasStableSellerId && expectedSeller.Length == 0);
-            if (!sellerMatches && !shop.HasStableSellerId && expectedSeller.Length > 0)
-                sellerMatches = string.Equals(
-                    Bot.ShopScope.ShopKeyGenerator.NormalizeFallbackNickname(expectedSeller),
-                    Bot.ShopScope.ShopKeyGenerator.NormalizeFallbackNickname(seller),
-                    StringComparison.Ordinal);
-            if (!sellerMatches)
-            {
-                MessageBox.Show(owner, "卖家昵称与目标ShopKey不匹配，已阻止跨店打开知识库。",
-                    "知识库定位", MessageBoxButton.OK, MessageBoxImage.Warning);
+                MessageBox.Show(owner, "无法定位消息所属店铺：" + ex.Message,
+                    "Bot 来源管理", MessageBoxButton.OK, MessageBoxImage.Warning);
                 return;
             }
 
@@ -226,13 +101,27 @@ namespace Bot.Knowledge
                 RequestedSeller = seller,
                 RequestedShopKey = shop.ShopKey
             };
-            Bot.ShopScope.ShopScopedUiBridge.Attach(wnd, shop);
+            ShopScopedUiBridge.Attach(wnd, shop);
             if (owner != null) wnd.Owner = owner;
-            using (Bot.ShopScope.ShopSettingsScope.Enter(shop))
+            wnd.Loaded += delegate
             {
-                wnd.Show();
-                wnd.NavigateToManager(seller, buyer, question, answer);
-            }
+                wnd.Dispatcher.BeginInvoke(new Action(() =>
+                {
+                    var shell = wnd.Content as KnowledgeCenterV2Shell;
+                    if (shell == null) return;
+                    if (presetManager) shell.OpenPresetManager(answer);
+                    else shell.OpenReplySource(answer);
+                }), System.Windows.Threading.DispatcherPriority.ContextIdle);
+            };
+            wnd.Show();
+        }
+
+        public static void ShowManagerAndLocate(
+            Window owner, string seller, string buyer, string question, string answer,
+            string shopKey = "")
+        {
+            KnowledgeCenterV2UiBridge.ShowBotReplySearch(
+                owner, seller, buyer, question, answer, shopKey);
         }
     }
 

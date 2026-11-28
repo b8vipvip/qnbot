@@ -16,7 +16,7 @@ def test_ocr_first_runs_before_vision_provider_selection():
     assert "OcrFirstKnowledgeDecisionService.TryResolveAsync" in vision
     assert vision.index("OcrFirstKnowledgeDecisionService.TryResolveAsync") < vision.index("GetVisionEnabledEndpoints")
     assert "DirectKnowledgeMinOcrConfidence = 0.88" in local
-    assert "KnowledgeEngineV2Service.IsSnapshotReady" in local
+    assert "KnowledgeEngineV2Service.ResolveWithEvidence(" in local
     assert "decision.CanDirectReply" in local
     assert 'EndpointName = "server-ocr+knowledge-v2"' in local
     assert "task.SellerNick," in local
@@ -71,8 +71,9 @@ def test_agent_keeps_generation_boundary_separate_from_raw_events():
 def test_image_ocr_prewarms_knowledge_v2_and_separates_buyer_query_from_visual_evidence():
     local = read("src/Bot/ChromeNs/OcrFirstKnowledgeDecisionService.cs")
     assert "PrepareForVision(task.ShopKey, knowledgeSeller)" in local
-    assert "SnapshotWarmWaitMs = 12000" in local
-    assert "await Task.Delay(100, cancellationToken)" in local
+    assert "SnapshotWarmWaitMs" not in local
+    assert "Knowledge V2索引未就绪" not in local
+    assert "cancellationToken.ThrowIfCancellationRequested();" in local
     assert "KnowledgeEngineV2Service.ResolveWithEvidence(" in local
     assert "task.CombinedQuestion" in local
     assert "var evidenceText = ocr.Text;" in local

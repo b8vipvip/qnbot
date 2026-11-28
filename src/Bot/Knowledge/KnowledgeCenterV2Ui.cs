@@ -32,6 +32,7 @@ namespace Bot.Knowledge
         public static void Initialize()
         {
             if (Interlocked.Exchange(ref _initialized, 1) != 0) return;
+            KnowledgeV2OperatorUiBridge.Initialize();
             EventManager.RegisterClassHandler(typeof(KnowledgeCenterWindow), FrameworkElement.LoadedEvent,
                 new RoutedEventHandler(OnLoaded), true);
         }
@@ -228,7 +229,19 @@ namespace Bot.Knowledge
             }
             catch (Exception ex)
             {
-                Log.ErrorWithMaxCount("加载Knowledge Center V2界面失败，保留旧知识库界面: " + ex.Message, 10);
+                Log.ErrorWithMaxCount("加载Knowledge Center V2界面失败，已阻止回退到旧知识库: " + ex.Message, 10);
+                window.Content = new Border
+                {
+                    Background = Brushes.White,
+                    Padding = new Thickness(28),
+                    Child = new TextBlock
+                    {
+                        Text = "Knowledge V2 知识库暂时无法加载。为保证数据来源唯一，旧知识库页面不会作为兜底。请检查日志后重试。",
+                        TextWrapping = TextWrapping.Wrap,
+                        FontSize = 16,
+                        Foreground = Brushes.Firebrick
+                    }
+                };
             }
         }
     }
@@ -297,8 +310,8 @@ namespace Bot.Knowledge
                 Nav("学习", () => new KnowledgeV2RecordsPage(_owner, _seller, KnowledgeV2RecordsPageMode.Learning)),
                 Nav("冲突", () => new KnowledgeV2ConflictPage(_owner, _seller)),
                 Nav("测试台", () => new KnowledgeV2DebuggerPage(_owner, _seller)),
-                Nav("导入导出", () => new KnowledgeV2ImportExportPage(_owner, _seller)),
-                Nav("智能导入", () => new KnowledgeV2SmartImportPage(_owner, _seller)),
+                Nav("导入导出", () => new KnowledgeV2ImportExportPage(_owner, _seller, _shopKey)),
+                Nav("智能导入", () => new KnowledgeV2SmartImportPage(_owner, _seller, _shopKey)),
                 Nav("历史聊天整理", () => new KnowledgeV2ChatHistoryPage(_owner, _seller)),
                 Nav("买家消息管理", () => new BuyerMessageManagementPage(_owner, _seller)),
                 Nav("Bot回复管理", () => new KnowledgeV2BotReplyManagementPage(_owner, _seller, _shopKey)),
@@ -391,19 +404,10 @@ namespace Bot.Knowledge
             transfer.Click += delegate { SelectNav("导入导出"); };
             var help = Button("使用帮助", 92);
             help.Click += delegate { KnowledgeCenterHelpWindow.MyShow(_owner, _seller); };
-            // Former settings intermediary actions now live in Knowledge
-            // Center V2 itself. The V1 view is read-only and shop-scoped.
-            var legacyPreview = Button("旧版知识库预览", 136);
-            legacyPreview.ToolTip = "只读查看当前店铺的旧版知识库，不启用旧版功能";
-            legacyPreview.Click += delegate
-            {
-                LegacyKnowledgePreviewWindow.MyShow(_owner, _seller);
-            };
             buttonPanel.Children.Add(refresh);
             buttonPanel.Children.Add(debug);
             buttonPanel.Children.Add(transfer);
             buttonPanel.Children.Add(help);
-            buttonPanel.Children.Add(legacyPreview);
             Grid.SetColumn(buttonPanel, 2);
             grid.Children.Add(buttonPanel);
             return grid;

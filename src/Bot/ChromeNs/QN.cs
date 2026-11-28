@@ -1503,15 +1503,6 @@ namespace Bot.ChromeNs
                 if (usedFirstInquiryFixedReply)
                     FirstInquiryFixedReplyService.MarkDelivered(
                         burst.SellerNick, burst.BuyerNick, burst.ShopKey);
-                if (string.Equals(answerSource, "AI生成", StringComparison.Ordinal))
-                {
-                    KnowledgeLearningService.QueueLearn(
-                        burst.CombinedQuestion,
-                        answer,
-                        "AI生成",
-                        burst.SellerNick,
-                        burst.BuyerNick);
-                }
             }
             else if (sendCancelled)
             {
@@ -1757,12 +1748,6 @@ namespace Bot.ChromeNs
             {
                 ReplyDeduplicationService.RememberDelivered(
                     burst.SellerNick, burst.BuyerNick, answer, burst.ShopKey);
-                KnowledgeLearningService.QueueLearn(
-                    burst.CombinedQuestion,
-                    answer,
-                    "视觉AI",
-                    burst.SellerNick,
-                    burst.BuyerNick);
             }
             if (ctl != null) ctl.SetSendResult(sendOk, sendOk
                 ? "已发送（合并图片与本轮消息）"

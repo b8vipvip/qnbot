@@ -57,6 +57,7 @@ namespace Bot.Knowledge
         private sealed class PendingReply
         {
             public readonly object Sync = new object();
+            public string ShopKey;
             public string Seller;
             public string Buyer;
             public string KnowledgeId;
@@ -107,12 +108,14 @@ namespace Bot.Knowledge
             knowledgeId = Clean(knowledgeId);
             if (seller.Length == 0 || buyer.Length == 0 || knowledgeId.Length == 0) return;
 
+            var shop = ResolveShopRequired(seller);
             AppendEvent(seller, buyer, knowledgeId, success ? "sent" : "send_failed",
                 question, answer, success ? "direct_local_reply" : Clean(failureReason));
             if (!success) return;
 
-            Pending[PendingKey(seller, buyer)] = new PendingReply
+            Pending[PendingKey(shop.ShopKey, buyer)] = new PendingReply
             {
+                ShopKey = shop.ShopKey,
                 Seller = seller,
                 Buyer = buyer,
                 KnowledgeId = knowledgeId,
@@ -123,18 +126,18 @@ namespace Bot.Knowledge
             CleanupPending();
         }
 
-        public static void ObserveBuyerMessage(string seller, string buyer, string text)
+        public static void ObserveBuyerMessage(string seller, string buyer, string text, DateTime messageTime)
         {
             PendingReply pending;
-            if (!TryGetPending(seller, buyer, out pending)) return;
+            if (!TryGetPending(seller, buyer, out pending) || !IsAfterSend(pending, messageTime)) return;
             text = Clean(text);
             if (text.Length == 0) return;
 
             if (IsPositiveAcknowledgement(text))
             {
+                if (!RemovePending(pending)) return;
                 AppendEvent(pending.Seller, pending.Buyer, pending.KnowledgeId, "accepted",
                     pending.Question, pending.Answer, "buyer_positive:" + Truncate(text, 100));
-                RemovePending(pending);
                 return;
             }
 
@@ -151,14 +154,17 @@ namespace Bot.Knowledge
             }
         }
 
-        public static void ObserveSellerMessage(string seller, string buyer, string text)
+        public static void ObserveSellerMessage(string seller, string buyer, string text, DateTime messageTime)
         {
             PendingReply pending;
-            if (!TryGetPending(seller, buyer, out pending)) return;
+            if (!TryGetPending(seller, buyer, out pending) || !IsAfterSend(pending, messageTime)) return;
             text = Clean(text);
             if (text.Length == 0) return;
 
-            var age = DateTime.Now - pending.SentAt;
+            // An unmarked late echo is not proof of human approval either.
+            if (text.EndsWith("[A]", StringComparison.OrdinalIgnoreCase)
+                || text.EndsWith("[AI]", StringComparison.OrdinalIgnoreCase)) return;
+            var age = messageTime - pending.SentAt;
             if (age > TimeSpan.FromMinutes(3))
             {
                 RemovePending(pending);
@@ -166,33 +172,24 @@ namespace Bot.Knowledge
             }
 
             var similarity = KnowledgeEngineV2Semantics.TextSimilarity(pending.Answer, text);
-            if (similarity >= 0.92 && age <= TimeSpan.FromSeconds(20))
-            {
-                // Normally the seller-side echo of the Bot message, not human approval.
-                return;
-            }
-            if (similarity >= 0.92)
-            {
-                AppendEvent(pending.Seller, pending.Buyer, pending.KnowledgeId, "accepted",
-                    pending.Question, pending.Answer, "manual_same_answer");
-                RemovePending(pending);
-                return;
-            }
+            // Identical seller text may be a delayed Bot echo at any age.
+            // Only buyer acknowledgements can establish acceptance here.
+            if (similarity >= 0.92 && KnowledgeEngineV2Service.AnswerFactsCompatible(pending.Answer, text)) return;
 
             bool negative;
             lock (pending.Sync) negative = pending.NegativeBuyerReaction || pending.WithdrawalRecorded;
-            if (negative && similarity < 0.78)
+            if (negative && (similarity < 0.78 || !KnowledgeEngineV2Service.AnswerFactsCompatible(pending.Answer, text)))
             {
+                if (!RemovePending(pending)) return;
                 AppendEvent(pending.Seller, pending.Buyer, pending.KnowledgeId, "correction",
                     pending.Question, pending.Answer, "manual_reply:" + Truncate(text, 220));
-                RemovePending(pending);
             }
         }
 
-        public static void ObserveWithdrawal(string seller, string buyer, string evidence)
+        public static void ObserveWithdrawal(string seller, string buyer, string evidence, DateTime messageTime)
         {
             PendingReply pending;
-            if (!TryGetPending(seller, buyer, out pending)) return;
+            if (!TryGetPending(seller, buyer, out pending) || !IsAfterSend(pending, messageTime)) return;
             lock (pending.Sync)
             {
                 if (pending.WithdrawalRecorded) return;
@@ -333,11 +330,14 @@ namespace Bot.Knowledge
                 Evidence = Truncate(evidence, 500),
                 CreatedAtTicks = DateTime.Now.Ticks
             };
-            lock (state.Sync) state.Db.SaveOneRecord(row);
-
-            AggregateCache cached;
-            if (AggregateCaches.TryGetValue(shop.ShopKey, out cached) && cached != null && cached.ByKnowledgeId != null)
-                ApplyEventToAggregate(cached.ByKnowledgeId, row);
+            // Serialize writes with cold-cache construction and publication.
+            lock (state.Sync)
+            {
+                state.Db.SaveOneRecord(row);
+                AggregateCache cached;
+                if (AggregateCaches.TryGetValue(shop.ShopKey, out cached) && cached != null && cached.ByKnowledgeId != null)
+                    ApplyEventToAggregate(cached.ByKnowledgeId, row);
+            }
 
             if (Interlocked.Increment(ref _cleanupCounter) % 200 == 0)
             {
@@ -345,9 +345,11 @@ namespace Bot.Knowledge
                 {
                     var cutoff = DateTime.Now.AddDays(-180).Ticks;
                     lock (state.Sync)
+                    {
                         state.Db.Execute("delete from KnowledgeV2FeedbackEventRow where CreatedAtTicks < ?", cutoff);
-                    AggregateCache ignored;
-                    AggregateCaches.TryRemove(shop.ShopKey, out ignored);
+                        AggregateCache ignored;
+                        AggregateCaches.TryRemove(shop.ShopKey, out ignored);
+                    }
                 }
                 catch { }
             }
@@ -362,14 +364,19 @@ namespace Bot.Knowledge
                 return cached.ByKnowledgeId;
 
             var state = GetState(shop);
-            List<KnowledgeV2FeedbackEventRow> rows;
-            lock (state.Sync) rows = state.Db.ReadRecords<KnowledgeV2FeedbackEventRow>(null);
-            var result = new ConcurrentDictionary<string, Aggregate>(StringComparer.Ordinal);
-            foreach (var row in rows.Where(x => x != null && !string.IsNullOrWhiteSpace(x.KnowledgeId)))
-                ApplyEventToAggregate(result, row);
-            var next = new AggregateCache { ByKnowledgeId = result };
-            AggregateCaches[shop.ShopKey] = next;
-            return next.ByKnowledgeId;
+            lock (state.Sync)
+            {
+                if (AggregateCaches.TryGetValue(shop.ShopKey, out cached)
+                    && cached != null && cached.ByKnowledgeId != null)
+                    return cached.ByKnowledgeId;
+                var rows = state.Db.ReadRecords<KnowledgeV2FeedbackEventRow>(null);
+                var result = new ConcurrentDictionary<string, Aggregate>(StringComparer.Ordinal);
+                foreach (var row in rows.Where(x => x != null && !string.IsNullOrWhiteSpace(x.KnowledgeId)))
+                    ApplyEventToAggregate(result, row);
+                var next = new AggregateCache { ByKnowledgeId = result };
+                AggregateCaches[shop.ShopKey] = next;
+                return next.ByKnowledgeId;
+            }
         }
 
         private static void ApplyEventToAggregate(ConcurrentDictionary<string, Aggregate> target, KnowledgeV2FeedbackEventRow row)
@@ -412,9 +419,11 @@ namespace Bot.Knowledge
         private static ShopContext ResolveShopRequired(string seller)
         {
             var current = ShopSettingsScope.Current;
-            if (current != null) return current;
-            var shop = ShopContextLocator.ResolveBySellerNick(Clean(seller));
-            if (shop == null) throw new InvalidOperationException("Knowledge V2 feedback无法确定当前店铺身份。");
+            var shop = current ?? ShopContextLocator.ResolveBySellerNick(Clean(seller));
+            if (shop == null || !shop.HasStableSellerId || string.IsNullOrWhiteSpace(shop.ShopKey)
+                || (!DirectOrderIdentityResolver.IdentityEquals(shop.SellerNick, seller)
+                    && !DirectOrderIdentityResolver.IdentityEquals(shop.DisplayName, seller)))
+                throw new InvalidOperationException("Knowledge V2 feedback无法确定当前店铺身份。");
             return shop;
         }
 
@@ -423,12 +432,16 @@ namespace Bot.Knowledge
             pending = null;
             seller = Clean(seller);
             buyer = Clean(buyer);
-            if (!Pending.TryGetValue(PendingKey(seller, buyer), out pending) || pending == null)
+            var shop = ResolveShopRequired(seller);
+            if (!Pending.TryGetValue(PendingKey(shop.ShopKey, buyer), out pending) || pending == null)
             {
-                pending = Pending.Values.FirstOrDefault(x => x != null
+                var matches = Pending.Values.Where(x => x != null
+                    && string.Equals(x.ShopKey, shop.ShopKey, StringComparison.Ordinal)
                     && string.Equals(x.Seller, seller, StringComparison.Ordinal)
-                    && BuyerIdentityAliasService.AreEquivalent(seller, x.Buyer, buyer));
-                if (pending == null) return false;
+                    && BuyerIdentityAliasService.AreEquivalent(seller, x.Buyer, buyer))
+                    .Take(2).ToList();
+                if (matches.Count != 1) return false;
+                pending = matches[0];
             }
             if (pending.SentAt < DateTime.Now.AddMinutes(-3))
             {
@@ -439,29 +452,90 @@ namespace Bot.Knowledge
             return true;
         }
 
-        private static void RemovePending(PendingReply pending)
+        private static bool IsAfterSend(PendingReply pending, DateTime messageTime)
         {
-            if (pending == null) return;
-            PendingReply ignored;
-            Pending.TryRemove(PendingKey(pending.Seller, pending.Buyer), out ignored);
+            return pending != null && messageTime != DateTime.MinValue
+                && messageTime >= pending.SentAt
+                && messageTime <= DateTime.Now.AddSeconds(5)
+                && messageTime - pending.SentAt <= TimeSpan.FromMinutes(3);
+        }
+
+        internal static List<KnowledgeV2FeedbackEventRow> ExportEvents(string seller)
+        {
+            var state = GetState(ResolveShopRequired(seller));
+            lock (state.Sync)
+                return state.Db.ReadRecords<KnowledgeV2FeedbackEventRow>(null)
+                    .Where(x => x != null).OrderBy(x => x.CreatedAtTicks).ToList();
+        }
+
+        internal static void ValidateBackupEvents(IEnumerable<KnowledgeV2FeedbackEventRow> events, IEnumerable<KnowledgeV2Record> records)
+        {
+            var ids = new HashSet<string>(StringComparer.Ordinal);
+            var knowledgeIds = new HashSet<string>((records ?? Enumerable.Empty<KnowledgeV2Record>())
+                .Where(x => x != null).Select(x => x.Id), StringComparer.Ordinal);
+            var types = new HashSet<string>(new[] { "sent", "send_failed", "accepted", "correction", "withdrawal", "buyer_negative" }, StringComparer.Ordinal);
+            foreach (var row in events ?? Enumerable.Empty<KnowledgeV2FeedbackEventRow>())
+            {
+                Guid eventId;
+                if (row == null || !Guid.TryParseExact(row.Id, "N", out eventId) || eventId == Guid.Empty
+                    || !ids.Add(row.Id) || !knowledgeIds.Contains(row.KnowledgeId)
+                    || !types.Contains(row.EventType) || row.CreatedAtTicks <= 0
+                    || row.CreatedAtTicks > DateTime.Now.AddMinutes(5).Ticks
+                    || (row.Question ?? string.Empty).Length > 800 || (row.Answer ?? string.Empty).Length > 1400
+                    || (row.Evidence ?? string.Empty).Length > 500)
+                    throw new InvalidDataException("知识包反馈事件无效、重复或没有对应知识。");
+            }
+        }
+
+        internal static int MergeBackupEvents(string seller, string sourceShopKey, IEnumerable<KnowledgeV2FeedbackEventRow> events)
+        {
+            var shop = ResolveShopRequired(seller);
+            if (!string.Equals(shop.ShopKey, sourceShopKey, StringComparison.Ordinal))
+                throw new InvalidOperationException("反馈备份仅允许恢复到原店铺。");
+            var records = KnowledgeEngineV2Repository.LoadAll(seller);
+            var incoming = (events ?? Enumerable.Empty<KnowledgeV2FeedbackEventRow>()).ToList();
+            ValidateBackupEvents(incoming, records);
+            if (incoming.Any(x => !DirectOrderIdentityResolver.IdentityEquals(x.Seller, shop.SellerNick)
+                && !DirectOrderIdentityResolver.IdentityEquals(x.Seller, shop.DisplayName)))
+                throw new InvalidDataException("反馈事件卖家身份不匹配。");
+            var state = GetState(shop);
+            lock (state.Sync)
+            {
+                var ids = new HashSet<string>(state.Db.ReadRecords<KnowledgeV2FeedbackEventRow>(null)
+                    .Where(x => x != null).Select(x => x.Id), StringComparer.Ordinal);
+                var cutoff = DateTime.Now.AddDays(-180).Ticks;
+                var additions = incoming.Where(x => x.CreatedAtTicks >= cutoff && ids.Add(x.Id)).Cast<object>().ToList();
+                if (additions.Count > 0)
+                {
+                    state.Db.SaveRecordsInTransaction(additions);
+                    AggregateCache ignored;
+                    AggregateCaches.TryRemove(shop.ShopKey, out ignored);
+                }
+                return additions.Count;
+            }
+        }
+
+        private static bool RemovePending(PendingReply pending)
+        {
+            if (pending == null) return false;
+            // Compare-and-remove: an old acknowledgement must never remove a newer reply.
+            return ((ICollection<KeyValuePair<string, PendingReply>>)Pending).Remove(
+                new KeyValuePair<string, PendingReply>(PendingKey(pending.ShopKey, pending.Buyer), pending));
         }
 
         private static void CleanupPending()
         {
             if (Pending.Count < 200) return;
             var cutoff = DateTime.Now.AddMinutes(-5);
-            foreach (var key in Pending.Where(x => x.Value == null || x.Value.SentAt < cutoff).Select(x => x.Key).Take(100).ToList())
-            {
-                PendingReply ignored;
-                Pending.TryRemove(key, out ignored);
-            }
+            foreach (var pair in Pending.Where(x => x.Value == null || x.Value.SentAt < cutoff).Take(100).ToList())
+                ((ICollection<KeyValuePair<string, PendingReply>>)Pending).Remove(pair);
         }
 
         private static bool IsPositiveAcknowledgement(string value)
         {
             var compact = Compact(value);
             if (compact.Length > 16) return false;
-            var tokens = new[] { "好", "好的", "可以", "行", "谢谢", "感谢", "明白", "明白了", "知道了", "收到", "嗯", "哦", "ok", "okay", "解决了" };
+            var tokens = new[] { "谢谢", "感谢", "明白了", "解决了", "已解决", "问题解决了" };
             return tokens.Any(x => string.Equals(compact, x, StringComparison.OrdinalIgnoreCase));
         }
 
@@ -472,9 +546,10 @@ namespace Bot.Knowledge
             return tokens.Any(x => compact.IndexOf(x, StringComparison.OrdinalIgnoreCase) >= 0);
         }
 
-        private static string PendingKey(string seller, string buyer)
+        private static string PendingKey(string shopKey, string buyer)
         {
-            return Clean(seller) + "|" + Clean(buyer);
+            shopKey = Clean(shopKey);
+            return shopKey.Length + ":" + shopKey + Clean(buyer);
         }
 
         private static string Compact(string value)

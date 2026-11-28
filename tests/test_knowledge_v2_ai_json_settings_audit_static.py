@@ -58,7 +58,8 @@ def test_knowledge_v2_settings_audits_every_visible_operator_control_and_result(
     page = read("src/Bot/Knowledge/KnowledgeCenterV2OperationsPages.cs")
     audit = read("src/Bot/Knowledge/KnowledgeV2OperatorUiBridge.cs")
 
-    assert 'Content = "启用 Knowledge Engine V2"' in page
+    assert 'Text = "运行状态：始终启用（不可关闭）"' in page
+    assert 'Content = "启用 Knowledge Engine V2"' not in page
     assert 'Content = "保存设置"' in page
     assert 'Content = "立即预热索引"' in page
     assert '_mode = new ComboBox { Visibility = Visibility.Collapsed }' in page
@@ -112,11 +113,8 @@ def test_one_line_knowledge_ai_rejects_non_finite_confidence_metadata():
     assert "!double.IsInfinity(value)" in number
 
 
-def test_knowledge_and_reply_score_clamps_reject_non_finite_values():
+def test_v2_knowledge_and_feedback_score_clamps_reject_non_finite_values():
     for path in (
-        "src/Bot/ChromeNs/KnowledgePolicyProfileService.cs",
-        "src/Bot/ChromeNs/SmartReplyRouterService.cs",
-        "src/Bot/ChromeNs/KnowledgeMemoryEngine.cs",
         "src/Bot/Knowledge/KnowledgeEngineV2.Semantics.cs",
         "src/Bot/Knowledge/KnowledgeEngineV2.Service.Index.cs",
         "src/Bot/Knowledge/KnowledgeEngineV2FeedbackService.cs",
@@ -125,3 +123,5 @@ def test_knowledge_and_reply_score_clamps_reject_non_finite_values():
         clamp = source[source.index("private static double Clamp"):]
         assert "double.IsNaN(value)" in clamp
         assert "double.IsInfinity(value)" in clamp
+
+

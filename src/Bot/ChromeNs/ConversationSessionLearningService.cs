@@ -801,7 +801,8 @@ namespace Bot.ChromeNs
                     ["knowledgeCorpusError"] = string.Empty,
                     ["writeMode"] = EnableVerifiedCorpusNewKnowledgeWrites || EnableVerifiedCorpusCorrectionWrites
                         ? "ai_auto_publish_new_knowledge_and_verified_updates" : "dry_run",
-                    ["newKnowledgeWriteMode"] = EnableVerifiedCorpusNewKnowledgeWrites ? "ai_auto_publish" : "dry_run",
+                    ["newKnowledgeWriteMode"] = EnableVerifiedCorpusNewKnowledgeWrites
+                        ? "ai_auto_publish_verified_human_evidence" : "dry_run",
                     ["genericSuggestionWriteMode"] = EnableAutomaticWrites ? "automatic" : "dry_run",
                     ["windowStart"] = from.ToString("o"),
                     ["windowEnd"] = endAt.ToString("o")
@@ -1045,19 +1046,12 @@ namespace Bot.ChromeNs
                             skipped++;
                             continue;
                         }
-                        if (!EnableAutomaticWrites)
-                        {
-                            suggestion.ApplyMessage = "通用会话AI建议仍为dry-run；只有独立验证的真人问答新增/修订路径可以自动写入";
-                            skipped++;
-                            continue;
-                        }
-                        var result = ReviewedKnowledgeLearningService.ApplyReviewedKnowledge(
-                            suggestion.Question, suggestion.Answer, suggestion.Category, suggestion.Keywords,
-                            localFirst ? "本地优先-会话AI复盘" : "人工接待复盘",
-                            suggestion.Confidence, suggestion.EvidenceType);
-                        suggestion.Applied = result != null && result.Success && (result.Added || result.Updated);
-                        suggestion.ApplyMessage = result == null ? "知识写入结果为空" : result.Message;
-                        if (suggestion.Applied) applied++; else skipped++;
+                        // Generic AI suggestions do not carry the exact source message IDs and
+                        // source-stable corpus fingerprint required for a production write.
+                        // Only the verified V2 add/correction paths below may publish automatically.
+                        suggestion.Applied = false;
+                        suggestion.ApplyMessage = "缺少完整的 Knowledge V2 真人消息证据链，保留候选；生产新增/修订由带消息ID和语料指纹的验证路径自动处理";
+                        skipped++;
                     }
 
                     if (EnableVerifiedCorpusNewKnowledgeWrites)
@@ -1066,7 +1060,7 @@ namespace Bot.ChromeNs
                             ref expectedCurrentFingerprint, out newKnowledgeSkipped, out newKnowledgeRetryNeeded);
 
                     if (EnableVerifiedCorpusCorrectionWrites)
-                        corpusApplied = ApplyVerifiedCorpusCorrections(session, corpusAnalysis, expectedCurrentFingerprint, out corpusSkipped);
+                        corpusApplied = ApplyVerifiedCorpusCorrections(session, corpusAnalysis, turns, cards, expectedCurrentFingerprint, out corpusSkipped);
                 }
 
                 report = LoadReport(session.EntityId) ?? report ?? NewReport(session);
@@ -1407,6 +1401,8 @@ namespace Bot.ChromeNs
         private static int ApplyVerifiedCorpusCorrections(
             ActiveSession session,
             KnowledgeCorpusAnalysisResult analysis,
+            List<ConversationContextTurn> turns,
+            List<BotConversationHistoryEntity> cards,
             string expectedCurrentFingerprint,
             out int skipped)
         {
@@ -1416,7 +1412,7 @@ namespace Bot.ChromeNs
                 || !string.Equals(analysis.SourceFingerprint, analysis.AfterFingerprint, StringComparison.Ordinal))
                 return 0;
 
-            if (analysis.Candidates.Count == 0) return 0;
+            if (analysis.Candidates.Count == 0 || string.IsNullOrWhiteSpace(expectedCurrentFingerprint)) return 0;
 
             // The corpus may have changed after the batch analyzer returned. Recheck
             // the exact shop-wide fingerprint immediately before the first write.
@@ -1440,7 +1436,7 @@ namespace Bot.ChromeNs
                 return 0;
             }
             if (!string.Equals(currentFingerprint,
-                string.IsNullOrWhiteSpace(expectedCurrentFingerprint) ? analysis.SourceFingerprint : expectedCurrentFingerprint,
+                expectedCurrentFingerprint,
                 StringComparison.Ordinal))
             {
                 foreach (var candidate in analysis.Candidates)
@@ -1455,7 +1451,8 @@ namespace Bot.ChromeNs
             var applied = 0;
             foreach (var candidate in analysis.Candidates)
             {
-                if (!CanAutoApplyVerifiedCorpusCorrection(candidate, session.Seller, analysis.SourceFingerprint))
+                if (!CanAutoApplyVerifiedCorpusCorrection(candidate, session.Seller, analysis.SourceFingerprint)
+                    || !HasVerifiedCorrectionTranscript(candidate, turns, cards))
                 {
                     if (candidate != null)
                         candidate.ApplyMessage = "未达到高置信真人纠正自动应用门槛，保留候选供人工审核";
@@ -1466,6 +1463,7 @@ namespace Bot.ChromeNs
                 try
                 {
                     string applyMessage;
+                    string nextFingerprint;
                     var success = KnowledgeEngineV2Repository.TryApplyVerifiedSessionCorrection(
                         session.Seller,
                         candidate.KnowledgeId,
@@ -1474,10 +1472,22 @@ namespace Bot.ChromeNs
                         candidate.Answer,
                         candidate.EvidenceMessageIds,
                         candidate.Confidence,
+                        expectedCurrentFingerprint,
+                        out nextFingerprint,
                         out applyMessage);
                     candidate.Applied = success;
                     candidate.ApplyMessage = applyMessage;
-                    if (success) applied++; else skipped++;
+                    if (success)
+                    {
+                        applied++;
+                        expectedCurrentFingerprint = nextFingerprint;
+                    }
+                    else
+                    {
+                        skipped++;
+                        if (!string.Equals(nextFingerprint, expectedCurrentFingerprint, StringComparison.Ordinal))
+                            break;
+                    }
                 }
                 catch (Exception ex)
                 {
@@ -1485,9 +1495,51 @@ namespace Bot.ChromeNs
                     candidate.ApplyMessage = "自动修订异常，候选已保留且本轮未确认写入：" + Clean(ex.Message, 240);
                     skipped++;
                     Log.ErrorWithMaxCount("Knowledge V2真人证据自动修订失败: " + ex.GetType().Name, 10);
+                    // A database commit may have succeeded before index/audit failed.
+                    // Never continue from an unknown corpus revision.
+                    break;
                 }
             }
             return applied;
+        }
+
+        private static bool HasVerifiedCorrectionTranscript(
+            Suggestion candidate, List<ConversationContextTurn> turns, List<BotConversationHistoryEntity> cards)
+        {
+            if (candidate == null || cards == null || turns == null || candidate.EvidenceMessageIds == null)
+                return false;
+            var ordered = turns.Where(x => x != null)
+                .OrderBy(x => x.PreciseTimeTicks > 0 ? x.PreciseTimeTicks : x.Timestamp.Ticks).ToList();
+            var evidence = candidate.EvidenceMessageIds.Select(id => FindUniqueTurnByMessageId(turns, id)).ToList();
+            if (evidence.Count == 0 || evidence.Any(x => x == null || x.Withdrawn || x.Role != "assistant"
+                || IsBotTurn(x, cards) || x.Timestamp == DateTime.MinValue
+                || !(x.NativeAliases ?? new string[0]).Any(id => !string.IsNullOrWhiteSpace(id))))
+                return false;
+            var first = ordered.IndexOf(evidence[0]);
+            if (first < 1) return false;
+            var buyerIndex = ordered.FindLastIndex(first - 1, x => x.Role == "user" && !x.Withdrawn);
+            if (buyerIndex < 0 || ordered[buyerIndex].Timestamp == DateTime.MinValue) return false;
+            if (!string.Equals(KnowledgeEngineV2Semantics.Compact(Redact(Clean(ordered[buyerIndex].Text, 400))),
+                KnowledgeEngineV2Semantics.Compact(candidate.Question), StringComparison.Ordinal))
+                return false;
+            var window = ordered.Skip(buyerIndex + 1).TakeWhile(x => x.Role != "user" || x.Withdrawn).ToList();
+            if (evidence.Any(x => !window.Contains(x))) return false;
+            var priorBot = ordered.Skip(buyerIndex + 1).Take(first - buyerIndex - 1)
+                .Any(x => x.Role == "assistant" && IsBotTurn(x, cards)
+                    && (candidate.EvidenceType != "withdrawn_bot_then_manual" || x.Withdrawn)
+                    && string.Equals(StripAi(Redact(Clean(x.Text, 1200))), candidate.OldAnswer, StringComparison.Ordinal));
+            if (!priorBot) return false;
+            // Reconstruct the entire final live human reply sequence, not an arbitrary AI-selected fragment.
+            var finalHuman = window.LastOrDefault(x => x.Role == "assistant" && !x.Withdrawn && !IsBotTurn(x, cards));
+            if (finalHuman == null || !evidence.Contains(finalHuman)) return false;
+            var last = window.IndexOf(finalHuman);
+            var start = last;
+            while (start > 0 && window[start - 1].Role == "assistant"
+                && !window[start - 1].Withdrawn && !IsBotTurn(window[start - 1], cards)) start--;
+            var bundle = window.Skip(start).Take(last - start + 1).ToList();
+            if (bundle.Any(x => !evidence.Contains(x))) return false;
+            var actual = StripAi(Redact(Clean(string.Join("\n", bundle.Select(x => x.Text)), 1200)));
+            return string.Equals(actual, candidate.Answer, StringComparison.Ordinal);
         }
 
         private static bool CanAutoApplyVerifiedCorpusCorrection(

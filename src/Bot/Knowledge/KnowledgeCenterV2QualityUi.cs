@@ -1,3 +1,5 @@
+using Bot.ChromeNs;
+using Bot.ShopScope;
 using System;
 using System.Collections.Generic;
 using System.Collections.ObjectModel;
@@ -82,6 +84,7 @@ namespace Bot.Knowledge
     internal sealed class KnowledgeV2QualityWindow : Window
     {
         private readonly string _seller;
+        private readonly string _shopKey;
         private readonly ObservableCollection<KnowledgeV2QualityItem> _view = new ObservableCollection<KnowledgeV2QualityItem>();
         private List<KnowledgeV2QualityItem> _all = new List<KnowledgeV2QualityItem>();
         private TextBox _search;
@@ -94,6 +97,7 @@ namespace Bot.Knowledge
         {
             Owner = owner;
             _seller = seller ?? string.Empty;
+            _shopKey = KnowledgeCenterV2Context.ResolveShopKey(owner, _seller);
             Title = "Knowledge Center V2 - 知识质量";
             Width = 1180;
             Height = 760;
@@ -194,6 +198,19 @@ namespace Bot.Knowledge
             return new DataGridTextColumn { Header = header, Binding = new Binding(path), Width = width };
         }
 
+        private T InShop<T>(Func<T> action)
+        {
+            if (string.IsNullOrWhiteSpace(_shopKey))
+                throw new InvalidOperationException("质量统计缺少精确 ShopKey。");
+            var shop = ShopContextLocator.ResolveRuntimeByShopKey(_shopKey);
+            if (shop == null || !shop.HasStableSellerId
+                || !string.Equals(shop.ShopKey, _shopKey, StringComparison.Ordinal)
+                || (!DirectOrderIdentityResolver.IdentityEquals(shop.SellerNick, _seller)
+                    && !DirectOrderIdentityResolver.IdentityEquals(shop.DisplayName, _seller)))
+                throw new InvalidOperationException("质量统计店铺身份不匹配。");
+            using (ShopSettingsScope.Enter(shop)) return action();
+        }
+
         private void RefreshView()
         {
             if (string.IsNullOrWhiteSpace(_seller))
@@ -202,7 +219,7 @@ namespace Bot.Knowledge
                 return;
             }
             _summary.Text = "正在读取质量数据...";
-            Task.Run(() => KnowledgeEngineV2FeedbackService.GetQualityItems(_seller))
+            Task.Run(() => InShop(() => KnowledgeEngineV2FeedbackService.GetQualityItems(_seller)))
                 .ContinueWith(t => Dispatcher.BeginInvoke(new Action(() =>
                 {
                     if (t.IsFaulted)
@@ -247,9 +264,11 @@ namespace Bot.Knowledge
                 _details.Text = string.Empty;
                 return;
             }
-            Task.Run(() => KnowledgeEngineV2FeedbackService.GetRecentEvents(_seller, item.KnowledgeId, 12))
+            Task.Run(() => InShop(() => KnowledgeEngineV2FeedbackService.GetRecentEvents(_seller, item.KnowledgeId, 12)))
                 .ContinueWith(t => Dispatcher.BeginInvoke(new Action(() =>
                 {
+                    var current = _grid.SelectedItem as KnowledgeV2QualityItem;
+                    if (current == null || !string.Equals(current.KnowledgeId, item.KnowledgeId, StringComparison.Ordinal)) return;
                     var lines = new List<string>
                     {
                         "知识：" + item.Title,

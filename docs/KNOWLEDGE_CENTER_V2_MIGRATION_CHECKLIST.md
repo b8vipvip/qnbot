@@ -1,65 +1,35 @@
-# Knowledge Center V2 生产迁移检查清单
+# Knowledge Engine V2-only 发布与数据完整性检查
 
-## 升级前
+本清单用于验证客户端只运行 Knowledge Engine V2。它不再指导从 V1 问答库迁移数据。
 
-- 备份当前 Bot 用户数据目录。
-- 在旧知识库执行一次“知识库完整包”导出。
-- 记录当前正式版号与 Git SHA。
-- 使用测试店铺验证 Knowledge Center V2 页面能识别正确 ShopKey。
+## 发布前静态检查
 
-## 首次启动
+- [ ] 不存在 `KnowledgeBaseEntry`、`KnowledgeBaseJson`、`BotFeatureStore.GetKnowledgeBase` 或 `SaveKnowledgeBase`。
+- [ ] 不存在 V1 Memory Engine、V1 embedding retriever、V1 contextual reply、旧版管理页、旧版策略编辑器和旧版云同步协议。
+- [ ] `Bot.csproj`、`Directory.Build.props`、`Directory.Build.targets` 不再引用已删除的 V1 文件。
+- [ ] `KnowledgeEngineV2Repository` 不包含 V1 自动迁移、双写镜像或旧库回退。
+- [ ] 历史扫描、智能导入和自动学习只解析并写入 `KnowledgeV2Record`。
 
-- 确认日志出现 `Knowledge Center V2完成旧知识迁移`。
-- 确认日志出现 `Knowledge Engine V2内存索引已构建`。
-- 确认 Memory Engine v1 Timer 已停止，V2 wrapper 已挂载。
-- 在“设置”页先使用 `shadow` 模式进行真实会话观察。
+## 店铺数据边界
 
-## Shadow 验收
+- [ ] 每次写入都解析稳定 ShopKey，并核对 SellerNick 与当前千牛/CDP 会话。
+- [ ] 两个店铺即使昵称相同，也使用独立 V2 SQLite、索引、Working Memory、审计、备份和云同步状态。
+- [ ] 缺少 ShopKey、身份不匹配或云端凭据失效时 fail closed，不猜测店铺归属。
+- [ ] 新安装没有 V2 数据库时只创建空 V2 数据库；不会从旧 JSON 自动导入。
+- [ ] 数据恢复只接受 Knowledge V2 完整包或本店 V2 云端数据。
 
-至少覆盖：
+## 检索与自动学习
 
-- 明确售前事实问题；
-- “这个呢 / 能用吗”之类上下文补全问题；
-- 购买渠道与会员类型等同实体不同 Predicate 问题；
-- 图片消息；
-- 下单 / 付款事件；
-- 售后、退款、投诉等高风险问题；
-- 人工客服接管；
-- 多买家并发。
+- [ ] 买家文本回复先经过 V2 检索与风险/条件判断；高风险、订单上下文不足或冲突知识不会被本地直答。
+- [ ] 图片/OCR 只作为证据补充，不覆盖买家原始问题的意图和会话记忆。
+- [ ] 完整语料自动新增必须具备真实买家问题消息ID和真人客服回复消息ID。
+- [ ] Bot-only、来源不明、缺少原始消息ID、高风险、历史覆盖不完整或指纹漂移均不能自动发布。
+- [ ] 通过全部证据门禁的新增/修订直接写入 active、刷新 V2 索引并保留可回滚修订。
+- [ ] 断线、重启和并发更新不会丢失 V2 记录、审计或索引最终一致性。
 
-检查：
+## CI 与构建
 
-- V2 检索耗时；
-- Top Match 是否同业务事实；
-- 是否发生跨 Predicate 假冲突；
-- Working Memory 是否只补充缺失信息；
-- 高风险问题是否继续交给安全/AI链路。
-
-## 性能验收
-
-在“测试台”执行 30 次热查询：
-
-```text
-目标：P95 <= 50ms
-```
-
-如果首次测试较慢，应区分首次迁移/预热和后续热查询，不把首次构建耗时计入热查询指标。
-
-## Production 切换
-
-- 将 V2 模式切换为 `production`。
-- 保持“本地优先”回复模式。
-- 验证高置信本地知识无需 AI 即可回复。
-- 验证发送仍经过目标买家确认、并发相关性门控和 `SendTextWithRetryAsync`。
-
-## 学习候选
-
-- 新人工回复/会话学习内容应进入“学习”页面。
-- 未批准候选不得获得本地直答资格。
-- 候选修正不得直接覆盖 active 业务事实。
-
-## 导入恢复
-
-- V2 完整包导入前应自动生成 `backups/knowledge-center-v2-before-import-*.json`。
-- 导入后重新打开测试台验证代表性问题。
-- 如需回退结构化数据，可使用备份完整包恢复。
+- [ ] Python 静态测试全部通过。
+- [ ] Windows 生命周期与 ShopKey 隔离测试全部通过。
+- [ ] Bot x64 Release 构建成功。
+- [ ] 安装包包含 V2 SQLite、V2 UI、V2 云同步和必要诊断组件，不包含 V1 知识文件。

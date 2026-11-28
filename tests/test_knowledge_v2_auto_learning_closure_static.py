@@ -33,7 +33,8 @@ def test_session_corpus_correction_is_exact_id_revision_guarded_and_rollbackable
     assert "observedAnswer, StringComparison.Ordinal" in method
     assert 'corrected.SourceType = "human_evidence_auto_reviewed";' in method
     assert "SaveRecordsInTransaction(new List<object> { ToRow(corrected), revision });" in method
-    assert "MirrorOneToLegacy(shop, corrected)" in method
+    assert "MirrorOneToLegacy" not in method
+    assert "BotFeatureStore.SaveKnowledgeBase" not in method
     assert "KnowledgeEngineV2Service.ApplyRecordUpdate(seller, corrected)" in method
 
 

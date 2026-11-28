@@ -35,8 +35,6 @@ namespace Bot.ChromeNs
             public DateTime ExpiresAt;
         }
 
-        private static readonly ConcurrentDictionary<string, object> SaveLocks =
-            new ConcurrentDictionary<string, object>(StringComparer.Ordinal);
         private static readonly ConcurrentDictionary<string, SourceStamp> Sources =
             new ConcurrentDictionary<string, SourceStamp>();
         private static readonly ConcurrentDictionary<string, BlockStamp> Blocks =
@@ -45,8 +43,6 @@ namespace Bot.ChromeNs
             new ConcurrentDictionary<string, DateTime>();
         private static readonly ConcurrentDictionary<string, DateTime> ManualComparisons =
             new ConcurrentDictionary<string, DateTime>(StringComparer.Ordinal);
-
-        public static event EventHandler KnowledgeBaseChanged;
 
         public static void RegisterAnswerSource(
             string seller,
@@ -97,113 +93,6 @@ namespace Bot.ChromeNs
             // today's editable preset must not fabricate provenance for old
             // messages or for an AI answer with identical wording.
             return string.Empty;
-        }
-
-        public static bool TryFindLocalAnswer(
-            string seller,
-            string buyer,
-            string question,
-            out KnowledgeBaseEntry matched,
-            out double score)
-        {
-            matched = null;
-            score = 0;
-
-            // When Knowledge V2 is enabled it is the only authority allowed to decide
-            // whether a local record can answer directly. V2 may intentionally return
-            // Continue because of conflict, low confidence, typed-evidence requirements,
-            // or a cold index; a legacy fuzzy match here must not bypass those gates.
-            // If the exact ShopKey's V2 setting cannot be read, fail closed as well.
-            try
-            {
-                if (KnowledgeEngineV2Service.IsEnabled(seller))
-                {
-                    Log.Info("Knowledge V2已启用，跳过legacy本地直答，交由V2直答/已批准上下文决策: buyer=" + buyer);
-                    return false;
-                }
-            }
-            catch (Exception ex)
-            {
-                Log.ErrorWithMaxCount("无法确认Knowledge V2权威状态，拒绝legacy本地直答: " + ex.Message, 10);
-                return false;
-            }
-
-            var policy = BotFeatureStore.GetMessagePolicy();
-            if (policy == null || !policy.EnableKnowledgeBase || string.IsNullOrWhiteSpace(question)) return false;
-
-            ConversationContextTurn latestAgentPrompt = null;
-            if (IsShortContextReply(question))
-            {
-                var turns = ConversationContextStore.GetRecentTurns(seller, buyer, question, 8);
-                latestAgentPrompt = turns.LastOrDefault(x => x.Role == "assistant" && !string.IsNullOrWhiteSpace(x.Text));
-            }
-
-            foreach (var item in BotFeatureStore.GetKnowledgeBase()
-                .Where(x => x != null && x.Enabled && !string.IsNullOrWhiteSpace(x.Answer))
-                .Where(x => !Bot.Knowledge.KnowledgeV2AuthorityPolicy.IsUnapprovedLegacyLearningEntry(x)))
-            {
-                var currentScore = Score(item, question, false);
-                if (latestAgentPrompt != null)
-                    currentScore = Math.Max(currentScore, Score(item, latestAgentPrompt.Text, true));
-                if (currentScore > score)
-                {
-                    score = currentScore;
-                    matched = item;
-                }
-            }
-            return matched != null && score >= 0.84;
-        }
-
-        private static bool IsShortContextReply(string value)
-        {
-            var compact = Normalize(value);
-            if (compact.Length == 0 || compact.Length > 32) return false;
-            if (compact.IndexOf('?') >= 0 || compact.IndexOf('？') >= 0) return false;
-            if (Regex.IsMatch(compact, @"^[a-z0-9@._+\-:/]+$", RegexOptions.IgnoreCase)) return true;
-            if (Regex.IsMatch(compact, @"^\d+$")) return true;
-            return compact.Length <= 8;
-        }
-
-        private static double Score(KnowledgeBaseEntry item, string query, bool contextOnly)
-        {
-            var q = KnowledgeAiService.NormalizeQuestion(query);
-            var title = KnowledgeAiService.NormalizeQuestion(item.Title);
-            if (string.IsNullOrWhiteSpace(q) || string.IsNullOrWhiteSpace(title)) return 0;
-            if (q == title) return contextOnly ? 0.91 : 1.0;
-            if (Math.Min(q.Length, title.Length) >= 4 && (q.Contains(title) || title.Contains(q)))
-                return contextOnly ? 0.87 : 0.95;
-            foreach (var keyword in SplitKeywords(item.Keywords))
-            {
-                var normalizedKeyword = KnowledgeAiService.NormalizeQuestion(keyword);
-                if (normalizedKeyword.Length >= 2 && q.Contains(normalizedKeyword))
-                    return contextOnly ? 0.85 : 0.90;
-            }
-            var similarity = BigramSimilarity(q, title);
-            if (similarity >= 0.68) return contextOnly ? 0.84 : 0.86;
-            return similarity * 0.75;
-        }
-
-        private static IEnumerable<string> SplitKeywords(string value)
-        {
-            return (value ?? string.Empty)
-                .Split(new[] { ',', '，', ';', '；', '|', ' ', '\r', '\n' }, StringSplitOptions.RemoveEmptyEntries)
-                .Select(x => x.Trim());
-        }
-
-        private static double BigramSimilarity(string a, string b)
-        {
-            var aa = Bigrams(a);
-            var bb = Bigrams(b);
-            if (aa.Count == 0 || bb.Count == 0) return 0;
-            var common = aa.Intersect(bb).Count();
-            return (2.0 * common) / (aa.Count + bb.Count);
-        }
-
-        private static HashSet<string> Bigrams(string value)
-        {
-            var set = new HashSet<string>(StringComparer.Ordinal);
-            for (var i = 0; i + 1 < (value ?? string.Empty).Length; i++) set.Add(value.Substring(i, 2));
-            return set;
         }
 
         public static void AllowNextManualSend(string seller, string buyer, string answer)
@@ -584,7 +473,7 @@ namespace Bot.ChromeNs
             double similarity = 0;
             try { similarity = KnowledgeEngineV2Semantics.TextSimilarity(botAnswer, manualAnswer); }
             catch { similarity = Normalize(botAnswer) == Normalize(manualAnswer) ? 1 : 0; }
-            if (similarity >= 0.92)
+            if (similarity >= 0.92 && KnowledgeEngineV2Service.AnswerFactsCompatible(botAnswer, manualAnswer))
             {
                 MessageProcessingTraceService.RecordLearningComparison(
                     seller,
@@ -645,7 +534,8 @@ namespace Bot.ChromeNs
 
             if (!shouldLearn
                 || (action != "add" && action != "update")
-                || confidence < 0.95
+                || double.IsNaN(confidence) || double.IsInfinity(confidence)
+                || confidence < 0.95 || confidence > 1.0
                 || !CanLearn(question, manualAnswer)
                 // The model's normalized question/answer are review metadata only. The
                 // durable write below deliberately stores the actual buyer wording and
@@ -715,195 +605,6 @@ namespace Bot.ChromeNs
         {
             value = (value ?? string.Empty).Replace("\r", " ").Replace("\n", " ").Trim();
             return value.Length <= max ? value : value.Substring(0, max) + "...";
-        }
-
-        public static void QueueLearn(
-            string question,
-            string answer,
-            string sourceType,
-            string seller,
-            string buyer)
-        {
-            if (!CanLearn(question, answer)) return;
-            if (ShopReceptionPolicy.RequiresManualKnowledgeReview(seller, question, answer))
-            {
-                Log.Info("店铺业务知识自动学习改为会话复盘待审核：source=" + sourceType
-                    + ", seller=" + seller);
-                return;
-            }
-            var shop = ResolveShop(seller);
-            Task.Run(async () =>
-            {
-                IDisposable scope = null;
-                try
-                {
-                    if (shop != null) scope = ShopSettingsScope.Enter(shop);
-                    await LearnAsync(question, answer, sourceType, seller, buyer);
-                }
-                catch (Exception ex)
-                {
-                    Log.Info("本店知识自动学习失败：" + ex.Message);
-                }
-                finally
-                {
-                    if (scope != null) scope.Dispose();
-                }
-            });
-        }
-
-        public static async Task<KnowledgeLearningResult> LearnAsync(
-            string question,
-            string answer,
-            string sourceType,
-            string seller,
-            string buyer)
-        {
-            var resolvedShop = ResolveShop(seller);
-            if (resolvedShop != null && ShopSettingsScope.Current == null)
-            {
-                using (ShopSettingsScope.Enter(resolvedShop))
-                    return await LearnCoreAsync(question, answer, sourceType, seller, buyer);
-            }
-            return await LearnCoreAsync(question, answer, sourceType, seller, buyer);
-        }
-
-        private static async Task<KnowledgeLearningResult> LearnCoreAsync(
-            string question,
-            string answer,
-            string sourceType,
-            string seller,
-            string buyer)
-        {
-            if (!CanLearn(question, answer))
-            {
-                return new KnowledgeLearningResult { Success = false, Message = "问题或答案为空，未写入知识库" };
-            }
-            // Explicit user edits are review evidence. Automatically observed bot
-            // and human turns still go through the five-minute candidate review.
-            var explicitOperatorEdit = string.Equals(sourceType, "人工修改", StringComparison.Ordinal)
-                || string.Equals(sourceType, "管理员审核", StringComparison.Ordinal);
-            if (!explicitOperatorEdit
-                && ShopReceptionPolicy.RequiresManualKnowledgeReview(seller, question, answer))
-            {
-                return new KnowledgeLearningResult
-                {
-                    Success = false,
-                    Message = "涉及设备、会员权益或履约流程，等待人工审核，未自动写入"
-                };
-            }
-
-            var context = ConversationContextStore.BuildTimelineText(seller, buyer, question, 10);
-            var safeQuestion = RedactSensitive(question);
-            var safeAnswer = RedactSensitive(answer);
-            var messages = new JArray
-            {
-                new JObject
-                {
-                    ["role"] = "system",
-                    ["content"] = "你是电商客服知识库整理器。只输出一个JSON对象：{\"question\":\"通用化问题\",\"answer\":\"可复用答案\",\"category\":\"分类\",\"keywords\":[\"关键词\"]}。不得保留真实手机号、验证码、订单号、身份证、银行卡、买家账号等个人数据，必须改写成通用占位表达；不要编造事实。"
-                },
-                new JObject
-                {
-                    ["role"] = "user",
-                    ["content"] = "来源：" + sourceType + "\n原始问题：" + safeQuestion + "\n原始答案：" + safeAnswer
-                        + (string.IsNullOrWhiteSpace(context) ? string.Empty : "\n同一买家最近时间线：\n" + RedactSensitive(context))
-                }
-            };
-
-            var learnedQuestion = safeQuestion;
-            var learnedAnswer = safeAnswer;
-            var category = "自动学习";
-            var keywords = string.Empty;
-            try
-            {
-                var result = await Task.Run(() => MyOpenAI.CallStructuredChat(
-                    messages, 500, 0.05, 90, CancellationToken.None));
-                if (result.Success)
-                {
-                    var parsed = ParseObject(result.Answer);
-                    learnedQuestion = RedactSensitive(Convert.ToString(parsed["question"])).Trim();
-                    learnedAnswer = RedactSensitive(Convert.ToString(parsed["answer"])).Trim();
-                    category = Convert.ToString(parsed["category"]).Trim();
-                    var arr = parsed["keywords"] as JArray;
-                    keywords = arr == null
-                        ? Convert.ToString(parsed["keywords"])
-                        : string.Join(",", arr.Select(x => x.ToString().Trim()).Where(x => x.Length > 0));
-                    // AI may enrich the reusable question/category/keywords, but an answer that was
-                    // explicitly confirmed by a human is immutable provenance. Never let the
-                    // organizer paraphrase or broaden the human-confirmed answer text.
-                    if (KnowledgeV2AuthorityPolicy.IsExplicitHumanConfirmationSource(sourceType))
-                        learnedAnswer = safeAnswer;
-                }
-            }
-            catch (Exception ex)
-            {
-                Log.Info("AI整理本店知识失败，使用安全兜底内容：" + ex.Message);
-            }
-            if (string.IsNullOrWhiteSpace(learnedQuestion)) learnedQuestion = safeQuestion;
-            if (string.IsNullOrWhiteSpace(learnedAnswer)) learnedAnswer = safeAnswer;
-            if (string.IsNullOrWhiteSpace(category)) category = "自动学习";
-            return SaveLearned(learnedQuestion, learnedAnswer, category, keywords, sourceType);
-        }
-
-        private static KnowledgeLearningResult SaveLearned(
-            string question,
-            string answer,
-            string category,
-            string keywords,
-            string sourceType)
-        {
-            lock (SaveLocks.GetOrAdd(ScopeKey(), _ => new object()))
-            {
-                var list = BotFeatureStore.GetKnowledgeBase();
-                var qKey = KnowledgeAiService.NormalizeQuestion(question);
-                var manualPreferred = (sourceType ?? string.Empty).StartsWith("人工", StringComparison.Ordinal);
-                var existing = list.FirstOrDefault(x => KnowledgeAiService.NormalizeQuestion(x.Title) == qKey);
-                var now = DateTime.Now.ToString("yyyy-MM-dd HH:mm:ss");
-                if (existing != null)
-                {
-                    if (manualPreferred && !string.Equals((existing.Answer ?? string.Empty).Trim(), answer.Trim(), StringComparison.Ordinal))
-                    {
-                        existing.Answer = answer.Trim();
-                        existing.Category = category;
-                        existing.Keywords = keywords;
-                        existing.UpdatedAt = now;
-                        existing.SourceType = sourceType;
-                        existing.AiGenerated = false;
-                        BotFeatureStore.SaveKnowledgeBase(list);
-                        RaiseKnowledgeChanged();
-                        return new KnowledgeLearningResult { Success = true, Updated = true, Message = "已用人工确认答案更新本店知识库" };
-                    }
-                    return new KnowledgeLearningResult { Success = true, Message = "本店知识库已存在相同问题，未重复添加" };
-                }
-                var contentHash = KnowledgeAiService.ContentHash(question, answer);
-                if (list.Any(x => KnowledgeAiService.ContentHash(x.Title, x.Answer) == contentHash))
-                    return new KnowledgeLearningResult { Success = true, Message = "本店知识库已存在相同内容，未重复添加" };
-
-                list.Add(new KnowledgeBaseEntry
-                {
-                    Id = Guid.NewGuid().ToString("N"),
-                    Enabled = true,
-                    Category = category,
-                    Title = question.Trim(),
-                    Answer = answer.Trim(),
-                    Keywords = keywords ?? string.Empty,
-                    CreatedAt = now,
-                    UpdatedAt = now,
-                    AiGenerated = !manualPreferred,
-                    SourceType = sourceType ?? "自动学习"
-                });
-                BotFeatureStore.SaveKnowledgeBase(list);
-                RaiseKnowledgeChanged();
-                return new KnowledgeLearningResult { Success = true, Added = true, Message = "已整理并加入本店知识库" };
-            }
-        }
-
-        private static ShopContext ResolveShop(string seller)
-        {
-            if (ShopSettingsScope.Current != null) return ShopSettingsScope.Current;
-            if (string.IsNullOrWhiteSpace(seller)) return null;
-            try { return ShopContextLocator.ResolveRuntimeBySellerNick(seller); }
-            catch { return null; }
         }
 
         private static JObject ParseObject(string text)
@@ -1098,7 +799,7 @@ namespace Bot.ChromeNs
         private static string QuestionSourceKey(string seller, string buyer, string question)
         {
             return ScopeKey() + "|" + Normalize(seller) + "|" + Normalize(buyer) + "|"
-                + KnowledgeAiService.NormalizeQuestion(question);
+                + Normalize(question);
         }
 
         private static string SendKey(string seller, string buyer, string answer)
@@ -1131,10 +832,5 @@ namespace Bot.ChromeNs
             }
         }
 
-        private static void RaiseKnowledgeChanged()
-        {
-            var handler = KnowledgeBaseChanged;
-            if (handler != null) handler(null, EventArgs.Empty);
-        }
     }
 }

@@ -269,7 +269,9 @@ namespace Bot.ChromeNs
                     }
                     if (workflowDecision != null && workflowDecision.RequiresSend)
                     {
-                        result.Answer = workflowDecision.ReplyText;
+                        result.IsKnowledgeV2DirectAnswer = false;
+                result.SelectedKnowledgeDecision = null;
+                result.Answer = workflowDecision.ReplyText;
                         Log.Info("视觉识别失败，改用已发布流程的索证话术: seller="
                             + burst.SellerNick + ", buyer=" + burst.BuyerNick);
                     }
@@ -359,7 +361,8 @@ namespace Bot.ChromeNs
             // generation. Preserve that authoritative answer while still applying the common AI
             // marker and generation cancellation contract. A workflow reply is separately grounded
             // in a published human-reply template and must not be treated as an OCR direct answer.
-            var trustedOcrKnowledge = workflowDecision == null && result.IsKnowledgeV2DirectAnswer;
+            var trustedOcrKnowledge = result.IsKnowledgeV2DirectAnswer
+                && (workflowDecision == null || !workflowDecision.RequiresSend);
             var deduplication = workflowDecision != null && workflowDecision.RequiresSend
                 ? ReplyDeduplicationService.EnsureWorkflowReplyDistinct(
                     burst.SellerNick, burst.BuyerNick, burst.CombinedQuestion,
@@ -551,6 +554,11 @@ namespace Bot.ChromeNs
             {
                 if (!lifecycleLease.IsCurrent || lifecycleLease.CancellationToken.IsCancellationRequested)
                     return false;
+                if (trustedOcrKnowledge && !IsOcrSelectedKnowledgeCurrent(burst, result))
+                {
+                    Log.Info("OCR直答选中知识已变更，阻止旧图片答案发送: buyer=" + burst.BuyerNick);
+                    return false;
+                }
                 if (conditionalAdviceReserved
                     && !ConditionalBusinessAdviceService.IsEvidenceStillValid(
                         burst.ShopKey, burst.SellerNick, burst.BuyerNick,
@@ -650,15 +658,6 @@ namespace Bot.ChromeNs
                 else
                     ReplyDeduplicationService.RememberDelivered(
                         burst.SellerNick, burst.BuyerNick, answer, burst.ShopKey);
-                if (workflowDecision == null && string.IsNullOrWhiteSpace(result.MatchedVisualKnowledgeId))
-                {
-                    KnowledgeLearningService.QueueLearn(
-                        burst.CombinedQuestion,
-                        answer,
-                        "视觉AI",
-                        burst.SellerNick,
-                        burst.BuyerNick);
-                }
                 lifecycleLease.MarkCompleted("vision_send_completed");
             }
             else
@@ -684,6 +683,26 @@ namespace Bot.ChromeNs
                 ResponseProgressTracker.Fail(
                     burst.SellerNick, burst.BuyerNick,
                     "图片撤回保护视觉答案已生成，但实际发送未确认：" + sendFailureReason, burst.ShopKey);
+        }
+
+        private static bool IsOcrSelectedKnowledgeCurrent(BuyerMessageBurst burst, VisionRequestResult result)
+        {
+            try
+            {
+                var shop = ShopContextLocator.ResolveRuntimeByShopKey(burst.ShopKey);
+                if (shop == null || !shop.HasStableSellerId
+                    || !string.Equals(shop.ShopKey, burst.ShopKey, StringComparison.Ordinal)
+                    || !string.Equals(shop.SellerNick, burst.SellerNick, StringComparison.Ordinal))
+                    return false;
+                using (ShopSettingsScope.Enter(shop, false))
+                    return KnowledgeEngineV2RuntimeBridge.IsSelectedKnowledgeCurrent(
+                        burst.SellerNick, burst.ShopKey, result.SelectedKnowledgeDecision);
+            }
+            catch (Exception ex)
+            {
+                Log.ErrorWithMaxCount("OCR直答知识版本校验失败: " + ex.GetType().Name, 10);
+                return false;
+            }
         }
 
         private static async Task SendCacheMissFallbackAsync(

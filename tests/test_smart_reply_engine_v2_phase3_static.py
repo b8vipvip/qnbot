@@ -8,50 +8,47 @@ def read(path):
 
 
 def test_policy_sidecar_has_modes_conditions_and_reliability_evidence():
-    code = read("src/Bot/ChromeNs/KnowledgePolicyProfileService.cs")
-    assert 'knowledge-policy-profile.json' in code
-    assert 'public const string Direct = "direct"' in code
-    assert 'public const string Contextual = "contextual"' in code
-    assert 'public const string Constraint = "constraint"' in code
-    assert 'ApplyWhen' in code
-    assert 'DoNotApplyWhen' in code
-    assert 'RequiredContext' in code
-    assert 'SellerCorrectionCount' in code
-    assert 'SellerWithdrawCount' in code
-    assert 'ReliabilityScore' in code
-    assert 'evidenceType == "withdrawn_bot_then_manual"' in code
-    assert 'evidenceType == "manual_correction"' in code
+    assert not (ROOT / "src/Bot/ChromeNs/KnowledgePolicyProfileService.cs").exists()
+    model = read("src/Bot/Knowledge/KnowledgeEngineV2.Models.cs")
+    semantics = read("src/Bot/Knowledge/KnowledgeEngineV2.Semantics.cs")
+    feedback = read("src/Bot/Knowledge/KnowledgeEngineV2FeedbackService.cs")
+    for field in ("Conditions", "Exclusions", "RequiredContext", "ProductIds", "CorrectionCount", "WithdrawCount"):
+        assert field in model
+        assert field in semantics or field in feedback
+    assert "GetQualityAdjustment" in feedback
+    assert "IsApplicable" in semantics
 
 
 def test_router_applies_policy_before_direct_answer_and_records_route_selection():
-    router = read("src/Bot/ChromeNs/SmartReplyRouterService.cs")
-    assert 'public KnowledgePolicyEvaluation PolicyEvaluation' in router
-    assert 'KnowledgePolicyProfileService.Evaluate' in router
-    assert 'PolicyAllowsDirect(provisionalBest)' in router
-    assert 'if (!PolicyAllowsDirect(best)) return false' in router
-    assert 'candidate.PolicyEvaluation.ConstraintOnly' in router
-    assert 'KnowledgePolicyProfileService.RecordRouteSelection(best.Entry, true)' in router
-    assert 'KnowledgePolicyProfileService.RecordRouteSelection(best.Entry, false)' in router
-    assert 'KnowledgePolicyProfileService.BuildPromptAddon' in router
+    public = read("src/Bot/Knowledge/KnowledgeEngineV2.Service.Public.cs")
+    index = read("src/Bot/Knowledge/KnowledgeEngineV2.Service.Index.cs")
+    runtime = read("src/Bot/ChromeNs/KnowledgeEngineV2RuntimeBridge.cs")
+    assert "IsEligibleProductionMatch" in public
+    assert "IsApplicable(" in index
+    assert "ShopReceptionPolicy.IsQuarantined" in index
+    assert "KnowledgeEngineV2FeedbackService.RecordDirectSend" in runtime
+    assert "BuildContextPromptAddon" in runtime
+    assert "IsSelectedKnowledgeCurrent" in runtime
 
 
 def test_reviewed_human_corrections_feed_reliability_profile():
     code = read("src/Bot/ChromeNs/ReviewedKnowledgeLearningService.cs")
-    assert 'KnowledgePolicyProfileService.RecordReviewEvidence' in code
-    assert 'previousAnswer' in code
-    assert 'KnowledgePolicyProfileService.RecordKnowledgeAccepted(question, answer)' in code
-    assert '降低旧答案直答可靠度' in code
+    repo = read("src/Bot/Knowledge/KnowledgeEngineV2.Repository.cs")
+    feedback = read("src/Bot/Knowledge/KnowledgeEngineV2FeedbackService.cs")
+    assert "TrySaveReviewedDirectAnswer" in code
+    assert "CorrectionCount++" in repo
+    assert "PreviousJson" in repo
+    assert '"manual_reply:"' in feedback
+    assert "GetQualityAdjustment" in feedback
 
 
 def test_knowledge_policy_editor_is_available_from_knowledge_manager():
-    ui = read("src/Bot/Knowledge/KnowledgePolicyProfileUi.cs")
-    app = read("src/Bot/App.xaml.cs")
-    targets = read("src/Directory.Build.targets")
-    assert 'Content = "知识策略"' in ui
-    assert '知识策略与可靠度' in ui
-    assert '优先直答' in ui
-    assert '必须结合上下文' in ui
-    assert '仅作为事实约束' in ui
-    assert 'KnowledgePolicyProfileUi.Initialize()' in app
-    assert 'KnowledgePolicyProfileService.cs' in targets
-    assert 'KnowledgePolicyProfileUi.cs' in targets
+    ui = read("src/Bot/Knowledge/KnowledgeCenterV2RecordsPage.cs")
+    props = read("src/Bot/Directory.Build.props")
+    shell = read("src/Bot/Knowledge/KnowledgeCenterV2Ui.cs")
+    for label in ("适用条件", "排除条件", "必要上下文", "绑定商品ID", "可信度", "权威度"):
+        assert label in ui
+    assert "TrySaveEditorRecord" in ui
+    assert 'Nav("知识"' in shell
+    assert "KnowledgeCenterV2RecordsPage.cs" in props
+

@@ -111,6 +111,18 @@ namespace Bot.Knowledge
             public string Text;
             public DateTime Time;
             public string MessageKey;
+            public bool IsBotReply;
+        }
+
+        private sealed class HistoryEvidencePair
+        {
+            public string Question;
+            public string Answer;
+            public string Context;
+            public string EvidenceToken;
+            public List<string> QuestionMessageIds = new List<string>();
+            public List<string> AnswerMessageIds = new List<string>();
+            public List<string> ContextMessageIds = new List<string>();
         }
 
         // Only explicitly Bot-marked seller echoes are matched to buyer turns.
@@ -132,7 +144,7 @@ namespace Bot.Knowledge
                 }
                 if (turn.Item1 != "seller") continue;
                 var raw = (turn.Item2 ?? "").Trim();
-                if (!raw.EndsWith("[A]", StringComparison.OrdinalIgnoreCase))
+                if (!IsBotMarkedSellerReply(raw))
                 {
                     // Human responses terminate this unmatched question; do not
                     // misattribute a later background Bot echo to an old question.
@@ -145,8 +157,7 @@ namespace Bot.Knowledge
                     || turn.Item3 < pendingBuyerAt
                     || turn.Item3 - pendingBuyerAt > TimeSpan.FromMinutes(30))
                     continue;
-                var reply = BuyerMessageArchiveService.Redact(
-                    raw.Substring(0, raw.Length - 3).TrimEnd());
+                var reply = BuyerMessageArchiveService.Redact(StripBotMarker(raw));
                 if (reply.Length == 0) continue;
                 string old;
                 if (answers.TryGetValue(pendingBuyerKey, out old))
@@ -179,7 +190,7 @@ namespace Bot.Knowledge
             if (seller.Length == 0)
                 throw new InvalidOperationException("缺少当前店铺客服身份，已阻止历史扫描。");
             var shop = ShopContextLocator.ResolveCurrentOrBySellerNick(seller);
-            if (shop == null || string.IsNullOrWhiteSpace(shop.ShopKey))
+            if (shop == null || !shop.HasStableSellerId || string.IsNullOrWhiteSpace(shop.ShopKey))
                 throw new InvalidOperationException("当前店铺 ShopKey 不可用，已阻止历史扫描。");
             var shopKey = shop.ShopKey;
             if (!ActiveBuyerScans.TryAdd(shopKey, 0))
@@ -223,6 +234,25 @@ namespace Bot.Knowledge
                 var boundShop = ShopContextLocator.ResolveRuntimeBySeller(qn);
                 if (boundShop == null || !string.Equals(boundShop.ShopKey, shopKey, StringComparison.Ordinal))
                     throw new InvalidOperationException("千牛会话登录身份与扫描窗口 ShopKey 不一致，已阻止读取历史消息。");
+                var scanCdp = qn.CDP;
+                var scanSessionId = scanCdp.SessionId;
+                Func<bool> isOriginalSession = () =>
+                    ReferenceEquals(QN.CurQN, qn)
+                    && ReferenceEquals(qn.CDP, scanCdp)
+                    && !scanCdp.IsInvalidated && !scanCdp.IsShopIdentityRetired
+                    && !string.IsNullOrWhiteSpace(scanSessionId)
+                    && string.Equals(scanCdp.SessionId, scanSessionId, StringComparison.Ordinal)
+                    && string.Equals(scanCdp.ShopKey, shopKey, StringComparison.Ordinal)
+                    && qn.Seller != null
+                    && DirectOrderIdentityResolver.IdentityEquals(qn.Seller.Nick, shop.SellerNick)
+                    && MyWebSocketServer.WSocketSvrInst != null
+                    && MyWebSocketServer.WSocketSvrInst.IsAuthoritativeShopSession(shopKey, scanSessionId);
+                Action requireOriginalSession = () =>
+                {
+                    if (!isOriginalSession())
+                        throw new InvalidOperationException("历史扫描权威店铺会话已变化，请回到原店铺后从断点继续。");
+                };
+                requireOriginalSession();
                 var originalBuyer = qn.Buyer == null ? string.Empty : (qn.Buyer.Nick ?? string.Empty);
                 var diagnostics = new StringBuilder();
                 Report(progress, "正在搜集本店可访问的联系人", 0, 0, "", 0, 0, 0);
@@ -230,6 +260,7 @@ namespace Bot.Knowledge
                 AddContact(contacts, originalBuyer, seller);
                 evidence.Event("contact_discovery_started", "ui_list");
                 var visible = await ReadVisibleChatBuyerListContactsAsync(diagnostics, token);
+                requireOriginalSession();
                 foreach (var nick in visible) AddContact(contacts, nick, seller);
                 evidence.Discovery("visible_chat_list", visible.Count, contacts.Count);
 
@@ -238,15 +269,18 @@ namespace Bot.Knowledge
                 if (contacts.Count <= 1)
                 {
                     managerOpened = await TryOpenMessageManagerAsync(diagnostics, token);
+                    requireOriginalSession();
                     if (managerOpened)
                     {
                         managerContacts = await ReadVisibleMessageManagerContactsAsync(diagnostics, token);
+                        requireOriginalSession();
                         foreach (var nick in managerContacts) AddContact(contacts, nick, seller);
                     }
                 }
                 evidence.Discovery("message_manager", managerContacts.Count, contacts.Count);
 
                 var apiContacts = await ReadContactsFromApisAsync(qn, diagnostics, token);
+                requireOriginalSession();
                 foreach (var nick in apiContacts) AddContact(contacts, nick, seller);
                 evidence.Discovery("contacts_api", apiContacts.Count, contacts.Count);
 
@@ -309,6 +343,7 @@ namespace Bot.Knowledge
                 Func<string, int, Task<bool>> scanContact = async (buyer, ordinal) =>
                 {
                     token.ThrowIfCancellationRequested();
+                    requireOriginalSession();
                     var count = 0;
                     ReportBuyer(progress, "正在扫描买家消息", ordinal, names.Count, read,
                         successful.Count, failed, evidence);
@@ -317,11 +352,13 @@ namespace Bot.Knowledge
                         lastScannerBuyer = buyer;
                         var ccode = await ResolveConversationCodeAsync(qn, buyer, token,
                             reason => evidence.Retry(reason));
+                        requireOriginalSession();
                         if (string.IsNullOrWhiteSpace(ccode))
                             throw new InvalidOperationException("conversation_not_stable");
                         var turns = await ReadHistoryAsync(qn, seller, buyer, ccode, options,
                             token, reason => evidence.Retry(reason),
-                            reason => evidence.Excluded(reason));
+                            reason => evidence.Excluded(reason), requireOriginalSession);
+                        requireOriginalSession();
                         var buyerTurns = turns.Where(x => x.Role == "buyer").ToList();
                         var matchedBotReplies = MatchBotRepliesToBuyerTurns(
                             turns.Select((x, i) => Tuple.Create(x.Role, x.Text, x.Time,
@@ -340,6 +377,7 @@ namespace Bot.Knowledge
                         foreach (var turn in buyerTurns)
                         {
                             token.ThrowIfCancellationRequested();
+                            requireOriginalSession();
                             // Some QN history pages omit message keys. Use a
                             // deterministic per-buyer fallback receipt so
                             // replay after a crash does not double-insert.
@@ -359,6 +397,7 @@ namespace Bot.Knowledge
                         // checkpoint a contact after its entire pagination and
                         // archive write succeeded. A crash before Save will
                         // replay the contact safely on the next run.
+                        requireOriginalSession();
                         if (successful.Add(buyer))
                         {
                             checkpoint.Completed.Add(buyer);
@@ -377,6 +416,7 @@ namespace Bot.Knowledge
                     catch (OperationCanceledException) { throw; }
                     catch (Exception ex)
                     {
+                        requireOriginalSession();
                         // Do not log the buyer identity or exception message.
                         evidence.Event("contact_retryable_failure", ex.GetType().Name);
                         Log.Info("[BuyerQuestions] scan_contact_failed run=" + evidence.Record.RunId
@@ -421,11 +461,12 @@ namespace Bot.Knowledge
                     // Do not override a newly-arrived active buyer's chat.
                     // Restore only if the current conversation still belongs to
                     // the scanner's last selected contact.
-                    if (!string.IsNullOrWhiteSpace(originalBuyer))
+                    if (!string.IsNullOrWhiteSpace(originalBuyer) && isOriginalSession())
                     {
                         try
                         {
                             var now = await qn.CDP.Invoke<JObject>("im.uiutil.GetCurrentConversationID");
+                            requireOriginalSession();
                             var current = CleanNick(FindString(now, "nick", "buyerNick", "display"));
                             if (string.Equals(current, CleanNick(lastScannerBuyer), StringComparison.Ordinal)
                                 && BotActivityCoordinator.GetSnapshot(seller).ActiveCount == 0)
@@ -529,10 +570,19 @@ namespace Bot.Knowledge
         }
 
         public async Task<ChatHistoryScanResult> ScanAndImportAsync(
+            string shopKey,
             ChatHistoryScanOptions options,
             Action<ChatHistoryScanProgress> progress,
             CancellationToken token)
         {
+            shopKey = (shopKey ?? string.Empty).Trim();
+            if (shopKey.Length == 0)
+                throw new InvalidOperationException("历史聊天扫描缺少 ShopKey，已阻止跨店读取或写入。");
+            var shop = ShopContextLocator.ResolveRuntimeByShopKey(shopKey);
+            if (shop == null || !shop.HasStableSellerId
+                || !string.Equals(shop.ShopKey, shopKey, StringComparison.Ordinal))
+                throw new InvalidOperationException("历史聊天扫描无法解析精确 ShopKey，已阻止写入。");
+
             options = options ?? new ChatHistoryScanOptions();
             ValidateOptions(options);
 
@@ -542,11 +592,30 @@ namespace Bot.Knowledge
                 throw new Exception("未识别到可用的千牛客服会话，请先打开任意买家聊天窗口。");
             }
 
+            var scanCdp = qn.CDP;
+            var scanSessionId = scanCdp.SessionId;
+            // UI contact discovery operates on the current desk. Never combine
+            // those results with a retired or differently bound CDP session.
+            Func<bool> isOriginalSession = () => ReferenceEquals(QN.CurQN, qn)
+                && ReferenceEquals(qn.CDP, scanCdp)
+                && qn.Seller != null
+                && string.Equals(shop.SellerNick, qn.Seller.Nick, StringComparison.Ordinal)
+                && !string.IsNullOrWhiteSpace(scanSessionId)
+                && string.Equals(scanCdp.SessionId, scanSessionId, StringComparison.Ordinal)
+                && string.Equals(scanCdp.ShopKey, shopKey, StringComparison.Ordinal);
+            Action requireOriginalSession = () =>
+            {
+                if (!isOriginalSession())
+                    throw new InvalidOperationException("历史扫描期间千牛会话或 ShopKey 已变化，已停止导入，避免跨店学习。");
+            };
+            requireOriginalSession();
+
             var diagnostics = new StringBuilder();
             var originalBuyer = qn.Buyer == null ? string.Empty : (qn.Buyer.Nick ?? string.Empty);
 
             Report(progress, "正在读取千牛左侧“全部买家”列表...", 0, 0, string.Empty, 0, 0, 0);
             var chatBuyerListContacts = await ReadVisibleChatBuyerListContactsAsync(diagnostics, token);
+            requireOriginalSession();
 
             var contacts = new HashSet<string>(StringComparer.Ordinal);
             AddContact(contacts, originalBuyer, qn.Seller.Nick);
@@ -560,10 +629,13 @@ namespace Bot.Knowledge
             if (contacts.Count <= 1)
             {
                 Report(progress, "左侧买家列表未完整读取，正在尝试千牛消息管理器...", 0, 0, string.Empty, 0, 0, 0);
+                requireOriginalSession();
                 managerOpened = await TryOpenMessageManagerAsync(diagnostics, token);
+                requireOriginalSession();
                 if (managerOpened)
                 {
                     messageManagerContacts = await ReadVisibleMessageManagerContactsAsync(diagnostics, token);
+                    requireOriginalSession();
                     foreach (var name in messageManagerContacts)
                     {
                         AddContact(contacts, name, qn.Seller.Nick);
@@ -576,7 +648,9 @@ namespace Bot.Knowledge
             }
 
             Report(progress, "正在通过千牛接口补充联系人...", 0, 0, string.Empty, 0, 0, 0);
+            requireOriginalSession();
             var apiContacts = await ReadContactsFromApisAsync(qn, diagnostics, token);
+            requireOriginalSession();
             foreach (var name in apiContacts)
             {
                 AddContact(contacts, name, qn.Seller.Nick);
@@ -608,12 +682,14 @@ namespace Bot.Knowledge
                 for (var i = 0; i < orderedContacts.Count; i++)
                 {
                     token.ThrowIfCancellationRequested();
+                    requireOriginalSession();
                     var buyer = orderedContacts[i];
                     Report(progress, "正在读取聊天记录...", i + 1, orderedContacts.Count, buyer, totalMessages, CountPairs(histories), TextChars(histories));
 
                     try
                     {
                         var ccode = await ResolveConversationCodeAsync(qn, buyer, token);
+                        requireOriginalSession();
                         if (string.IsNullOrWhiteSpace(ccode))
                         {
                             failedContacts++;
@@ -622,6 +698,7 @@ namespace Bot.Knowledge
                         }
 
                         var turns = await ReadHistoryAsync(qn, qn.Seller.Nick, buyer, ccode, options, token);
+                        requireOriginalSession();
                         if (turns.Count < 1) continue;
                         histories.Add(new ContactHistory { Buyer = buyer, Turns = turns });
                         totalMessages += turns.Count;
@@ -632,6 +709,9 @@ namespace Bot.Knowledge
                     }
                     catch (Exception ex)
                     {
+                        // A changed shop/session is a fatal scan error, not a
+                        // per-contact failure that may be skipped.
+                        requireOriginalSession();
                         failedContacts++;
                         diagnostics.AppendLine("读取失败 " + buyer + "：" + Safe(ex.Message));
                         Log.Info("扫描历史聊天失败: buyer=" + buyer + ", error=" + ex.Message);
@@ -640,14 +720,16 @@ namespace Bot.Knowledge
             }
             finally
             {
-                if (!string.IsNullOrWhiteSpace(originalBuyer))
+                if (isOriginalSession() && !string.IsNullOrWhiteSpace(originalBuyer))
                 {
                     try { qn.OpenChat(originalBuyer); } catch { }
                 }
             }
 
             token.ThrowIfCancellationRequested();
-            var transcript = BuildTranscript(histories, options);
+            requireOriginalSession();
+            Dictionary<string, KnowledgeV2ImportEvidence> sourceEvidenceByToken;
+            var transcript = BuildTranscript(histories, options, out sourceEvidenceByToken);
             var pairCount = CountTranscriptPairs(transcript);
             if (string.IsNullOrWhiteSpace(transcript) || pairCount < 1)
             {
@@ -658,14 +740,19 @@ namespace Bot.Knowledge
 
             var importData = new ClipboardKnowledgeData { Text = transcript };
             var ai = new KnowledgeAiService();
-            var importResult = await ai.ImportAsync(
-                importData,
-                BotFeatureStore.GetSmartImportTimeoutSeconds(),
-                token,
-                () => token.IsCancellationRequested ? SmartImportCancelSource.UserCancel : SmartImportCancelSource.None,
-                text => Report(progress, text, orderedContacts.Count, orderedContacts.Count, string.Empty, totalMessages, pairCount, transcript.Length));
+            KnowledgeImportResult importResult;
+            using (ShopSettingsScope.Enter(shop))
+            {
+                importResult = await ai.ImportAsync(
+                    importData,
+                    BotFeatureStore.GetSmartImportTimeoutSeconds(),
+                    token,
+                    () => token.IsCancellationRequested ? SmartImportCancelSource.UserCancel : SmartImportCancelSource.None,
+                    text => Report(progress, text, orderedContacts.Count, orderedContacts.Count, string.Empty, totalMessages, pairCount, transcript.Length));
+                if (importResult != null)
+                    importResult.SourceEvidenceByToken = sourceEvidenceByToken;
+            }
 
-            MarkImportedSource(importResult, "历史聊天扫描");
             Report(progress, "历史聊天扫描完成。", orderedContacts.Count, orderedContacts.Count, string.Empty, totalMessages, pairCount, transcript.Length);
 
             return new ChatHistoryScanResult
@@ -1267,7 +1354,7 @@ namespace Bot.Knowledge
             string ccode,
             ChatHistoryScanOptions options,
             CancellationToken token, Action<string> onInterruption = null,
-            Action<string> onExcluded = null)
+            Action<string> onExcluded = null, Action requireSession = null)
         {
             var turns = new List<HistoryTurn>();
             var seen = new HashSet<string>(StringComparer.Ordinal);
@@ -1290,6 +1377,7 @@ namespace Bot.Knowledge
                     token.ThrowIfCancellationRequested();
                     try
                     {
+                        if (requireSession != null) requireSession();
                         response = await qn.CDP.Invoke<JObject>("im.singlemsg.GetRemoteHisMsg", new
                         {
                             cid = new { ccode = ccode, type = 1 },
@@ -1298,6 +1386,7 @@ namespace Bot.Knowledge
                             msgid = cursorId,
                             msgtime = cursorTime
                         });
+                        if (requireSession != null) requireSession();
                         if (response != null) break;
                     }
                     catch (OperationCanceledException) { throw; }
@@ -1318,9 +1407,11 @@ namespace Bot.Knowledge
                 var msgsToken = resultObject == null
                     ? result as JArray
                     : (resultObject["msgs"] ?? resultObject["messages"] ?? resultObject["list"]);
-                var messages = msgsToken == null
-                    ? new List<QNChatMessage>()
-                    : msgsToken.ToObject<List<QNChatMessage>>() ?? new List<QNChatMessage>();
+                if (!(msgsToken is JArray))
+                    throw new InvalidOperationException("history_pagination_incomplete:missing_message_array");
+                var messages = msgsToken.ToObject<List<QNChatMessage>>();
+                if (messages == null || messages.Any(x => x == null))
+                    throw new InvalidOperationException("history_pagination_incomplete:invalid_message_array");
 
                 if (messages.Count < 1)
                 {
@@ -1407,6 +1498,25 @@ namespace Bot.Knowledge
             excludeReason = null;
             if (message == null || message.fromid == null || message.toid == null) return false;
             var time = GetMessageTime(message);
+            var shop = ShopSettingsScope.Current;
+            if (shop != null && shop.HasStableSellerId)
+            {
+                var loginId = message.loginid == null ? string.Empty : (message.loginid.targetId ?? string.Empty).Trim();
+                var endpointId = string.Equals(CleanNick(message.fromid.nick), CleanNick(seller), StringComparison.Ordinal)
+                    ? (message.fromid.targetId ?? string.Empty).Trim()
+                    : (message.toid.targetId ?? string.Empty).Trim();
+                if ((!string.IsNullOrEmpty(loginId) && !string.Equals(loginId, shop.SellerId, StringComparison.Ordinal))
+                    || (!string.IsNullOrEmpty(endpointId) && !string.Equals(endpointId, shop.SellerId, StringComparison.Ordinal)))
+                {
+                    excludeReason = "history_seller_identity_mismatch";
+                    return false;
+                }
+            }
+            if (!options.ScanAll && time == DateTime.MinValue)
+            {
+                excludeReason = "history_missing_timestamp";
+                return false;
+            }
             if (!options.ScanAll)
             {
                 if (options.StartTime.HasValue && time != DateTime.MinValue && time < options.StartTime.Value) return false;
@@ -1437,7 +1547,9 @@ namespace Bot.Knowledge
             turn = new HistoryTurn
             {
                 Role = role, Text = text, Time = time,
-                MessageKey = IncomingMessageSafety.BuildMessageKey(message, text)
+                MessageKey = IncomingMessageSafety.BuildMessageKey(message, text),
+                IsBotReply = string.Equals(role, "seller", StringComparison.Ordinal)
+                    && IsBotMarkedSellerReply(text)
             };
             return true;
         }
@@ -1509,83 +1621,188 @@ namespace Bot.Knowledge
             return value;
         }
 
-        private static string BuildTranscript(List<ContactHistory> histories, ChatHistoryScanOptions options)
+        private static string StripBotMarker(string value)
         {
+            value = (value ?? string.Empty).Trim();
+            var markers = new[] { "[AI]", "[A]", "【AI】", "［AI］" };
+            foreach (var marker in markers)
+            {
+                if (value.EndsWith(marker, StringComparison.OrdinalIgnoreCase))
+                    return value.Substring(0, value.Length - marker.Length).TrimEnd();
+            }
+            return value;
+        }
+
+        private static string BuildTranscript(
+            List<ContactHistory> histories,
+            ChatHistoryScanOptions options,
+            out Dictionary<string, KnowledgeV2ImportEvidence> sourceEvidenceByToken)
+        {
+            sourceEvidenceByToken = new Dictionary<string, KnowledgeV2ImportEvidence>(StringComparer.Ordinal);
             var sb = new StringBuilder();
-            sb.AppendLine("以下资料来自同一店铺的历史客服聊天。只生成可复用、客服已经明确回答且不依赖某个具体订单/买家身份的知识库问答。");
+            sb.AppendLine("以下资料来自同一店铺的历史客服聊天。只使用未标记为Bot的真人客服回复作为知识事实；[A]/[AI]自动回复不能作为答案证据。只生成可复用、客服已经明确回答且不依赖某个具体订单/买家身份的知识库问答。");
             sb.AppendLine("忽略退款成功卡片、系统通知、寒暄、纯表情、未回答问题和一次性订单状态；账号、手机号、订单号等必须泛化为字段说明，不得保留个人数据。");
-            sb.AppendLine("当买家只回复数字、账号、型号等短内容时，必须结合同一块中的“客服前置提问”理解含义。");
+            sb.AppendLine("每条历史问答都带有不含原始消息ID的source_evidence_id令牌。生成知识时必须只复制真正支撑该知识的令牌；无法确认来源时不提供令牌，该知识不得自动发布。");
+            sb.AppendLine("当买家只回复数字、账号、型号等短内容时，必须结合同一块中的客服前置提问理解含义。");
             sb.AppendLine();
             var seen = new HashSet<string>(StringComparer.Ordinal);
-            foreach (var history in histories)
+            foreach (var history in histories ?? new List<ContactHistory>())
             {
                 foreach (var pair in BuildPairs(history))
                 {
-                    var key = KnowledgeAiService.ContentHash(pair.Item1, pair.Item2);
+                    var key = KnowledgeAiService.ContentHash(pair.Question, pair.Answer);
                     if (!seen.Add(key)) continue;
+                    sourceEvidenceByToken[pair.EvidenceToken] = new KnowledgeV2ImportEvidence
+                    {
+                        Token = pair.EvidenceToken,
+                        EvidenceType = "historical_human_reply",
+                        QuestionText = pair.Question,
+                        AnswerText = pair.Answer,
+                        QuestionMessageIds = pair.QuestionMessageIds.ToList(),
+                        AnswerMessageIds = pair.AnswerMessageIds.ToList(),
+                        ContextMessageIds = pair.ContextMessageIds.ToList()
+                    };
                     sb.AppendLine("【历史会话问答】");
-                    sb.AppendLine("买家：" + history.Buyer);
-                    if (!string.IsNullOrWhiteSpace(pair.Item3)) sb.AppendLine("客服前置提问：" + pair.Item3);
-                    sb.AppendLine("买家问题：" + pair.Item1);
-                    sb.AppendLine("客服回答：" + pair.Item2);
+                    if (!string.IsNullOrWhiteSpace(pair.Context))
+                        sb.AppendLine("客服前置提问：" + pair.Context);
+                    sb.AppendLine("买家问题：" + pair.Question);
+                    sb.AppendLine("真人客服回答：" + pair.Answer);
+                    sb.AppendLine("source_evidence_id：" + pair.EvidenceToken);
                     sb.AppendLine();
                 }
             }
             return sb.ToString().Trim();
         }
 
-        private static List<Tuple<string, string, string>> BuildPairs(ContactHistory history)
+        private static List<HistoryEvidencePair> BuildPairs(ContactHistory history)
         {
-            var result = new List<Tuple<string, string, string>>();
-            var buyers = new List<string>();
-            var sellers = new List<string>();
+            var result = new List<HistoryEvidencePair>();
+            if (history == null || history.Turns == null) return result;
+            var buyers = new List<HistoryTurn>();
+            var sellers = new List<HistoryTurn>();
             var previousSeller = string.Empty;
+            var previousSellerMessageId = string.Empty;
             var previousSellerTime = DateTime.MinValue;
+            var botAnsweredPendingQuestion = false;
 
             Action flush = () =>
             {
-                if (buyers.Count < 1 || sellers.Count < 1) return;
-                var question = NormalizeText(string.Join(" ", buyers));
-                var answer = NormalizeText(string.Join(" ", sellers));
-                var context = previousSeller;
-                if (IsUsefulPair(question, answer))
+                if (buyers.Count > 0 && sellers.Count > 0)
                 {
-                    result.Add(Tuple.Create(question, answer, context));
+                    var question = NormalizeText(string.Join(" ", buyers.Select(x => x.Text)));
+                    var answer = NormalizeText(string.Join(" ", sellers.Select(x => x.Text)));
+                    var questionIds = buyers.Select(x => (x.MessageKey ?? string.Empty).Trim())
+                        .Where(x => x.Length > 0 && !x.StartsWith("scan-turn:", StringComparison.Ordinal))
+                        .Distinct(StringComparer.Ordinal).ToList();
+                    var answerIds = sellers.Select(x => (x.MessageKey ?? string.Empty).Trim())
+                        .Where(x => x.Length > 0 && !x.StartsWith("scan-turn:", StringComparison.Ordinal))
+                        .Distinct(StringComparer.Ordinal).ToList();
+                    var contextIds = string.IsNullOrWhiteSpace(previousSellerMessageId)
+                        ? new List<string>()
+                        : new List<string> { previousSellerMessageId };
+                    if (IsUsefulPair(question, answer)
+                        && questionIds.Count == buyers.Count
+                        && answerIds.Count == sellers.Count
+                        && questionIds.Count > 0
+                        && answerIds.Count > 0
+                        && !questionIds.Intersect(answerIds, StringComparer.Ordinal).Any())
+                    {
+                        result.Add(new HistoryEvidencePair
+                        {
+                            Question = question,
+                            Answer = answer,
+                            Context = previousSeller,
+                            EvidenceToken = "ev_" + Guid.NewGuid().ToString("N"),
+                            QuestionMessageIds = questionIds,
+                            AnswerMessageIds = answerIds,
+                            ContextMessageIds = contextIds
+                        });
+                    }
                 }
                 buyers.Clear();
                 sellers.Clear();
                 previousSeller = string.Empty;
+                previousSellerMessageId = string.Empty;
                 previousSellerTime = DateTime.MinValue;
+                botAnsweredPendingQuestion = false;
             };
 
             foreach (var turn in history.Turns.OrderBy(x => x.Time))
             {
                 if (turn.Role == "buyer")
                 {
-                    if (sellers.Count > 0) flush();
+                    if (sellers.Count > 0)
+                        flush();
+                    else if (botAnsweredPendingQuestion)
+                    {
+                        // A Bot answer closes the prior unanswered question for history
+                        // import. Never carry that question forward and pair it with a
+                        // later human reply to a different buyer turn.
+                        buyers.Clear();
+                        previousSeller = string.Empty;
+                        previousSellerMessageId = string.Empty;
+                        previousSellerTime = DateTime.MinValue;
+                        botAnsweredPendingQuestion = false;
+                    }
+
                     if (buyers.Count == 0 && !string.IsNullOrWhiteSpace(previousSeller)
                         && previousSellerTime != DateTime.MinValue && turn.Time != DateTime.MinValue
                         && turn.Time - previousSellerTime > TimeSpan.FromMinutes(30))
                     {
                         previousSeller = string.Empty;
+                        previousSellerMessageId = string.Empty;
+                        previousSellerTime = DateTime.MinValue;
                     }
-                    buyers.Add(turn.Text);
+                    buyers.Add(turn);
+                    continue;
+                }
+
+                if (turn.Role != "seller") continue;
+                if (turn.IsBotReply || IsBotMarkedSellerReply(turn.Text))
+                {
+                    if (buyers.Count > 0 && sellers.Count == 0)
+                        botAnsweredPendingQuestion = true;
+                    continue;
+                }
+
+                if (buyers.Count > 0 && botAnsweredPendingQuestion && sellers.Count == 0)
+                {
+                    // A human reply after an already-sent Bot answer is not automatically
+                    // proof that the Bot's earlier answer was wrong or withdrawn. Keep it
+                    // as context for a later buyer turn; explicit correction learning
+                    // handles withdrawn_bot_then_manual evidence separately.
+                    buyers.Clear();
+                    sellers.Clear();
+                    previousSeller = turn.Text;
+                    previousSellerMessageId = (turn.MessageKey ?? string.Empty).Trim();
+                    previousSellerTime = turn.Time;
+                    botAnsweredPendingQuestion = false;
+                }
+                else if (buyers.Count > 0)
+                {
+                    sellers.Add(turn);
+                    botAnsweredPendingQuestion = false;
                 }
                 else
                 {
-                    if (buyers.Count > 0)
-                    {
-                        sellers.Add(turn.Text);
-                    }
-                    else
-                    {
-                        previousSeller = turn.Text;
-                        previousSellerTime = turn.Time;
-                    }
+                    // A human seller message before the buyer's short answer is context,
+                    // not an answer. Bot echoes are deliberately excluded above.
+                    previousSeller = turn.Text;
+                    previousSellerMessageId = (turn.MessageKey ?? string.Empty).Trim();
+                    previousSellerTime = turn.Time;
                 }
             }
+
             flush();
             return result;
+        }
+
+        private static bool IsBotMarkedSellerReply(string value)
+        {
+            return Regex.IsMatch(
+                (value ?? string.Empty).Trim(),
+                @"(?:\[\s*A\s*\]|\[\s*AI\s*\]|【\s*AI\s*】|［\s*AI\s*］)\s*$",
+                RegexOptions.IgnoreCase);
         }
 
         private static bool IsUsefulPair(string question, string answer)
@@ -1611,22 +1828,6 @@ namespace Bot.Knowledge
         private static int CountTranscriptPairs(string transcript)
         {
             return Regex.Matches(transcript ?? string.Empty, "【历史会话问答】").Count;
-        }
-
-        private static void MarkImportedSource(KnowledgeImportResult result, string source)
-        {
-            if (result == null || result.AddedItems == null || result.AddedItems.Count < 1) return;
-            var ids = new HashSet<string>(result.AddedItems.Select(x => x.Id ?? string.Empty));
-            var list = BotFeatureStore.GetKnowledgeBase();
-            var changed = false;
-            foreach (var item in list)
-            {
-                if (item == null || !ids.Contains(item.Id ?? string.Empty)) continue;
-                item.SourceType = source;
-                item.AiGenerated = true;
-                changed = true;
-            }
-            if (changed) BotFeatureStore.SaveKnowledgeBase(list);
         }
 
         private static string Safe(string value)

@@ -73,17 +73,8 @@
   <ItemGroup Condition="Exists('$(MSBuildProjectDirectory)\ChromeNs\ReviewedKnowledgeLearningService.cs')">
     <Compile Include="$(MSBuildProjectDirectory)\ChromeNs\ReviewedKnowledgeLearningService.cs" />
   </ItemGroup>
-  <ItemGroup Condition="Exists('$(MSBuildProjectDirectory)\ChromeNs\KnowledgeContextualReplyService.cs')">
-    <Compile Include="$(MSBuildProjectDirectory)\ChromeNs\KnowledgeContextualReplyService.cs" />
-  </ItemGroup>
   <ItemGroup Condition="Exists('$(MSBuildProjectDirectory)\ChromeNs\SmartReplyRouterService.cs')">
     <Compile Include="$(MSBuildProjectDirectory)\ChromeNs\SmartReplyRouterService.cs" />
-  </ItemGroup>
-  <ItemGroup Condition="Exists('$(MSBuildProjectDirectory)\ChromeNs\SemanticEmbeddingService.cs')">
-    <Compile Include="$(MSBuildProjectDirectory)\ChromeNs\SemanticEmbeddingService.cs" />
-  </ItemGroup>
-  <ItemGroup Condition="Exists('$(MSBuildProjectDirectory)\ChromeNs\KnowledgePolicyProfileService.cs')">
-    <Compile Include="$(MSBuildProjectDirectory)\ChromeNs\KnowledgePolicyProfileService.cs" />
   </ItemGroup>
   <ItemGroup Condition="Exists('$(MSBuildProjectDirectory)\ChromeNs\PreSendAnswerValidator.cs')">
     <Compile Include="$(MSBuildProjectDirectory)\ChromeNs\PreSendAnswerValidator.cs" />
@@ -238,19 +229,10 @@
   <ItemGroup Condition="Exists('$(MSBuildProjectDirectory)\ChromeNs\BotFlowTestService.cs')">
     <Compile Include="$(MSBuildProjectDirectory)\ChromeNs\BotFlowTestService.cs" />
   </ItemGroup>
-  <ItemGroup Condition="Exists('$(MSBuildProjectDirectory)\Knowledge\KnowledgeOptimizationService.cs')">
-    <Compile Include="$(MSBuildProjectDirectory)\Knowledge\KnowledgeOptimizationService.cs" />
-  </ItemGroup>
-  <ItemGroup Condition="Exists('$(MSBuildProjectDirectory)\Knowledge\KnowledgeOptimizationUi.cs')">
-    <Compile Include="$(MSBuildProjectDirectory)\Knowledge\KnowledgeOptimizationUi.cs" />
-  </ItemGroup>
   <ItemGroup Condition="Exists('$(MSBuildProjectDirectory)\Knowledge\StorePromptProfileUi.cs')">
     <Compile Include="$(MSBuildProjectDirectory)\Knowledge\StorePromptProfileUi.cs" />
   </ItemGroup>
-  <ItemGroup Condition="Exists('$(MSBuildProjectDirectory)\Knowledge\KnowledgePolicyProfileUi.cs')">
-    <Compile Include="$(MSBuildProjectDirectory)\Knowledge\KnowledgePolicyProfileUi.cs" />
-  </ItemGroup>
-  <ItemGroup Condition="Exists('$(MSBuildProjectDirectory)\Options\CtlRobotOptions.ControlPlane.Portability.cs')">
+<ItemGroup Condition="Exists('$(MSBuildProjectDirectory)\Options\CtlRobotOptions.ControlPlane.Portability.cs')">
     <Compile Include="$(MSBuildProjectDirectory)\Options\CtlRobotOptions.ControlPlane.Portability.cs" />
   </ItemGroup>
   <ItemGroup Condition="Exists('$(MSBuildProjectDirectory)\Options\SlowResponseDiagnosticsUi.cs')">

@@ -142,8 +142,10 @@ namespace Bot.ChromeNs
                     var question = Clean(Convert.ToString(suggestion["question"]), 400);
                     var answer = Clean(Convert.ToString(suggestion["answer"]), 1200);
                     var oldAnswer = Clean(Convert.ToString(suggestion["old_answer"]), 1200);
+                    var knowledgeId = Clean(Convert.ToString(suggestion["knowledge_id"]), 80);
                     if (question.Length == 0 || answer.Length == 0) continue;
-                    if (ApplyScenarioScope(question, answer, oldAnswer, scopeToken, evidence)) changed++;
+                    if (ApplyScenarioScope(report.Seller, report.Id, knowledgeId,
+                        question, answer, oldAnswer, scopeToken, evidence)) changed++;
                 }
                 if (changed > 0)
                 {
@@ -156,112 +158,30 @@ namespace Bot.ChromeNs
         }
 
         private static bool ApplyScenarioScope(
+            string seller,
+            string reportId,
+            string knowledgeId,
             string question,
             string answer,
             string oldAnswer,
             string scopeToken,
             string evidenceType)
         {
-            var list = BotFeatureStore.GetKnowledgeBase() ?? new List<KnowledgeBaseEntry>();
-            var questionKey = KnowledgeAiService.NormalizeQuestion(question);
-            var answerKey = NormalizeAnswer(answer);
-            if (questionKey.Length == 0 || answerKey.Length == 0) return false;
-
-            var current = list.LastOrDefault(x => x != null
-                && KnowledgeAiService.NormalizeQuestion(x.Title) == questionKey
-                && NormalizeAnswer(x.Answer) == answerKey)
-                ?? list.LastOrDefault(x => x != null
-                    && KnowledgeAiService.NormalizeQuestion(x.Title) == questionKey);
-            if (current == null) return false;
-
-            var oldKey = NormalizeAnswer(oldAnswer);
-            var currentProfileBefore = KnowledgePolicyProfileService.GetProfile(current);
-            KnowledgeBaseEntry preserved = null;
-            if (oldKey.Length > 0 && oldKey != answerKey)
-            {
-                preserved = list.FirstOrDefault(x => x != null
-                    && KnowledgeAiService.NormalizeQuestion(x.Title) == questionKey
-                    && NormalizeAnswer(x.Answer) == oldKey);
-                if (preserved == null)
-                {
-                    var now = DateTime.Now.ToString("yyyy-MM-dd HH:mm:ss");
-                    preserved = new KnowledgeBaseEntry
-                    {
-                        Id = Guid.NewGuid().ToString("N"),
-                        Enabled = true,
-                        Category = current.Category,
-                        Title = question,
-                        Answer = oldAnswer,
-                        Keywords = current.Keywords,
-                        CreatedAt = now,
-                        UpdatedAt = now,
-                        AiGenerated = false,
-                        SourceType = "场景分流保留-纠错前答案"
-                    };
-                    list.Add(preserved);
-                    BotFeatureStore.SaveKnowledgeBase(list);
-
-                    var oldProfile = CloneProfile(currentProfileBefore);
-                    oldProfile.DoNotApplyWhen = MergeCondition(oldProfile.DoNotApplyWhen, scopeToken);
-                    oldProfile.AnswerMode = KnowledgeAnswerModes.Contextual;
-                    oldProfile.LastEvidenceType = "scenario_preserved_after_" + evidenceType;
-                    KnowledgePolicyProfileService.SaveProfile(preserved, oldProfile);
-                }
-                else
-                {
-                    var oldProfile = KnowledgePolicyProfileService.GetProfile(preserved);
-                    oldProfile.DoNotApplyWhen = MergeCondition(oldProfile.DoNotApplyWhen, scopeToken);
-                    oldProfile.AnswerMode = KnowledgeAnswerModes.Contextual;
-                    oldProfile.LastEvidenceType = "scenario_excluded_after_" + evidenceType;
-                    KnowledgePolicyProfileService.SaveProfile(preserved, oldProfile);
-                }
-            }
-
-            // Scenario scope is intentionally one atomic condition. The legacy policy parser uses OR
-            // across rows, so merging several phase/product/SKU rows would re-introduce partial-match
-            // ambiguity. RequiredContext is replaced by the exact scenario token for this correction.
-            var currentProfile = KnowledgePolicyProfileService.GetProfile(current);
-            currentProfile.ApplyWhen = scopeToken;
-            currentProfile.RequiredContext = scopeToken;
-            currentProfile.AnswerMode = KnowledgeAnswerModes.Contextual;
-            currentProfile.Confidence = Math.Max(currentProfile.Confidence, 0.94);
-            currentProfile.LastEvidenceType = "commerce_" + evidenceType;
-            KnowledgePolicyProfileService.SaveProfile(current, currentProfile);
-            return true;
-        }
-
-        private static KnowledgePolicyProfile CloneProfile(KnowledgePolicyProfile source)
-        {
-            source = source ?? new KnowledgePolicyProfile();
-            return new KnowledgePolicyProfile
-            {
-                Intent = source.Intent,
-                Entities = source.Entities,
-                ApplyWhen = source.ApplyWhen,
-                DoNotApplyWhen = source.DoNotApplyWhen,
-                RequiredContext = source.RequiredContext,
-                AnswerMode = source.AnswerMode,
-                Confidence = source.Confidence,
-                DirectSelectedCount = source.DirectSelectedCount,
-                ContextualSelectedCount = source.ContextualSelectedCount,
-                AcceptedCount = source.AcceptedCount,
-                SellerCorrectionCount = source.SellerCorrectionCount,
-                SellerWithdrawCount = source.SellerWithdrawCount,
-                LastEvidenceType = source.LastEvidenceType,
-                UpdatedAt = source.UpdatedAt
-            };
-        }
-
-        private static string MergeCondition(string existing, string condition)
-        {
-            var values = (existing ?? string.Empty)
-                .Split(new[] { '\r', '\n', ';', '；' }, StringSplitOptions.RemoveEmptyEntries)
-                .Select(x => x.Trim())
-                .Where(x => x.Length > 0)
-                .ToList();
-            if (!values.Any(x => string.Equals(x, condition, StringComparison.OrdinalIgnoreCase)))
-                values.Add(condition);
-            return string.Join("；", values);
+            string result;
+            var saved = KnowledgeEngineV2Repository.TryApplyCommerceScenarioScope(
+                seller,
+                knowledgeId,
+                question,
+                answer,
+                oldAnswer,
+                scopeToken,
+                reportId,
+                evidenceType,
+                out result);
+            if (!saved)
+                Log.ErrorWithMaxCount("Knowledge V2 Commerce场景约束未应用: report="
+                    + reportId + "; reason=" + Clean(result, 220), 10);
+            return saved;
         }
 
         private static bool IsReusableEvidence(string evidence)
@@ -278,17 +198,6 @@ namespace Bot.ChromeNs
             if (token == null) return false;
             bool value;
             return bool.TryParse(Convert.ToString(token), out value) && value;
-        }
-
-        private static string NormalizeAnswer(string value)
-        {
-            return (value ?? string.Empty)
-                .Replace("[AI]", string.Empty)
-                .Replace("\r", string.Empty)
-                .Replace("\n", string.Empty)
-                .Replace(" ", string.Empty)
-                .Trim()
-                .ToLowerInvariant();
         }
 
         private static string Clean(string value, int max)

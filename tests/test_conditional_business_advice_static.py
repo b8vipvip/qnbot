@@ -43,7 +43,9 @@ def test_knowledge_v2_skips_only_typed_evidence_terms_not_normal_scope_checks():
     assert "ConditionalBusinessAdviceService.IsEvidenceRequirement(x)" in applicable
     assert "ScopeTermMatches(x, query)" in applicable
     assert "var exclusions = NormalizeScopeTerms(record.Exclusions);" in applicable
-    assert "var conditions = NormalizeScopeTerms(record.Conditions);" in applicable
+    assert "var conditions = NormalizeScopeTerms(record.Conditions).Where(x => !IsCommerceScope(x)).ToList();" in applicable
+    assert "CommerceScopes(record.Conditions)" in applicable
+    assert "scopeConditions.Any(x => ScopeTermMatches(x, query))" in applicable
 
 
 def test_conditional_refund_advice_requires_paid_open_order_and_current_image():

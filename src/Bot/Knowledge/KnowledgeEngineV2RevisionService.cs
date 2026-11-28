@@ -1,4 +1,6 @@
 using Bot.ShopScope;
+using Bot.ChromeNs;
+using System.Threading;
 using BotLib;
 using BotLib.Db.Sqlite;
 using Newtonsoft.Json;
@@ -19,6 +21,7 @@ namespace Bot.Knowledge
         public string KnowledgeTitle { get; set; }
         public string RiskLevel { get; set; }
         public string OriginalAnswer { get; set; }
+        public string OriginalFingerprint { get; set; }
         public string ProposedAnswer { get; set; }
         public string EvidenceJson { get; set; }
         public int EvidenceCount { get; set; }
@@ -124,7 +127,18 @@ namespace Bot.Knowledge
         private static readonly ConcurrentDictionary<string, StoreState> Stores =
             new ConcurrentDictionary<string, StoreState>(StringComparer.Ordinal);
 
-        public static KnowledgeV2RevisionGenerationResult GenerateCandidates(string seller)
+        private static readonly ConcurrentDictionary<string, object> OperationLocks =
+            new ConcurrentDictionary<string, object>(StringComparer.Ordinal);
+
+        public static KnowledgeV2RevisionGenerationResult GenerateCandidates(string seller, CancellationToken token = default(CancellationToken))
+        {
+            var shop = ResolveShopRequired(seller);
+            using (ShopSettingsScope.Enter(shop))
+            lock (OperationLocks.GetOrAdd(shop.ShopKey, _ => new object()))
+                return GenerateCandidatesCore(seller, token);
+        }
+
+        private static KnowledgeV2RevisionGenerationResult GenerateCandidatesCore(string seller, CancellationToken token)
         {
             seller = Clean(seller);
             if (seller.Length == 0) throw new InvalidOperationException("无法识别当前店铺客服账号。");
@@ -137,11 +151,11 @@ namespace Bot.Knowledge
                 .Where(x => x != null && (x.HealthStatus == "低质量" || x.HealthStatus == "观察") && x.CorrectionCount > 0)
                 .OrderByDescending(x => x.CorrectionCount)
                 .ThenBy(x => x.QualityScore)
-                .Take(120)
                 .ToList();
 
             foreach (var item in quality)
             {
+                token.ThrowIfCancellationRequested();
                 result.ScannedKnowledge++;
                 KnowledgeV2Record record;
                 if (!records.TryGetValue(item.KnowledgeId ?? string.Empty, out record) || record == null) continue;
@@ -150,6 +164,8 @@ namespace Bot.Knowledge
                 var events = KnowledgeEngineV2FeedbackService.GetRecentEvents(seller, record.Id, 100)
                     .Where(x => x != null && string.Equals(x.EventType, "correction", StringComparison.OrdinalIgnoreCase))
                     .Where(x => SafeDate(x.CreatedAtTicks) >= DateTime.Now.AddDays(-120))
+                    .Where(x => string.Equals(Clean(x.Answer), Clean(record.Answer), StringComparison.Ordinal)
+                        && SafeDate(x.CreatedAtTicks) >= record.LastVerifiedAt)
                     .ToList();
                 result.CorrectionEvents += events.Count;
 
@@ -230,6 +246,7 @@ namespace Bot.Knowledge
                     KnowledgeTitle = record.Title ?? string.Empty,
                     RiskLevel = string.IsNullOrWhiteSpace(record.RiskLevel) ? "normal" : record.RiskLevel,
                     OriginalAnswer = record.Answer ?? string.Empty,
+                    OriginalFingerprint = KnowledgeEngineV2Repository.EditorRecordFingerprint(record),
                     ProposedAnswer = proposal,
                     EvidenceJson = JsonConvert.SerializeObject(evidence),
                     EvidenceCount = cluster.Samples.Count,
@@ -273,6 +290,14 @@ namespace Bot.Knowledge
 
         public static bool ApplyCandidate(string seller, string candidateId, out string error)
         {
+            var shop = ResolveShopRequired(seller);
+            using (ShopSettingsScope.Enter(shop))
+            lock (OperationLocks.GetOrAdd(shop.ShopKey, _ => new object()))
+                return ApplyCandidateCore(seller, candidateId, out error);
+        }
+
+        private static bool ApplyCandidateCore(string seller, string candidateId, out string error)
+        {
             error = string.Empty;
             seller = Clean(seller);
             var row = FindRow(seller, candidateId);
@@ -289,13 +314,15 @@ namespace Bot.Knowledge
 
             var record = KnowledgeEngineV2Repository.LoadAll(seller)
                 .FirstOrDefault(x => x != null && string.Equals(x.Id, row.KnowledgeId, StringComparison.Ordinal));
-            if (record == null)
+            if (record == null || !record.Enabled || !string.Equals(record.Status, "active", StringComparison.OrdinalIgnoreCase))
             {
-                MarkStatus(seller, row, "stale", "原知识已不存在，候选自动过期。", false);
+                MarkStatus(seller, row, "stale", "原知识已不存在或已停用，候选自动过期。", false);
                 error = "原知识已不存在，候选已标记过期。";
                 return false;
             }
-            if (!string.Equals(NormalizeComparable(record.Answer), NormalizeComparable(row.OriginalAnswer), StringComparison.Ordinal))
+            var currentFingerprint = KnowledgeEngineV2Repository.EditorRecordFingerprint(record);
+            if (string.IsNullOrEmpty(row.OriginalFingerprint)
+                || !string.Equals(currentFingerprint, row.OriginalFingerprint, StringComparison.Ordinal))
             {
                 MarkStatus(seller, row, "stale", "原知识在候选生成后已被修改，拒绝覆盖。", false);
                 error = "原知识在候选生成后已变化，为避免覆盖人工修改，候选已标记过期。";
@@ -310,7 +337,12 @@ namespace Bot.Knowledge
             var beforeState = KnowledgeEngineV2GovernanceAuditService.DescribeRecord(record);
             record.Answer = row.ProposedAnswer.Trim();
             record.LastVerifiedAt = DateTime.Now;
-            KnowledgeEngineV2Repository.Save(seller, record);
+            if (!KnowledgeEngineV2Repository.TrySaveEditorRecord(seller, record, currentFingerprint))
+            {
+                MarkStatus(seller, row, "stale", "应用期间原知识被修改，未覆盖。", false);
+                error = "知识已发生并发变化，修订未应用。";
+                return false;
+            }
             MarkStatus(seller, row, "applied", "人工复核通过并应用；原答案已保留在修订审计记录中。", true);
             string auditError;
             KnowledgeEngineV2GovernanceAuditService.TryAppendAction(seller,
@@ -325,6 +357,14 @@ namespace Bot.Knowledge
         }
 
         public static bool RejectCandidate(string seller, string candidateId, string reason, out string error)
+        {
+            var shop = ResolveShopRequired(seller);
+            using (ShopSettingsScope.Enter(shop))
+            lock (OperationLocks.GetOrAdd(shop.ShopKey, _ => new object()))
+                return RejectCandidateCore(seller, candidateId, reason, out error);
+        }
+
+        private static bool RejectCandidateCore(string seller, string candidateId, string reason, out string error)
         {
             error = string.Empty;
             seller = Clean(seller);
@@ -451,7 +491,8 @@ namespace Bot.Knowledge
                 && string.Equals(x.KnowledgeId, record.Id, StringComparison.Ordinal)
                 && string.Equals(x.Status, "pending", StringComparison.OrdinalIgnoreCase)).ToList())
             {
-                if (!string.Equals(NormalizeComparable(row.OriginalAnswer), NormalizeComparable(record.Answer), StringComparison.Ordinal))
+                if (string.IsNullOrEmpty(row.OriginalFingerprint)
+                    || !string.Equals(row.OriginalFingerprint, KnowledgeEngineV2Repository.EditorRecordFingerprint(record), StringComparison.Ordinal))
                     MarkStatus(seller, row, "stale", "原知识已在候选生成后修改。", false);
             }
         }
@@ -527,10 +568,8 @@ namespace Bot.Knowledge
 
         private static ShopContext ResolveShopRequired(string seller)
         {
-            var current = ShopSettingsScope.Current;
-            if (current != null) return current;
-            var shop = ShopContextLocator.ResolveBySellerNick(Clean(seller));
-            if (shop == null) throw new InvalidOperationException("Knowledge V2修订服务无法确定当前店铺身份。");
+            var shop = ShopContextLocator.ResolveCurrentOrBySellerNick(Clean(seller));
+            if (shop == null || !shop.HasStableSellerId || string.IsNullOrWhiteSpace(shop.ShopKey)) throw new InvalidOperationException("Knowledge V2修订服务无法确定当前店铺身份。");
             return shop;
         }
 

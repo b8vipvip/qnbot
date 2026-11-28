@@ -99,7 +99,6 @@ def test_authenticated_syncs_share_same_shop_401_recovery_and_backoff():
     clients = {
         "bot_web": text(CHROME / "BotWebConsoleSyncService.cs"),
         "bot_enabled": text(CHROME / "BotWebBotEnabledSyncService.cs"),
-        "knowledge": text(ROOT / "src" / "Bot" / "Knowledge" / "KnowledgeCloudSyncService.cs"),
         "knowledge_v2": text(ROOT / "src" / "Bot" / "Knowledge" / "KnowledgeV2CloudSyncService.cs"),
         "store_rules": text(ROOT / "src" / "Bot" / "Knowledge" / "StoreRuleCloudSyncService.cs"),
     }
@@ -113,6 +112,7 @@ def test_authenticated_syncs_share_same_shop_401_recovery_and_backoff():
     assert "ResetFailure(_shop)" in connection
     assert "GetLegacyGlobalToken" not in authority
 
+    assert not (ROOT / "src" / "Bot" / "Knowledge" / "KnowledgeCloudSyncService.cs").exists()
     for name, source in clients.items():
         assert "ShopRuntimeCredentialAuthority.SendWithUnauthorizedRecoveryAsync" in source, name
         assert "ShouldAttemptSync" in source, name
