@@ -72,6 +72,40 @@ namespace Bot.Knowledge
             KnowledgeEngineV2Service.ApplyRecordUpdate(seller, record);
         }
 
+        // A knowledge editor may remain open across a learning or cloud-sync update.
+        // Use the exact record fingerprint, not a wall-clock timestamp, to reject stale writes.
+        internal static bool TrySaveEditorRecord(string seller, KnowledgeV2Record record, string expectedFingerprint)
+        {
+            if (record == null || string.IsNullOrWhiteSpace(record.Id)) return false;
+            var shop = ResolveShopRequired(seller);
+            var state = GetState(shop);
+            EnsureSchemaInitialized(state);
+            NormalizeForSave(record);
+            lock (state.Sync)
+            {
+                var row = state.Db.ReadOneRecord<KnowledgeV2RecordRow>(x => x.Id == record.Id);
+                if (row == null)
+                {
+                    if (!string.IsNullOrEmpty(expectedFingerprint)) return false;
+                }
+                else
+                {
+                    if (string.IsNullOrEmpty(expectedFingerprint)
+                        || string.Equals(row.Status, "deleted", StringComparison.OrdinalIgnoreCase)
+                        || !string.Equals(EditorRecordFingerprint(FromRow(row)), expectedFingerprint, StringComparison.Ordinal))
+                        return false;
+                }
+                state.Db.SaveOneRecord(ToRow(record));
+            }
+            KnowledgeEngineV2Service.ApplyRecordUpdate(seller, record);
+            return true;
+        }
+
+        internal static string EditorRecordFingerprint(KnowledgeV2Record record)
+        {
+            return record == null ? string.Empty : ComputeCloudSyncFingerprint(new[] { record });
+        }
+
         /// <summary>
         /// Explicit operator Save from the Bot message editor / sandbox. Stores a
         /// production-approved exact question without an AI observation period.
