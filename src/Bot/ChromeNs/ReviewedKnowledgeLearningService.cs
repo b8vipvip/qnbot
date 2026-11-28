@@ -1,5 +1,6 @@
 using Bot.Knowledge;
 using Bot.ShopScope;
+using BotLib;
 using System;
 using System.Collections.Generic;
 using System.Linq;

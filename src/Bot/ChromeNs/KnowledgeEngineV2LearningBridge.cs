@@ -113,10 +113,3 @@ namespace Bot.Knowledge
     }
 }
 
-namespace Bot
-{
-    public partial class App
-    {
-        private readonly object _knowledgeEngineV2LearningBootstrap = ChromeNs.KnowledgeEngineV2LearningBridge.InitializeForApp();
-    }
-}

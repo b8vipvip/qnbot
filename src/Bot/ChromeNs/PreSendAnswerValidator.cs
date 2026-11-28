@@ -151,7 +151,7 @@ namespace Bot.ChromeNs
             var highRisk = unsupportedAbsolute.Count > 0
                 || unsupportedStatus.Count > 0
                 || HasHighRiskUnsupportedClaim(answer, authoritativeEvidence)
-                || HasKnowledgeContradiction(answer, knowledge, approvedV2ContextEvidence);
+                || HasKnowledgeContradiction(answer, approvedV2ContextEvidence);
             if (highRisk || secondAttempt)
             {
                 result.Action = AnswerValidationAction.Manual;

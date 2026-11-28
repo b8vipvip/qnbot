@@ -1,4 +1,5 @@
 using Bot.Knowledge;
+using BotLib;
 using System;
 using System.Collections.Generic;
 using System.Linq;
