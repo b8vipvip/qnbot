@@ -34,6 +34,9 @@ class KnowledgeV2RevisionHistoryInput(BaseModel):
     epoch: str = ""
     cursor: int = 0
     rows: list[dict[str, Any]] = []
+    device_id: str = ""
+    local_revision_count: int | None = None
+    local_revision_digest: str = ""
 
 class KnowledgeV2WebInput(BaseModel):
     records: list[dict[str, Any]]
@@ -129,6 +132,11 @@ def init_db():
             UNIQUE(client_id,shop_key,revision_id),
             FOREIGN KEY(client_id) REFERENCES client_tokens(id) ON DELETE CASCADE)""")
         conn.execute("CREATE INDEX IF NOT EXISTS ix_v2_revision_cursor ON bot_knowledge_v2_revision_history(client_id,shop_key,seq)")
+        conn.execute("""CREATE TABLE IF NOT EXISTS bot_knowledge_v2_revision_receipts (
+            client_id INTEGER NOT NULL, shop_key TEXT NOT NULL, device_id TEXT NOT NULL,
+            row_count INTEGER NOT NULL, digest TEXT NOT NULL, verified INTEGER NOT NULL,
+            received_at TEXT NOT NULL, PRIMARY KEY(client_id,shop_key,device_id),
+            FOREIGN KEY(client_id) REFERENCES client_tokens(id) ON DELETE CASCADE)""")
 
 _FEEDBACK_TYPES = {"sent", "send_failed", "accepted", "correction", "withdrawal", "buyer_negative"}
 _TICKS_PER_SECOND = 10_000_000
@@ -258,6 +266,18 @@ def _revision_rows(rows):
         result.append((rid,encoded))
     return result
 
+def _revision_digest(conn,client_id,shop_key):
+    rows=conn.execute("""SELECT revision_id,row_json,seq FROM bot_knowledge_v2_revision_history
+        WHERE client_id=? AND shop_key=? ORDER BY revision_id""",(client_id,shop_key)).fetchall()
+    digest=hashlib.sha256()
+    fields=("KnowledgeId","MessageRecordId","Action","PreviousJson","CurrentJson")
+    for i,row in enumerate(rows):
+        data=json.loads(row["row_json"])
+        parts=[row["revision_id"]]+[base64.b64encode(data[f].encode("utf-8")).decode("ascii") for f in fields]+[str(data["CreatedAtTicks"])]
+        if i: digest.update(b"\n")
+        digest.update("\n".join(parts).encode("utf-8"))
+    return len(rows),digest.hexdigest(),max((row["seq"] for row in rows),default=0)
+
 @router.post("/api/runtime/v1/bot-web/knowledge-v2-revision-sync")
 def runtime_revision_sync(payload: KnowledgeV2RevisionHistoryInput, request: Request, x_shop_key: str | None = Header(default=None)):
     client_id=int(bot_web_console._runtime_client(request)["id"])
@@ -280,9 +300,50 @@ def runtime_revision_sync(payload: KnowledgeV2RevisionHistoryInput, request: Req
         rows=conn.execute("""SELECT seq,row_json FROM bot_knowledge_v2_revision_history
             WHERE client_id=? AND shop_key=? AND seq>? ORDER BY seq LIMIT 21""",(client_id,shop_key,cursor)).fetchall()
         page=rows[:20]
+        if (payload.device_id and payload.local_revision_count is not None
+            and payload.local_revision_count>=0 and len(payload.local_revision_digest)==64
+            and all(c in "0123456789abcdef" for c in payload.local_revision_digest)
+            and conn.execute("""SELECT 1 FROM bot_knowledge_v2_devices
+                WHERE client_id=? AND shop_key=? AND device_id=?""",
+                (client_id,shop_key,payload.device_id)).fetchone()):
+            count,digest,highwater=_revision_digest(conn,client_id,shop_key)
+            verified=int(not incoming and payload.epoch==epoch and payload.cursor==highwater
+                         and payload.local_revision_count==count and payload.local_revision_digest==digest)
+            conn.execute("""INSERT INTO bot_knowledge_v2_revision_receipts
+                (client_id,shop_key,device_id,row_count,digest,verified,received_at)
+                VALUES(?,?,?,?,?,?,?) ON CONFLICT(client_id,shop_key,device_id) DO UPDATE SET
+                row_count=excluded.row_count,digest=excluded.digest,verified=excluded.verified,
+                received_at=excluded.received_at""",(client_id,shop_key,payload.device_id,
+                payload.local_revision_count,payload.local_revision_digest,verified,_cp.iso_now()))
         return {"epoch":epoch,"cursor":int(page[-1]["seq"]) if page else cursor,
                 "has_more":len(rows)>20,"ack_ids":[rid for rid,_ in incoming],
                 "rows":[json.loads(row["row_json"]) for row in page]}
+
+@router.get("/api/bot-web/knowledge-v2/revision-sync-status")
+def web_revision_sync_status(client=Depends(bot_web_console._web_client)):
+    from datetime import datetime,timezone,timedelta
+    client_id=int(client["id"])
+    with _cp.db() as conn:
+        shop_key=_feedback_binding(conn,client_id)
+        count,digest,_=_revision_digest(conn,client_id,shop_key)
+        rows=conn.execute("""SELECT d.device_id,d.last_seen_at,r.row_count,r.digest,r.verified,r.received_at
+            FROM bot_knowledge_v2_devices d LEFT JOIN bot_knowledge_v2_revision_receipts r
+            ON d.client_id=r.client_id AND d.shop_key=r.shop_key AND d.device_id=r.device_id
+            WHERE d.client_id=? AND d.shop_key=?""",(client_id,shop_key)).fetchall()
+    cutoff=datetime.now(timezone.utc)-timedelta(minutes=5)
+    def fresh(value):
+        try:
+            stamp=datetime.fromisoformat(value)
+            return (stamp if stamp.tzinfo else stamp.replace(tzinfo=timezone.utc))>=cutoff
+        except (ValueError,TypeError):
+            return False
+    items=[{"id":r["device_id"],"revision_count":r["row_count"],
+        "verified":bool(r["verified"] and r["row_count"]==count and r["digest"]==digest
+            and fresh(r["received_at"]) and fresh(r["last_seen_at"])),
+        "receipt_at":r["received_at"]} for r in rows]
+    verified=sum(1 for item in items if item["verified"])
+    return {"server_revision_count":count,"verified_devices":verified,
+        "two_device_nonempty_convergence":count>0 and verified>=2,"items":items}
 
 @router.get("/api/bot-web/knowledge-v2/feedback")
 def web_feedback(client=Depends(bot_web_console._web_client)):
