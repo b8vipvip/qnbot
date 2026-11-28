@@ -43,7 +43,7 @@ def test_v2_cloud_replacement_uses_atomic_repository_compare_and_swap_without_v1
     repository = read("src/Bot/Knowledge/KnowledgeEngineV2.Repository.cs")
     method = repository[
         repository.index("internal static bool TryReplaceAllIfUnchanged"):
-        repository.index("public static string GetDatabasePath")
+        repository.index("internal static int ResumePortableImport")
     ]
 
     assert "lock(state.Sync)" in method
