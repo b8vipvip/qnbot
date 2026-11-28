@@ -596,7 +596,7 @@ namespace Bot.Knowledge
                 .Where(x => HasAnswerDisagreement(x.Records)).ToList();
         }
 
-        internal static bool TryResolveConflict(string seller, string expectedFingerprint, string factKey, string selectedId, bool asCandidate)
+        internal static bool TryResolveConflict(string seller, string expectedFingerprint, string factKey, string selectedId, bool asCandidate, string operationReceipt = null)
         {
             var records = KnowledgeEngineV2Repository.LoadAll(seller);
             if (string.IsNullOrWhiteSpace(expectedFingerprint) ||
@@ -616,7 +616,7 @@ namespace Bot.Knowledge
                 record.UpdatedAt = DateTime.Now;
             }
             // One CAS transaction for the entire group; never apply a partial resolution.
-            return KnowledgeEngineV2Repository.TryReplaceAllIfUnchanged(seller, expectedFingerprint, records);
+            return KnowledgeEngineV2Repository.TryReplaceAllIfUnchanged(seller, expectedFingerprint, records, null, operationReceipt);
         }
 
         public static KnowledgeV2Stats GetStats(string seller)
