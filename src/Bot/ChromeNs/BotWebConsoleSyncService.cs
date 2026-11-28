@@ -1256,12 +1256,40 @@ namespace Bot.ChromeNs
                     Log.ErrorWithMaxCount("知识操作断点证据复核失败：" + ex.GetType().Name, 10);
                 }
             }
+            if (!completed && (action == "rollback" || action == "conflict_resolve"
+                || action == "revision_apply" || action == "revision_reject"))
+            {
+                try
+                {
+                    var shop = state.Shop;
+                    if (shop != null && shop.HasStableSellerId)
+                    using (ShopSettingsScope.Enter(shop))
+                    {
+                        completed = action == "rollback" || action == "conflict_resolve"
+                            ? KnowledgeEngineV2Repository.HasRemoteMutationReceipt(
+                                shop.SellerNick, RemoteMutationKey(scope, id, claim, action), action)
+                            : KnowledgeEngineV2RevisionService.HasCommittedCandidateOutcome(
+                                shop.SellerNick, (string)receipt["candidate_id"], action, (string)receipt["reason"]);
+                        if (completed)
+                            recovered = new JObject { ["applied"] = true, ["recovered_from_committed_receipt"] = true };
+                    }
+                }
+                catch (Exception ex)
+                {
+                    Log.ErrorWithMaxCount("知识操作事务凭证复核失败：" + ex.GetType().Name, 10);
+                }
+            }
             var result = Result(id, completed, completed ? string.Empty
                 : "客户端重启中断任务；仅恢复已核实的原任务断点，不自动重复执行知识修订或回滚。", recovered);
             result["claim"] = claim;
             result["journal_scope"] = scope;
             result["phase"] = completed ? "completed" : "interrupted";
             return result;
+        }
+
+        private static string RemoteMutationKey(string scope, long id, string claim, string action)
+        {
+            return Hash(scope + "\n" + id + "\n" + claim + "\n" + action);
         }
 
         private static void StartKnowledgeOperation(ShopWebState state, long id, JObject payload, string journalScope)
@@ -1286,6 +1314,8 @@ namespace Bot.ChromeNs
                 receipt["claim"] = claim;
                 receipt["journal_scope"] = journalScope;
                 receipt["action"] = (string)payload["action"];
+                receipt["candidate_id"] = (string)payload["candidate_id"];
+                receipt["reason"] = (string)payload["reason"];
                 WriteKnowledgeJournal(path, journalScope, receipt);
             }
             catch
@@ -1305,7 +1335,7 @@ namespace Bot.ChromeNs
                         || string.IsNullOrEmpty(KnowledgeDeviceId.Value) || (string)payload["device_id"] != KnowledgeDeviceId.Value)
                         throw new InvalidOperationException("远程知识操作店铺身份不匹配。");
                     using (ShopSettingsScope.Enter(state.Shop))
-                        result = Result(id, true, string.Empty, await ExecuteKnowledgeOperationAsync(state, payload, job));
+                        result = Result(id, true, string.Empty, await ExecuteKnowledgeOperationAsync(state, payload, job, id));
                 }
                 catch (OperationCanceledException)
                 {
@@ -1337,7 +1367,7 @@ namespace Bot.ChromeNs
             });
         }
 
-        private static async Task<JObject> ExecuteKnowledgeOperationAsync(ShopWebState state, JObject payload, KnowledgeOperation job)
+        private static async Task<JObject> ExecuteKnowledgeOperationAsync(ShopWebState state, JObject payload, KnowledgeOperation job, long commandId)
         {
             var seller = state.Shop.DisplayName;
             var action = (string)payload["action"];
@@ -1416,7 +1446,8 @@ namespace Bot.ChromeNs
                             .Select(x => new { x.FactKey, x.Subject, x.Predicate, Records = x.Records.Select(y => new { y.Id, y.Title, y.Answer }) })) };
                 case "conflict_resolve":
                     if (!KnowledgeEngineV2Service.TryResolveConflict(seller, (string)payload["fingerprint"],
-                        (string)payload["fact_key"], (string)payload["knowledge_id"], (string)payload["reason"] == "candidate"))
+                        (string)payload["fact_key"], (string)payload["knowledge_id"], (string)payload["reason"] == "candidate",
+                        RemoteMutationKey(job.JournalScope, commandId, job.Claim, action)))
                         throw new InvalidOperationException("知识或冲突已变化，请刷新后重试。");
                     return new JObject { ["applied"] = true };
                 case "rollback_list":
@@ -1424,7 +1455,8 @@ namespace Bot.ChromeNs
                 case "rollback":
                     string rollbackError;
                     if (!KnowledgeEngineV2Repository.TryRollbackLastBotCorrection(seller, (string)payload["knowledge_id"], out rollbackError,
-                        (string)payload["revision_id"], (string)payload["fingerprint"]))
+                        (string)payload["revision_id"], (string)payload["fingerprint"],
+                        RemoteMutationKey(job.JournalScope, commandId, job.Claim, action)))
                         throw new InvalidOperationException(rollbackError);
                     return new JObject { ["message"] = rollbackError };
                 default: throw new InvalidOperationException("不支持的知识操作。");
