@@ -1412,20 +1412,24 @@ namespace Bot.Knowledge
         {
             var state = GetState(ResolveShopRequired(seller));
             EnsureSchemaInitialized(state);
-            var key = RevisionSyncCheckpointKey(scope);
             lock (state.Sync)
-            {
-                var meta = state.Db.ReadOneRecord<KnowledgeV2MetaRow>(x => x.Key == key);
+                return BuildRevisionSyncRequestCore(state.Db, scope);
+        }
+
+        private static JObject BuildRevisionSyncRequestCore(SQLiteHelper db, string scope)
+        {
+                var key = RevisionSyncCheckpointKey(scope);
+                var meta = db.ReadOneRecord<KnowledgeV2MetaRow>(x => x.Key == key);
                 var checkpoint = meta == null ? new JObject() : JObject.Parse(meta.Value);
                 var epoch = (string)checkpoint["epoch"] ?? string.Empty;
                 // Acknowledge immutable IDs durably rather than repeatedly walking the
                 // whole history. Random GUID ordering cannot hide a newly inserted row.
                 var ackPrefix = key + ":ack:";
-                var rows = state.Db.Select(typeof(KnowledgeV2ManualEditRevisionRow),
+                var rows = db.Select(typeof(KnowledgeV2ManualEditRevisionRow),
                     "where not exists (select 1 from KnowledgeV2MetaRow m where m.Key = ? || KnowledgeV2ManualEditRevisionRow.Id and m.Value = ?) order by Id limit 20",
                     ackPrefix, epoch).OfType<KnowledgeV2ManualEditRevisionRow>().ToList();
                 var all = rows.Count == 0
-                    ? state.Db.ReadRecords<KnowledgeV2ManualEditRevisionRow>(null).Where(x => x != null).ToList()
+                    ? db.ReadTable<KnowledgeV2ManualEditRevisionRow>().Where(x => x != null).ToList()
                     : null;
                 return new JObject
                 {
@@ -1435,7 +1439,6 @@ namespace Bot.Knowledge
                     ["local_revision_digest"] = all == null ? string.Empty : RevisionHistoryDigest(all),
                     ["rows"] = JArray.FromObject(rows)
                 };
-            }
         }
 
         private static string RevisionHistoryDigest(IEnumerable<KnowledgeV2ManualEditRevisionRow> rows)
@@ -1455,6 +1458,12 @@ namespace Bot.Knowledge
         {
             var state = GetState(ResolveShopRequired(seller));
             EnsureSchemaInitialized(state);
+            lock (state.Sync)
+                return ApplyRevisionSyncResponseCore(state.Db, scope, request, response);
+        }
+
+        private static bool ApplyRevisionSyncResponseCore(SQLiteHelper db, string scope, JObject request, JObject response)
+        {
             var epoch = (string)response["epoch"];
             var cursor = response.Value<long?>("cursor");
             var incoming = response["rows"] as JArray;
@@ -1466,7 +1475,6 @@ namespace Bot.Knowledge
                 || !new HashSet<string>(ack.Values<string>(), StringComparer.Ordinal)
                     .SetEquals(uploaded.Select(x => (string)x["Id"])))
                 throw new InvalidDataException("修订同步响应或确认凭证无效");
-            lock (state.Sync)
             {
                 var key = RevisionSyncCheckpointKey(scope);
                 var writes = new List<object>();
@@ -1481,7 +1489,7 @@ namespace Bot.Knowledge
                         throw new InvalidDataException("远端修订记录无效");
                     if (!receivedIds.Add(row.Id))
                         throw new InvalidDataException("远端修订ID重复");
-                    var prior = state.Db.ReadOneRecord<KnowledgeV2ManualEditRevisionRow>(x => x.Id == row.Id);
+                    var prior = db.ReadOneRecord<KnowledgeV2ManualEditRevisionRow>(x => x.Id == row.Id);
                     if (prior != null && !JToken.DeepEquals(JObject.FromObject(prior), JObject.FromObject(row)))
                         throw new InvalidDataException("同一修订ID内容冲突");
                     if (prior == null) writes.Add(row);
@@ -1496,7 +1504,7 @@ namespace Bot.Knowledge
                     Key = RevisionSyncCheckpointKey(scope),
                     Value = new JObject { ["epoch"] = epoch, ["cursor"] = cursor.Value }.ToString(Formatting.None)
                 });
-                state.Db.SaveRecordsInTransaction(writes);
+                db.SaveRecordsInTransaction(writes);
             }
             return response.Value<bool?>("has_more") == true || uploaded.Count > 0 || incoming.Count > 0;
         }
