@@ -743,3 +743,34 @@ def test_sqlite_snapshot_sync_accepts_5001_records_and_preserves_cas(tmp_path):
     assert len(module._state(1)["records"])==5001
     stale=module._save(1,[records[0]],"windows",expected_revision=0)
     assert stale["revision"]==1 and len(stale["records"])==5001
+
+
+@pytest.mark.skipif(importlib.util.find_spec("fastapi") is None, reason="server dependencies are not installed")
+def test_revision_convergence_requires_two_registered_persisted_matching_receipts(tmp_path):
+    import json
+    from datetime import datetime, timezone
+    module = _load_v2_cas_module(tmp_path)
+    module._cp.iso_now=lambda: datetime.now(timezone.utc).isoformat()
+    with module._cp.db() as conn:
+        conn.execute("CREATE TABLE bot_client_shop_binding (client_id INTEGER PRIMARY KEY, shop_key TEXT)")
+        conn.execute("INSERT INTO bot_client_shop_binding VALUES (1,'shop-a')")
+        for device in ("a"*32,"b"*32):
+            conn.execute("INSERT INTO bot_knowledge_v2_devices VALUES (1,'shop-a',?,?)",(device,module._cp.iso_now()))
+    row={"Id":"c"*32,"KnowledgeId":"a","MessageRecordId":"test","Action":"apply",
+        "PreviousJson":json.dumps(_v2_cas_record("before")),"CurrentJson":json.dumps(_v2_cas_record("after")),
+        "CreatedAtTicks":638000000000000000}
+    model=module.KnowledgeV2RevisionHistoryInput
+    send=module.runtime_revision_sync
+    first=send(model(rows=[row]),None,"shop-a")
+    with module._cp.db() as conn:
+        count,digest,cursor=module._revision_digest(conn,1,"shop-a")
+    def prove(device,proof):
+        return send(model(epoch=first["epoch"],cursor=cursor,device_id=device,
+            local_revision_count=count,local_revision_digest=proof),None,"shop-a")
+    prove("a"*32,digest)
+    prove("b"*32,"0"*64)
+    assert module.web_revision_sync_status({"id":1})["verified_devices"]==1
+    prove("b"*32,digest)
+    assert module.web_revision_sync_status({"id":1})["two_device_nonempty_convergence"]
+    send(model(rows=[dict(row,Id="d"*32)]),None,"shop-a")
+    assert not module.web_revision_sync_status({"id":1})["two_device_nonempty_convergence"]
