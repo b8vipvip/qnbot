@@ -277,7 +277,7 @@ namespace Bot.ChromeNs
                         retrievalQuestion,
                         imageEvidenceText,
                         conditionalAdviceEvidence.ImageDescription,
-                        commerceAuthority.CommerceContext);
+                        commerceAuthority.CommerceContext, conditionalAdviceEvidence.ImageOcrText);
                     string conditionalReason;
                     if (!ConditionalBusinessAdviceService.TryAuthorizeRefundSuggestion(
                         decision, conditionalAdviceEvidence, out conditionalReason))

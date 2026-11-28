@@ -849,7 +849,17 @@ namespace Bot.ChromeNs
             double ocrConfidence,
             out VisualImageKnowledgeMatch match)
         {
+            bool ambiguous;
+            return TryMatch(shopKey, seller, ocrText, imageSha256, ocrConfidence, out match, out ambiguous);
+        }
+
+        public static bool TryMatch(string shopKey, string seller, string ocrText, string imageSha256,
+            double ocrConfidence, out VisualImageKnowledgeMatch match, out bool ambiguous)
+        {
             match = null;
+            ambiguous = false;
+            if (double.IsNaN(ocrConfidence) || double.IsInfinity(ocrConfidence) || ocrConfidence < 0 || ocrConfidence > 1)
+                ocrConfidence = 0;
             var shop = ResolveScope(shopKey, seller);
             seller = (shop.SellerNick ?? string.Empty).Trim();
             ocrText = Clean(ocrText, MaxOcrChars);
@@ -861,6 +871,8 @@ namespace Bot.ChromeNs
             var bestScore = 0d;
             var bestMatchedHitInfo = string.Empty;
             var bestMatchMode = string.Empty;
+            var bestPriority = 0;
+            var contenders = new List<Tuple<VisualImageKnowledgeEntry, double, int>>();
             foreach (var item in entries)
             {
                 var exactImage = !string.IsNullOrWhiteSpace(imageSha256)
@@ -890,8 +902,12 @@ namespace Bot.ChromeNs
                     matchMode = "legacy_ocr_similarity";
                 }
 
-                if (score > bestScore)
+                var priority = exactImage ? 3 : matchMode == "hit_info" ? 2 : 1;
+                if (score < MatchThreshold || (!exactImage && ocrConfidence < 0.55d)) continue;
+                contenders.Add(Tuple.Create(item, score, priority));
+                if (priority > bestPriority || (priority == bestPriority && score > bestScore))
                 {
+                    bestPriority = priority;
                     best = item;
                     bestScore = score;
                     bestMatchedHitInfo = matchedHitInfo;
@@ -899,9 +915,19 @@ namespace Bot.ChromeNs
                 }
             }
 
-            if (best == null || bestScore < MatchThreshold
-                || (ocrConfidence < 0.55d && bestMatchMode != "image_sha256" && bestScore < 0.98d))
+            if (best == null || bestScore < MatchThreshold) return false;
+            // Exact image identity outranks configured hit rules, which outrank
+            // fuzzy OCR similarity. Near-tied rules with different descriptions
+            // are ambiguous, never an arbitrary first-row win.
+            if (contenders.Any(x => !ReferenceEquals(x.Item1, best) && x.Item3 == bestPriority
+                && bestScore - x.Item2 <= 0.05d
+                && !string.Equals(Clean(x.Item1.Description, MaxDescriptionChars),
+                    Clean(best.Description, MaxDescriptionChars), StringComparison.Ordinal)))
+            {
+                ambiguous = true;
+                Log.Info("图片知识存在同级冲突，已拒绝自动选择: shopRef=" + MyWebSocketServer.DiagnosticRef("shop", shop.ShopKey));
                 return false;
+            }
 
             var description = Clean(best.Description, MaxDescriptionChars);
             var referenceOcr = Clean(best.OcrText, MaxOcrChars);

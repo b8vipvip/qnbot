@@ -68,7 +68,7 @@ def test_ocr_evidence_enriches_knowledge_recall_without_rewriting_buyer_query_or
     ]
     internal = service[
         service.index("private static KnowledgeV2Decision ResolveInternal"):
-        service.index("private static bool IsEligibleProductionMatch")
+        service.index("internal static bool IsEligibleProductionMatch")
     ]
 
     assert "ResolveInternal(seller, buyer, message, false, evidenceText, evidenceSubject, false)" in resolve
@@ -370,7 +370,7 @@ def test_current_image_product_id_is_not_dropped_by_the_ten_entity_retrieval_bou
     service = read("src/Bot/Knowledge/KnowledgeEngineV2.Service.Public.cs")
     internal = service[
         service.index("private static KnowledgeV2Decision ResolveInternal"):
-        service.index("private static bool IsEligibleProductionMatch")
+        service.index("internal static bool IsEligibleProductionMatch")
     ]
 
     assert "if (!buyerMessageHasProductId && evidenceHasProductId)" in internal
