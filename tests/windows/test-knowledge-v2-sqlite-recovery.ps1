@@ -155,6 +155,68 @@ try {
     $retained = [GC]::GetTotalMemory($true) - $base
     Write-Host ("Windows SQLite: 5001 records, write_ms={0}, reload_rebuild_recall_p95_ms={1:N1}, retained_bytes_delta={2}" -f $writeMs,$p95,$retained)
     Write-Host 'Windows SQLite commit-boundary crash recovery passed.'
+    # Exercise actual revision sync code with two separate persistent SQLite files.
+    # A simulated server envelope is sufficient for storage/ack replay tests;
+    # this is not a live two-PC or network acceptance result.
+    $buildRevision = $repo.GetMethod('BuildRevisionSyncRequestCore', $flags)
+    $applyRevision = $repo.GetMethod('ApplyRevisionSyncResponseCore', $flags)
+    $jsonAssembly = [Reflection.Assembly]::LoadFrom((Join-Path $bin 'Newtonsoft.Json.dll'))
+    $jobject = $jsonAssembly.GetType('Newtonsoft.Json.Linq.JObject', $true)
+    $parseObject = $jobject.GetMethod('Parse', [type[]]@([string]))
+    function Json-Object([string]$json) {
+        return ,$parseObject.Invoke($null, [object[]]@($json))
+    }
+    function Revision-Request($database, [string]$scope) {
+        return ,$buildRevision.Invoke($null, [object[]]@($database, $scope))
+    }
+    function Apply-Revision($database, [string]$scope, $request, $response) {
+        $arguments = [object[]]::new(4)
+        $arguments[0] = $database
+        $arguments[1] = $scope
+        $arguments[2] = $request
+        $arguments[3] = $response
+        return $applyRevision.Invoke($null, $arguments)
+    }
+    $deviceAPath = Join-Path $root 'device-a.db'
+    $deviceBPath = Join-Path $root 'device-b.db'
+    $deviceA = Open-Db $deviceAPath
+    $deviceB = Open-Db $deviceBPath
+    $deviceA.SaveOneRecord((New-TestRow 'r-a' 'device-a-active' '12345678'))
+    $deviceB.SaveOneRecord((New-TestRow 'r-a' 'device-b-active' '12345678'))
+    $revision = [Activator]::CreateInstance($revType)
+    $revision.Id = 'c' * 32
+    $revision.KnowledgeId = 'r-a'
+    $revision.Action = 'apply'
+    $revision.MessageRecordId = 'synthetic-evidence'
+    $revision.PreviousJson = '{}'
+    $revision.CurrentJson = '{}'
+    $revision.CreatedAtTicks = [DateTime]::Now.Ticks
+    $deviceA.SaveOneRecord($revision)
+    $scope = 'https://synthetic.invalid|shop-1'
+    $requestA = Revision-Request $deviceA $scope
+    $wireA = $requestA.ToString() | ConvertFrom-Json
+    Assert-True (@($wireA.rows).Count -eq 1) 'Device A must upload local revision'
+    $rowJson = ConvertTo-Json -InputObject @($wireA.rows) -Depth 8 -Compress
+    $responseA = Json-Object ('{"epoch":"epoch-one","cursor":1,"has_more":false,"ack_ids":["' + $revision.Id + '"],"rows":' + $rowJson + '}')
+    $null = Apply-Revision $deviceA $scope $requestA $responseA
+    $requestB = Revision-Request $deviceB $scope
+    $responseB = Json-Object ('{"epoch":"epoch-one","cursor":1,"has_more":false,"ack_ids":[],"rows":' + $rowJson + '}')
+    $null = Apply-Revision $deviceB $scope $requestB $responseB
+    $deviceA = Open-Db $deviceAPath
+    $deviceB = Open-Db $deviceBPath
+    $afterA = (Revision-Request $deviceA $scope).ToString() | ConvertFrom-Json
+    $afterB = (Revision-Request $deviceB $scope).ToString() | ConvertFrom-Json
+    Assert-True (@($afterA.rows).Count -eq 0 -and @($afterB.rows).Count -eq 0) 'Acknowledged revisions must not re-upload after reopening databases'
+    Assert-True ($afterA.local_revision_count -eq 1 -and $afterA.local_revision_digest -eq $afterB.local_revision_digest) 'Two persisted histories must converge to the same digest'
+    Assert-True ((Read-Row $deviceB $rowType 'Id' 'r-a').Answer -eq 'device-b-active') 'History sync must not overwrite active corpus'
+    $revision.Id = 'a' * 32
+    $deviceA.SaveOneRecord($revision)
+    $newA = (Revision-Request $deviceA $scope).ToString() | ConvertFrom-Json
+    Assert-True (@($newA.rows).Count -eq 1 -and $newA.rows[0].Id -eq $revision.Id) 'New lower-sort revision ID must not be missed'
+    $otherScope = (Revision-Request $deviceA 'https://synthetic.invalid|shop-2').ToString() | ConvertFrom-Json
+    Assert-True (@($otherScope.rows).Count -eq 2) 'Acknowledgements must be scope-isolated'
+    Write-Host 'Independent SQLite revision sync and persisted acknowledgement regression passed.'
+
     # Continuous bounded recall with periodic persisted updates and index rebuilds.
     # Report per-window latency and post-GC retained heap; keep only a bounded window
     # of measurements so the test harness cannot itself cause unbounded growth.
