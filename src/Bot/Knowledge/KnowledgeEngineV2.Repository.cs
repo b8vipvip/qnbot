@@ -47,6 +47,20 @@ namespace Bot.Knowledge
             }
         }
 
+        // Read the committed row, including disabled/deleted tombstones. Snapshot
+        // publication may be scheduled out of order after the repository lock is released.
+        internal static KnowledgeV2Record LoadCommittedRecord(string seller, string id)
+        {
+            var shop = ResolveShopRequired(seller);
+            var state = GetState(shop);
+            EnsureSchemaInitialized(state);
+            lock (state.Sync)
+            {
+                var row = state.Db.ReadOneRecord<KnowledgeV2RecordRow>(x => x.Id == id);
+                return row == null ? null : FromRow(row);
+            }
+        }
+
         public static void Save(string seller, KnowledgeV2Record record)
         {
             if (record == null) return;
