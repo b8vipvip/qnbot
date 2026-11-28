@@ -315,12 +315,41 @@ namespace Bot.ChromeNs
 
         internal static bool HasUnverifiedProductConclusion(string question, string answer, string evidence)
         {
-            if (!KnowledgeEngineV2Semantics.ExtractEntities(question)
-                .Any(x => x.StartsWith("product:", StringComparison.OrdinalIgnoreCase)))
-                return false;
-            if (Regex.IsMatch(evidence ?? string.Empty, @"(?m)^答案：[^\r\n]+"))
-                return false;
-            return ProductAssertionPolarities(answer).Any();
+            var requested = KnowledgeEngineV2Semantics.ExtractEntities(question)
+                .Where(KnowledgeEngineV2Semantics.IsProductEntity).ToList();
+            var mentioned = KnowledgeEngineV2Semantics.ExtractEntities(answer)
+                .Where(KnowledgeEngineV2Semantics.IsProductEntity).ToList();
+            if (requested.Count == 0 && mentioned.Count == 0) return false;
+            // An unrelated approved answer is not evidence for a capability
+            // assertion. Each claimed product and direction must be covered by
+            // the same approved evidence block, not a pooled list of keywords.
+            var blocks = Regex.Matches(evidence ?? string.Empty,
+                @"(?ms)^V2知识\d+：[^\r\n]*\r?\n(?<body>.*?)(?=^V2知识\d+：|\z)")
+                .Cast<Match>().Select(x =>
+                {
+                    var body = x.Groups["body"].Value;
+                    var approvedAnswer = Regex.Match(body, @"(?m)^答案：([^\r\n]+)").Groups[1].Value;
+                    var scope = Regex.Match(body, @"(?m)^商品ID：([^\r\n]*)").Groups[1].Value
+                        .Split(new[] { '；', ';', '、', ',', '，' }, StringSplitOptions.RemoveEmptyEntries)
+                        .Select(id => id.Trim())
+                        .Select(id => KnowledgeEngineV2Semantics.IsProductEntity(id) ? id : "product:" + id)
+                        .ToList();
+                    return new { Products = scope, Directions = ProductAssertionPolarities(approvedAnswer).Distinct().ToList() };
+                }).ToList();
+            foreach (var clause in Regex.Split(answer ?? string.Empty, @"[，,。；;！？!?\r\n]+"))
+            {
+                var directions = ProductAssertionPolarities(clause).Distinct().ToList();
+                if (directions.Count == 0) continue;
+                var scope = KnowledgeEngineV2Semantics.ExtractEntities(clause)
+                    .Where(KnowledgeEngineV2Semantics.IsProductEntity).ToList();
+                if (scope.Count == 0) scope = requested.Count > 0 ? requested : mentioned;
+                if (directions.Count != 1 || scope.Count == 0
+                    || !scope.All(id => blocks.Any(block =>
+                        block.Products.Contains(id, StringComparer.OrdinalIgnoreCase)
+                        && block.Directions.Count == 1 && block.Directions[0] == directions[0])))
+                    return true;
+            }
+            return false;
         }
 
         private static IEnumerable<int> ProductAssertionPolarities(string answer)
@@ -339,7 +368,7 @@ namespace Bot.ChromeNs
                     && !Regex.IsMatch(clause, @"但|不过|然而|并且|同时"))
                     continue;
                 foreach (Match m in Regex.Matches(clause,
-                    @"(?<negative>不支持|不兼容|不能用|不可用|不通用|无法使用)|(?<positive>支持|兼容|能用|可用|通用|可以使用|能够使用)"))
+                    @"(?<negative>不支持|不兼容|不能使用|不可以使用|不可以用|不能用|不可用|不通用|无法使用)|(?<positive>支持|兼容|能用|可用|通用|可以使用|能够使用|可以用)"))
                     yield return m.Groups["negative"].Success ? -1 : 1;
             }
         }
