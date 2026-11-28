@@ -137,6 +137,9 @@ namespace Bot.ChromeNs
                 result.Issues.Add("声称已经核实或完成具体订单/售后状态，但没有可靠依据：" + string.Join("、", unsupportedStatus));
             }
 
+            if (HasUnverifiedProductConclusion(question, answer, approvedV2ContextEvidence))
+                result.Issues.Add("商品支持/不支持结论缺少明确适用的Knowledge V2证据");
+
             if (HasKnowledgeContradiction(answer, approvedV2ContextEvidence))
             {
                 result.Issues.Add("生成答案与高可信知识或事实约束的支持/不支持结论相反");
@@ -301,6 +304,21 @@ namespace Bot.ChromeNs
                 || a == "不清楚"
                 || a == "请稍等"
                 || a == "稍等一下";
+        }
+
+        internal static bool HasUnverifiedProductConclusion(string question, string answer, string evidence)
+        {
+            if (!KnowledgeEngineV2Semantics.ExtractEntities(question)
+                .Any(x => x.StartsWith("product:", StringComparison.OrdinalIgnoreCase)))
+                return false;
+            if (Regex.IsMatch(evidence ?? string.Empty, @"(?m)^答案：[^\r\n]+"))
+                return false;
+            var polarity = DetectPolarity(answer);
+            // Questions/uncertainty are not factual compatibility assertions.
+            var compact = Compact(answer);
+            if (Regex.IsMatch(compact, @"无法确认|不能确认|暂不确定|不确定是否|请问.{0,16}(是否|能否|支持)"))
+                return false;
+            return polarity != 0;
         }
 
         private static bool HasKnowledgeContradiction(
