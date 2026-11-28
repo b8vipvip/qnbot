@@ -601,3 +601,19 @@ def test_remote_v2_operations_claim_before_dispatch_and_guard_results():
     assert "status='running'" in claim and "status='pending'" in claim
     assert "secrets.compare_digest(expected,supplied)" in s
     assert "knowledge_v2_operation_cancel" in claim
+
+def test_web_operations_ui_uses_selected_device_and_atomic_bulk_revision():
+    web=read(ROOT/"services/api-control-plane/static/bot-web-v2-operations.js")
+    html=read(ROOT/"services/api-control-plane/static/bot-web.html")
+    windows=read(ROOT/"src/Bot/ChromeNs/BotWebConsoleSyncService.cs")
+    repo=read(ROOT/"src/Bot/Knowledge/KnowledgeEngineV2.Repository.cs")
+    for action in ("history_status","history_scan","history_resume","revision_generate","revision_apply","revision_reject","conflict_list","conflict_resolve","rollback_list","rollback"):
+        assert action in web and action in windows
+    assert "device_id:selected" in web
+    assert "v2Ops.checkpointDevice===$(" in web
+    assert 'expected_revision:expected' in web and "v2BulkIds.clear()" in web
+    assert 'Status:"deleted"' in web
+    assert "knowledgeV2BulkDelete" in html
+    assert "knowledge_v2_operation_cancel" in windows
+    assert 'EditorRecordFingerprint(before) != EditorRecordFingerprint(applied)' in repo
+    assert "expectedRevisionId" in repo
