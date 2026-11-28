@@ -16,13 +16,12 @@ def test_conversation_context_menu_can_open_exact_knowledge_entry():
 
 
 def test_knowledge_manager_locates_and_scrolls_to_entry():
-    window = read("src/Bot/Knowledge/KnowledgeCenterWindow.cs")
-    manager = read("src/Bot/Knowledge/KnowledgeManagerControl.cs")
-    assert "NavigateToManager" in window
-    assert "LocateEntry" in manager
-    assert "TryFindLocalAnswer" in manager
-    assert "ScrollIntoView" in manager
-    assert "SelectedItem = selected" in manager
+    manager = read("src/Bot/Knowledge/KnowledgeCenterV2RecordsPage.cs")
+    assert "OpenRecordById(string recordId)" in manager
+    assert "string.Equals(x.Id, targetId, StringComparison.Ordinal)" in manager
+    assert "ScrollIntoView(exact)" in manager
+    assert "SelectedItem = exact" in manager
+    assert "不会自动选择相似条目" in manager
 
 
 def test_incoming_timeline_is_recorded_before_burst_generation():

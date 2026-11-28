@@ -48,7 +48,8 @@ def test_reviewed_knowledge_writes_only_verified_human_evidence_to_v2():
     assert "confidence > 1.0" in source
     assert "shop == null || !shop.HasStableSellerId" in source
     assert "KnowledgeEngineV2Repository.TrySaveReviewedDirectAnswer" in source
-    assert "KnowledgeEngineV2Repository.Save(shop.SellerNick, record)" in source
+    assert "KnowledgeEngineV2Repository.Save(shop.SellerNick, record)" not in source
+    assert "KnowledgeEngineV2Repository.TrySaveReviewedDirectAnswer(" in source
     assert "BotFeatureStore.GetKnowledgeBase" not in source
     assert "BotFeatureStore.SaveKnowledgeBase" not in source
 

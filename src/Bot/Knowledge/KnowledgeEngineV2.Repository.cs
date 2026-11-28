@@ -1432,6 +1432,46 @@ namespace Bot.Knowledge
             return true;
         }
 
+        // All-or-nothing operator bulk deletion with exact displayed row revisions.
+        internal static bool TryDeleteEditorRecords(string seller, IDictionary<string, string> expected)
+        {
+            if (expected == null || expected.Count == 0) return false;
+            var shop = ResolveShopRequired(seller);
+            var state = GetState(shop);
+            EnsureSchemaInitialized(state);
+            lock (state.Sync)
+            {
+                var writes = new List<object>();
+                foreach (var pair in expected)
+                {
+                    if (string.IsNullOrWhiteSpace(pair.Key) || string.IsNullOrWhiteSpace(pair.Value)) return false;
+                    var row = state.Db.ReadOneRecord<KnowledgeV2RecordRow>(x => x.Id == pair.Key);
+                    var record = row == null ? null : FromRow(row);
+                    if (record == null || string.Equals(record.Status, "deleted", StringComparison.OrdinalIgnoreCase)
+                        || !string.Equals(EditorRecordFingerprint(record), pair.Value, StringComparison.Ordinal))
+                        return false;
+                    var before = JsonConvert.SerializeObject(record);
+                    record.Enabled = false;
+                    record.Status = "deleted";
+                    record.UpdatedAt = DateTime.Now;
+                    writes.Add(ToRow(record));
+                    writes.Add(new KnowledgeV2ManualEditRevisionRow
+                    {
+                        Id = Guid.NewGuid().ToString("N"),
+                        KnowledgeId = pair.Key,
+                        MessageRecordId = "knowledge-center-bulk-delete",
+                        Action = "delete",
+                        PreviousJson = before,
+                        CurrentJson = JsonConvert.SerializeObject(record),
+                        CreatedAtTicks = DateTime.Now.Ticks
+                    });
+                }
+                state.Db.SaveRecordsInTransaction(writes);
+            }
+            foreach (var id in expected.Keys) KnowledgeEngineV2Service.ApplyRecordDelete(seller, id);
+            return true;
+        }
+
         public static bool Delete(string seller, string id)
         {
             if (string.IsNullOrWhiteSpace(id)) return false;

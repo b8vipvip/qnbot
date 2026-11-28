@@ -523,10 +523,27 @@ namespace Bot.Knowledge
 
         public static void PromoteCandidate(string seller, string id)
         {
-            var record = GetRecords(seller).FirstOrDefault(x => x.Id == id);
-            if (record == null) return;
+            var record = KnowledgeEngineV2Repository.LoadCommittedRecord(seller, id);
+            if (record != null)
+                TryPromoteCandidate(seller, id, KnowledgeEngineV2Repository.EditorRecordFingerprint(record));
+        }
+
+        internal static bool TryPromoteCandidate(string seller, string id, string expectedFingerprint)
+        {
+            if (string.IsNullOrWhiteSpace(id) || string.IsNullOrWhiteSpace(expectedFingerprint)) return false;
+            var record = KnowledgeEngineV2Repository.LoadCommittedRecord(seller, id);
+            if (record == null || !string.Equals(record.Status, "candidate", StringComparison.OrdinalIgnoreCase)
+                || !KnowledgeV2AuthorityPolicy.IsCandidate(record)
+                || !string.Equals(KnowledgeEngineV2Repository.EditorRecordFingerprint(record), expectedFingerprint, StringComparison.Ordinal))
+                return false;
+            // An explicit operator approval is new provenance. Retain the source ID,
+            // scope, conditions and risk rather than treating the candidate as an
+            // unrestricted FAQ or reviving a disabled/deleted row.
+            record.SourceType = "manual_confirmed";
+            record.Enabled = true;
+            record.LastVerifiedAt = DateTime.Now;
             KnowledgeV2AuthorityPolicy.Promote(record);
-            KnowledgeEngineV2Repository.Save(seller, record);
+            return KnowledgeEngineV2Repository.TrySaveEditorRecord(seller, record, expectedFingerprint);
         }
     }
 }

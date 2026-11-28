@@ -25,6 +25,7 @@ namespace Bot.Knowledge
     {
         private readonly Window _owner;
         private readonly string _seller;
+        private readonly string _shopKey;
         private readonly KnowledgeV2RecordsPageMode _mode;
         private readonly ObservableCollection<KnowledgeV2Record> _view = new ObservableCollection<KnowledgeV2Record>();
         private List<KnowledgeV2Record> _all = new List<KnowledgeV2Record>();
@@ -62,8 +63,27 @@ namespace Bot.Knowledge
             _owner = owner;
             _seller = seller ?? string.Empty;
             _mode = mode;
+            _shopKey = KnowledgeCenterV2Context.ResolveShopKey(owner, _seller);
             Build();
             Loaded += delegate { RefreshView(); };
+        }
+
+        private ShopContext RequireShop()
+        {
+            if (string.IsNullOrWhiteSpace(_shopKey))
+                throw new InvalidOperationException("知识操作缺少精确 ShopKey。");
+            var shop = ShopContextLocator.ResolveRuntimeByShopKey(_shopKey);
+            if (shop == null || !shop.HasStableSellerId
+                || !string.Equals(shop.ShopKey, _shopKey, StringComparison.Ordinal)
+                || (!DirectOrderIdentityResolver.IdentityEquals(shop.SellerNick, _seller)
+                    && !DirectOrderIdentityResolver.IdentityEquals(shop.DisplayName, _seller)))
+                throw new InvalidOperationException("知识操作店铺身份不匹配。");
+            return shop;
+        }
+
+        private T InShop<T>(Func<T> action)
+        {
+            using (ShopSettingsScope.Enter(RequireShop())) return action();
         }
 
         public void OpenRecordById(string recordId)
@@ -88,7 +108,7 @@ namespace Bot.Knowledge
             if (string.IsNullOrWhiteSpace(_seller) || _recordsLoading) return;
             _recordsLoading = true;
             _count.Text = "正在读取 Knowledge Center V2...";
-            Task.Run(() => KnowledgeEngineV2Repository.LoadAll(_seller))
+            Task.Run(() => InShop(() => KnowledgeEngineV2Repository.LoadAll(_seller)))
                 .ContinueWith(t => Dispatcher.BeginInvoke(new Action(() =>
                 {
                     _recordsLoading = false;
@@ -117,8 +137,11 @@ namespace Bot.Knowledge
             var refresh = Btn("刷新", 68); refresh.Click += delegate { RefreshView(); };
             var add = Btn("新增知识", 86); add.Click += delegate { NewRecord(); };
             var save = Btn("保存", 68); save.Click += delegate { SaveCurrent(); };
-            var delete = Btn("删除", 68); delete.Click += delegate { DeleteCurrent(); };
+            var delete = Btn("删除所选", 88); delete.Click += delegate { DeleteCurrent(); };
+            var selectAll = Btn("全选当前", 88); selectAll.Click += delegate { _grid.SelectAll(); };
+            var deselect = Btn("取消全选", 88); deselect.Click += delegate { _grid.UnselectAll(); };
             toolbar.Children.Add(refresh); toolbar.Children.Add(add); toolbar.Children.Add(save); toolbar.Children.Add(delete);
+            toolbar.Children.Add(selectAll); toolbar.Children.Add(deselect);
             if (_mode == KnowledgeV2RecordsPageMode.All)
             {
                 var undo = Btn("回滚Bot人工纠错", 138);
@@ -148,7 +171,7 @@ namespace Bot.Knowledge
                 IsReadOnly = true,
                 CanUserAddRows = false,
                 ItemsSource = _view,
-                SelectionMode = DataGridSelectionMode.Single,
+                SelectionMode = DataGridSelectionMode.Extended,
                 Margin = new Thickness(0, 0, 8, 0)
             };
             _grid.Columns.Add(Col("标题", "Title", 220));
@@ -157,6 +180,10 @@ namespace Bot.Knowledge
             _grid.Columns.Add(Col("Subject", "Subject", 150));
             _grid.Columns.Add(Col("Predicate", "Predicate", 120));
             _grid.Columns.Add(Col("可信度", "ConfidenceText", 72));
+            _grid.Columns.Add(Col("使用", "UseCount", 58));
+            _grid.Columns.Add(Col("采纳", "AcceptedCount", 58));
+            _grid.Columns.Add(Col("纠正", "CorrectionCount", 58));
+            _grid.Columns.Add(Col("撤回", "WithdrawCount", 58));
             _grid.Columns.Add(Col("状态", "Status", 80));
             _grid.Columns.Add(Col("更新", "UpdatedAtText", 126));
             _grid.SelectionChanged += delegate
@@ -189,7 +216,7 @@ namespace Bot.Knowledge
             ShopContext shop = null;
             try
             {
-                shop = ShopContextLocator.ResolveRuntimeBySellerNick(_seller);
+                shop = RequireShop();
             }
             catch (Exception ex)
             {
@@ -374,8 +401,11 @@ namespace Bot.Knowledge
                 + "\n如果该知识此后已被其他人更新，系统将拒绝覆盖。",
                 "回滚Bot人工纠错", MessageBoxButton.YesNo, MessageBoxImage.Question);
             if (answer != MessageBoxResult.Yes) return;
-            string reason;
-            if (!KnowledgeEngineV2Repository.TryRollbackLastBotCorrection(_seller, id, out reason))
+            string reason = string.Empty;
+            bool rolledBack;
+            try { rolledBack = InShop(() => KnowledgeEngineV2Repository.TryRollbackLastBotCorrection(_seller, id, out reason)); }
+            catch (Exception ex) { _count.Text = "回滚失败：" + ex.Message; return; }
+            if (!rolledBack)
             {
                 _count.Text = reason;
                 return;
@@ -416,6 +446,7 @@ namespace Bot.Knowledge
         private void SaveCurrent()
         {
             if (string.IsNullOrWhiteSpace(_seller) || _recordSaving) return;
+            if (_grid.SelectedItems.Count > 1) { _count.Text = "编辑时请只选择一条知识。"; return; }
             var selected = _selected;
             // Do not mutate the grid's selected object before validation or a successful commit.
             var expectedFingerprint = selected == null ? string.Empty : _selectedFingerprint;
@@ -451,7 +482,7 @@ namespace Bot.Knowledge
             _count.Text = "正在保存...";
             Task.Run(() =>
             {
-                return KnowledgeEngineV2Repository.TrySaveEditorRecord(_seller, record, expectedFingerprint);
+                return InShop(() => KnowledgeEngineV2Repository.TrySaveEditorRecord(_seller, record, expectedFingerprint));
             }).ContinueWith(t => Dispatcher.BeginInvoke(new Action(() =>
             {
                 _recordSaving = false;
@@ -467,33 +498,41 @@ namespace Bot.Knowledge
 
         private void DeleteCurrent()
         {
-            if (_selected == null || string.IsNullOrWhiteSpace(_selected.Id)) return;
-            if (MessageBox.Show(_owner, "确定删除这条知识吗？删除后将退出 Knowledge V2 检索，并通过 V2 云同步同步删除状态。", "删除知识", MessageBoxButton.YesNo, MessageBoxImage.Question) != MessageBoxResult.Yes) return;
-            var id = _selected.Id;
-            Task.Run(() =>
-            {
-                KnowledgeEngineV2Repository.Delete(_seller, id);
-                KnowledgeEngineV2Service.Warm(_seller);
-            }).ContinueWith(t => Dispatcher.BeginInvoke(new Action(() =>
-            {
-                if (t.IsFaulted) MessageBox.Show(_owner, "删除失败：" + t.Exception.GetBaseException().Message);
-                else { _selected = null; RefreshView(); }
-            })));
+            if (_recordSaving) return;
+            var selected = _grid.SelectedItems.Cast<KnowledgeV2Record>()
+                .Where(x => x != null && !string.IsNullOrWhiteSpace(x.Id))
+                .GroupBy(x => x.Id, StringComparer.Ordinal).Select(g => g.First()).ToList();
+            if (selected.Count == 0) return;
+            var expected = selected.ToDictionary(x => x.Id,
+                KnowledgeEngineV2Repository.EditorRecordFingerprint, StringComparer.Ordinal);
+            if (MessageBox.Show(_owner, "确定删除所选 " + expected.Count
+                + " 条知识吗？删除会通过 V2 云同步传播，且并发修改时整批拒绝。",
+                "删除知识", MessageBoxButton.YesNo, MessageBoxImage.Question) != MessageBoxResult.Yes) return;
+            _recordSaving = true;
+            Task.Run(() => InShop(() => KnowledgeEngineV2Repository.TryDeleteEditorRecords(_seller, expected)))
+                .ContinueWith(t => Dispatcher.BeginInvoke(new Action(() =>
+                {
+                    _recordSaving = false;
+                    if (t.IsFaulted) MessageBox.Show(_owner, "删除失败：" + t.Exception.GetBaseException().Message);
+                    else if (!t.Result) MessageBox.Show(_owner, "知识已发生变化，整批未删除，请刷新后重试。");
+                    else { _selected = null; RefreshView(); }
+                })));
         }
 
         private void ApproveCurrent()
         {
-            if (_selected == null) return;
+            if (_selected == null || _grid.SelectedItems.Count != 1 || _recordSaving) return;
             var id = _selected.Id;
-            Task.Run(() =>
-            {
-                KnowledgeEngineV2Service.PromoteCandidate(_seller, id);
-                KnowledgeEngineV2Service.Warm(_seller);
-            }).ContinueWith(t => Dispatcher.BeginInvoke(new Action(() =>
-            {
-                if (t.IsFaulted) MessageBox.Show(_owner, "批准失败：" + t.Exception.GetBaseException().Message);
-                else RefreshView();
-            })));
+            var expected = _selectedFingerprint;
+            _recordSaving = true;
+            Task.Run(() => InShop(() => KnowledgeEngineV2Service.TryPromoteCandidate(_seller, id, expected)))
+                .ContinueWith(t => Dispatcher.BeginInvoke(new Action(() =>
+                {
+                    _recordSaving = false;
+                    if (t.IsFaulted) MessageBox.Show(_owner, "批准失败：" + t.Exception.GetBaseException().Message);
+                    else if (!t.Result) MessageBox.Show(_owner, "知识不是可批准的候选或已被修改，请刷新后重试。");
+                    else RefreshView();
+                })));
         }
 
         private static List<string> Split(string value)
