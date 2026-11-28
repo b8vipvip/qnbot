@@ -1962,10 +1962,10 @@ namespace Bot.Knowledge
             record.ShortAnswer = (record.ShortAnswer ?? string.Empty).Trim();
             record.Entities = NormalizeList(record.Entities, 24);
             record.Aliases = NormalizeList(record.Aliases, 48);
-            record.Conditions = NormalizeList(record.Conditions, 20);
-            record.Exclusions = NormalizeList(record.Exclusions, 20);
-            record.RequiredContext = NormalizeList(record.RequiredContext, 20);
-            record.ProductIds = NormalizeList(record.ProductIds, 20);
+            record.Conditions = NormalizeList(record.Conditions, int.MaxValue);
+            record.Exclusions = NormalizeList(record.Exclusions, int.MaxValue);
+            record.RequiredContext = NormalizeList(record.RequiredContext, int.MaxValue);
+            record.ProductIds = NormalizeList(record.ProductIds, int.MaxValue);
             record.Authority = Clamp(record.Authority);
             record.Confidence = Clamp(record.Confidence);
             if (record.CreatedAt == DateTime.MinValue) record.CreatedAt = DateTime.Now;
