@@ -38,7 +38,17 @@ namespace Bot.Knowledge
                 }
                 // Never publish the caller's possibly stale post-commit payload.
                 // Read SQLite while holding the same lock used by cold/bulk builds.
-                var record = KnowledgeEngineV2Repository.LoadCommittedRecord(seller, id);
+                long version;
+                string mutationId;
+                var record = KnowledgeEngineV2Repository.LoadCommittedRecordForSnapshot(seller, id, out version, out mutationId);
+                if (current.CorpusVersion == version) return;
+                // Delayed callbacks or bulk writes may span multiple commits. Only
+                // patch a single-row snapshot when its predecessor is exact.
+                if (version != current.CorpusVersion + 1 || !string.Equals(id, mutationId, StringComparison.Ordinal))
+                {
+                    Warm(seller);
+                    return;
+                }
                 if (record != null) record = KnowledgeV2AuthorityPolicy.NormalizeForRead(record);
                 var next = CloneSnapshot(current);
                 var index = next.Records.FindIndex(x => x != null
@@ -73,6 +83,7 @@ namespace Bot.Knowledge
                 // cannot retain every historical record object in the live index.
                 if (ShouldCompactSnapshot(next))
                     next = BuildSnapshot(shopKey, next.Records.Where(IsIndexableRecord).ToList());
+                next.CorpusVersion = version;
                 Snapshots[shopKey] = next;
             }
         }
@@ -103,14 +114,17 @@ namespace Bot.Knowledge
             {
                 // A bulk/cloud callback can arrive after a newer local edit.
                 // Rebuild from the committed repository, never the old caller list.
-                var enabled = KnowledgeEngineV2Repository.LoadAll(seller)
+                long version;
+                var enabled = KnowledgeEngineV2Repository.LoadSnapshotCorpus(seller, out version)
                     .Where(x => x != null)
                     .Select(KnowledgeV2AuthorityPolicy.NormalizeForRead)
                     .Where(x => x != null && x.Enabled
                         && !string.Equals(x.Status, "disabled", StringComparison.OrdinalIgnoreCase)
                         && !string.Equals(x.Status, "deleted", StringComparison.OrdinalIgnoreCase))
                     .ToList();
-                Snapshots[shop.ShopKey] = BuildSnapshot(shop.ShopKey, enabled);
+                var snapshot = BuildSnapshot(shop.ShopKey, enabled);
+                snapshot.CorpusVersion = version;
+                Snapshots[shop.ShopKey] = snapshot;
             }
         }
 

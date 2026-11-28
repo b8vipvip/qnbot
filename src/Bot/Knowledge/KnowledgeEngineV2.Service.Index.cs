@@ -16,11 +16,14 @@ namespace Bot.Knowledge
         {
             var shop = ResolveShopRequired(seller);
             Snapshot existing;
-            if (Snapshots.TryGetValue(shop.ShopKey, out existing) && existing != null) return existing;
+            if (Snapshots.TryGetValue(shop.ShopKey, out existing) && existing != null
+                    && existing.CorpusVersion == KnowledgeEngineV2Repository.GetCorpusVersion(seller)) return existing;
             lock (BuildLocks.GetOrAdd(shop.ShopKey, _ => new object()))
             {
-                if (Snapshots.TryGetValue(shop.ShopKey, out existing) && existing != null) return existing;
-                var records = KnowledgeEngineV2Repository.LoadAll(seller)
+                if (Snapshots.TryGetValue(shop.ShopKey, out existing) && existing != null
+                    && existing.CorpusVersion == KnowledgeEngineV2Repository.GetCorpusVersion(seller)) return existing;
+                long version;
+                var records = KnowledgeEngineV2Repository.LoadSnapshotCorpus(seller, out version)
                     .Where(x => x != null)
                     .Select(KnowledgeV2AuthorityPolicy.NormalizeForRead)
                     .Where(x => x != null && x.Enabled
@@ -28,6 +31,7 @@ namespace Bot.Knowledge
                         && !string.Equals(x.Status, "deleted", StringComparison.OrdinalIgnoreCase))
                     .ToList();
                 var snapshot = BuildSnapshot(shop.ShopKey, records);
+                snapshot.CorpusVersion = version;
                 Snapshots[shop.ShopKey] = snapshot;
                 BotLib.Log.Info("Knowledge Engine V2内存索引已构建: shop=" + shop.ShopKey
                     + ", records=" + records.Count + ", builtAt=" + snapshot.BuiltAt.ToString("HH:mm:ss.fff"));
@@ -104,12 +108,26 @@ namespace Bot.Knowledge
                     gramVotes[id] = gramVotes.TryGetValue(id, out count) ? count + 1 : 1;
                 }
             }
-            foreach (var item in gramVotes.OrderByDescending(x => x.Value).Take(40)) result.Add(item.Key);
+            // Do not consume the lexical budget with wrong-product results
+            // before checking applicability. Retain votes for final tie-breaking.
+            foreach (var item in gramVotes) result.Add(item.Key);
+            query.RecallBudgetAmbiguous = false;
             if (result.Count > 96)
             {
                 // Never prune exact aliases before applicability and conflict checks.
                 // A broad predicate/intent bucket can otherwise displace a reviewed FAQ.
-                var exactIds = exact ?? new HashSet<int>();
+                var applicableExact = (exact ?? new HashSet<int>()).Where(i =>
+                    {
+                        string ignored;
+                        return KnowledgeEngineV2Semantics.IsApplicable(snapshot.Records[i], query, out ignored);
+                    })
+                    .OrderByDescending(i => KnowledgeV2AuthorityPolicy.IsProductionApproved(snapshot.Records[i]))
+                    .ThenBy(i => snapshot.Records[i].Id, StringComparer.Ordinal).ToList();
+                // More than a full ranking budget of production exact matches
+                // cannot safely be treated as consensus from a truncated sample.
+                if (applicableExact.Count(i => KnowledgeV2AuthorityPolicy.IsProductionApproved(snapshot.Records[i])) > 96)
+                    query.RecallBudgetAmbiguous = true;
+                var exactIds = new HashSet<int>(applicableExact.Take(96));
                 // Filter scope-inapplicable candidates before consuming the
                 // bounded ranking budget. Otherwise thousands of same-intent but
                 // wrong-product or excluded records can hide the only valid match.
@@ -121,10 +139,19 @@ namespace Bot.Knowledge
                     })
                     .OrderByDescending(i => KnowledgeV2AuthorityPolicy.IsProductionApproved(snapshot.Records[i]))
                     .ThenByDescending(i => PreliminaryScore(snapshot.Records[i], query))
-                    .ThenBy(i => snapshot.Records[i].Id, StringComparer.Ordinal)
-                    .Take(Math.Max(0, 96 - exactIds.Count));
+                    .ThenByDescending(i => gramVotes.ContainsKey(i) ? gramVotes[i] : 0)
+                    .ThenBy(i => snapshot.Records[i].Id, StringComparer.Ordinal).ToList();
                 var selected = new HashSet<int>(exactIds);
-                selected.UnionWith(ordered);
+                selected.UnionWith(ordered.Take(Math.Max(0, 96 - exactIds.Count)));
+                // If a strong lexical candidate was pruned, do not silently
+                // claim that the retained candidates prove an unambiguous fact.
+                var overflow = ordered.Skip(Math.Max(0, 96 - exactIds.Count))
+                    .Where(i => KnowledgeV2AuthorityPolicy.IsProductionApproved(snapshot.Records[i]));
+                if (!query.RecallBudgetAmbiguous)
+                    query.RecallBudgetAmbiguous = overflow.Any(i =>
+                        (snapshot.Records[i].Aliases ?? new List<string>()).Concat(new[] { snapshot.Records[i].Title })
+                            .Any(alias => SameAnswerNumbers(query.Original, alias)
+                                && KnowledgeEngineV2Semantics.TextSimilarity(query.Original, alias) >= 0.90));
                 return selected;
             }
             return result;
@@ -150,7 +177,7 @@ namespace Bot.Knowledge
             var intent = string.Equals(query.Intent, record.Intent, StringComparison.OrdinalIgnoreCase) ? 1.0
                 : (query.Intent == "general" || record.Intent == "general" ? 0.35 : 0.0);
             var entity = EntitySimilarity(query.Entities, RecordEntities(record));
-            var feedbackAdjustment = KnowledgeEngineV2FeedbackService.GetQualityAdjustment(seller, record.Id);
+            var feedbackAdjustment = KnowledgeEngineV2FeedbackService.GetQualityAdjustment(seller, record.Id, record.Answer);
             var confidence = Clamp(record.Confidence * 0.72 + record.Authority * 0.28 + feedbackAdjustment);
             var score = Clamp(predicate * 0.34 + entity * 0.25 + intent * 0.17 + alias * 0.16 + confidence * 0.08);
             if (alias >= 0.98) score = Math.Max(score, 0.97);

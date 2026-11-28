@@ -583,8 +583,11 @@ namespace Bot.ChromeNs
                             return false;
                         var validation = PreSendAnswerValidator.Validate(
                             burst.SellerNick, burst.BuyerNick, burst.CombinedQuestion, answer, true,
-                            knowledgeV2Result == null ? null : knowledgeV2Result.ContextPromptAddon);
-                        if (validation.Action != AnswerValidationAction.Pass) return false;
+                            knowledgeV2Result == null ? null : knowledgeV2Result.ContextPromptAddon,
+                            knowledgeV2Result == null ? null : knowledgeV2Result.ContextDecision);
+                        if (validation.Action != AnswerValidationAction.Pass
+                            || !KnowledgeEngineV2RuntimeBridge.IsContextKnowledgeCurrent(
+                                burst.SellerNick, burst.ShopKey, knowledgeV2Result)) return false;
                     }
                     return workflowDecision == null || !workflowDecision.RequiresSend
                         || ReceptionWorkflowRuntimeService.IsDecisionCurrent(workflowDecision);

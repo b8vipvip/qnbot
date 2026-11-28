@@ -68,7 +68,8 @@ namespace Bot.ChromeNs
             string question,
             string answer,
             bool secondAttempt,
-            string approvedV2ContextEvidence = null)
+            string approvedV2ContextEvidence = null,
+            KnowledgeV2Decision decision = null)
         {
             var result = new AnswerValidationResult();
             answer = BotOutboundMessageFormatter.StripAiMarker(answer);
@@ -86,6 +87,11 @@ namespace Bot.ChromeNs
             var state = BuildState(seller, buyer, question);
             var authoritativeEvidence = BuildAuthoritativeEvidence(state, approvedV2ContextEvidence);
             var verifiedStatusEvidence = BuildVerifiedStatusEvidence(state);
+            var scopedQuestion = question;
+            if (decision != null && decision.Query != null)
+                scopedQuestion += " " + string.Join(" ", (decision.Query.Entities ?? new List<string>())
+                    .Where(KnowledgeEngineV2Semantics.IsProductEntity)
+                    .Select(id => "商品ID:" + id.Substring("product:".Length)));
 
             if (MachinePhrases.Any(x => compactAnswer.Contains(Compact(x))))
             {
@@ -119,6 +125,10 @@ namespace Bot.ChromeNs
                 result.Issues.Add("出现店铺提示词、知识或已确认订单事实中没有依据的具体数字/时效：" + string.Join("、", unsupportedNumbers));
             }
 
+            if (HasUnverifiedScopedNumbers(scopedQuestion, answer, approvedV2ContextEvidence,
+                StorePromptProfileService.GetStandardPrompt()))
+                result.Issues.Add("数字事实与商品、价格/时效类型或适用条件不一致");
+
             var unsupportedAbsolute = AbsolutePromisePhrases
                 .Where(x => compactAnswer.Contains(Compact(x)) && !ContainsEvidence(authoritativeEvidence, x))
                 .Take(4)
@@ -137,7 +147,7 @@ namespace Bot.ChromeNs
                 result.Issues.Add("声称已经核实或完成具体订单/售后状态，但没有可靠依据：" + string.Join("、", unsupportedStatus));
             }
 
-            if (HasUnverifiedProductConclusion(question, answer, approvedV2ContextEvidence))
+            if (HasUnverifiedProductConclusion(scopedQuestion, answer, approvedV2ContextEvidence))
                 result.Issues.Add("商品支持/不支持结论缺少明确适用的Knowledge V2证据");
 
             if (HasKnowledgeContradiction(answer, approvedV2ContextEvidence))
@@ -313,43 +323,183 @@ namespace Bot.ChromeNs
                 || a == "稍等一下";
         }
 
-        internal static bool HasUnverifiedProductConclusion(string question, string answer, string evidence)
+        private sealed class ApprovedFact
         {
-            var requested = KnowledgeEngineV2Semantics.ExtractEntities(question)
-                .Where(KnowledgeEngineV2Semantics.IsProductEntity).ToList();
-            var mentioned = KnowledgeEngineV2Semantics.ExtractEntities(answer)
-                .Where(KnowledgeEngineV2Semantics.IsProductEntity).ToList();
-            if (requested.Count == 0 && mentioned.Count == 0) return false;
-            // An unrelated approved answer is not evidence for a capability
-            // assertion. Each claimed product and direction must be covered by
-            // the same approved evidence block, not a pooled list of keywords.
-            var blocks = Regex.Matches(evidence ?? string.Empty,
+            public List<string> Products;
+            public string Question;
+            public string Answer;
+            public string Conditions;
+        }
+
+        private static List<ApprovedFact> ApprovedFacts(string evidence)
+        {
+            return Regex.Matches(evidence ?? string.Empty,
                 @"(?ms)^V2知识\d+：[^\r\n]*\r?\n(?<body>.*?)(?=^V2知识\d+：|\z)")
                 .Cast<Match>().Select(x =>
                 {
                     var body = x.Groups["body"].Value;
-                    var approvedAnswer = Regex.Match(body, @"(?m)^答案：([^\r\n]+)").Groups[1].Value;
-                    var scope = Regex.Match(body, @"(?m)^商品ID：([^\r\n]*)").Groups[1].Value
-                        .Split(new[] { '；', ';', '、', ',', '，' }, StringSplitOptions.RemoveEmptyEntries)
-                        .Select(id => id.Trim())
-                        .Select(id => KnowledgeEngineV2Semantics.IsProductEntity(id) ? id : "product:" + id)
-                        .ToList();
-                    return new { Products = scope, Directions = ProductAssertionPolarities(approvedAnswer).Distinct().ToList() };
-                }).ToList();
-            foreach (var clause in Regex.Split(answer ?? string.Empty, @"[，,。；;！？!?\r\n]+"))
+                    Func<string, string> field = label => Regex.Match(body, @"(?m)^" + label + @"：([^\r\n]*)").Groups[1].Value;
+                    return new ApprovedFact
+                    {
+                        Question = field("问题"),
+                        Answer = field("答案"),
+                        Conditions = field("适用条件") + " " + field("必要上下文"),
+                        Products = field("商品ID").Split(new[] { '；', ';', '、', ',', '，' }, StringSplitOptions.RemoveEmptyEntries)
+                            .Select(id => id.Trim()).Select(id => KnowledgeEngineV2Semantics.IsProductEntity(id) ? id : "product:" + id)
+                            .Where(id => Regex.IsMatch(id, @"^product:\d{8,20}$", RegexOptions.IgnoreCase))
+                            .Distinct(StringComparer.OrdinalIgnoreCase).ToList()
+                    };
+                }).Where(x => !string.IsNullOrWhiteSpace(x.Answer)).ToList();
+        }
+
+        private static List<string> ExplicitProducts(string value)
+        {
+            return KnowledgeEngineV2Semantics.ExtractEntities(value).Where(KnowledgeEngineV2Semantics.IsProductEntity).ToList();
+        }
+
+        private static List<string> RequestedProducts(string question, string evidence)
+        {
+            var ids = ExplicitProducts(question);
+            if (ids.Count > 0) return ids;
+            // This line is constructed by the runtime from the parsed query,
+            // including verified order/OCR and preserved working-memory IDs.
+            var header = Regex.Match(evidence ?? string.Empty, @"(?m)^结构化解析：[^\r\n]*；entities=([^\r\n]*)").Groups[1].Value;
+            return Regex.Matches(header, @"(?i)\bproduct:\d{8,20}\b").Cast<Match>()
+                .Select(x => x.Value.ToLowerInvariant()).Distinct(StringComparer.OrdinalIgnoreCase).ToList();
+        }
+
+        private static IEnumerable<string> FactClauses(string text)
+        {
+            return Regex.Split(text ?? string.Empty, @"[，。；;！？!?\r\n]+|(?<!\d),|,(?!\d)")
+                .Where(x => !string.IsNullOrWhiteSpace(x));
+        }
+
+        private static readonly string[] FactQualifiers =
+        {
+            "首单", "续费", "新用户", "老用户", "首次", "复购", "限时", "活动", "优惠券",
+            "会员", "非会员", "工作日", "自然日", "节假日", "周末", "预售", "现货",
+            "退款", "退货", "发货", "到账", "激活", "充值", "配送", "运费", "定金", "尾款"
+        };
+
+        private static string NumericKind(string clause, string token)
+        {
+            var normalized = NormalizeNumericClaim(token);
+            if (Regex.IsMatch(normalized, @"(?:元|块)$"))
+            {
+                if (Regex.IsMatch(clause, @"退款|退回|赔偿|补偿")) return "refund";
+                if (Regex.IsMatch(clause, @"优惠|减免|立减|折抵")) return "discount";
+                if (clause.Contains("运费")) return "shipping_fee";
+                if (clause.Contains("定金")) return "deposit";
+                if (clause.Contains("尾款")) return "balance";
+                return "price";
+            }
+            if (Regex.IsMatch(normalized, @"(?:工作日|天|小时|分钟|秒|个月|年|月)$"))
+            {
+                if (Regex.IsMatch(clause, @"退款|退回")) return "refund_time";
+                if (Regex.IsMatch(clause, @"发货|配送|快递|物流")) return "shipping_time";
+                if (Regex.IsMatch(clause, @"有效|期限|到期|保修")) return "validity";
+                if (Regex.IsMatch(clause, @"到账|激活|开通|充值")) return "activation_time";
+                return "duration";
+            }
+            return "quantity";
+        }
+
+        private static bool QualifiersCompatible(string claim, string evidence, string question)
+        {
+            // Reject transfer of a conditional number from one scenario to
+            // another. A qualifier can be supplied by the buyer's current
+            // question or the answer itself, but never invented from elsewhere.
+            foreach (var term in FactQualifiers)
+            {
+                var inClaim = claim.IndexOf(term, StringComparison.OrdinalIgnoreCase) >= 0;
+                var inEvidence = evidence.IndexOf(term, StringComparison.OrdinalIgnoreCase) >= 0;
+                if (inClaim && !inEvidence) return false;
+                if (inEvidence && !inClaim && !KnowledgeEngineV2Semantics.HasAffirmativeTerm(question, term))
+                    return false;
+            }
+            return true;
+        }
+
+        internal static bool HasUnverifiedScopedNumbers(string question, string answer, string evidence, string storeFacts)
+        {
+            var requested = RequestedProducts(question, evidence);
+            var mentioned = ExplicitProducts(answer);
+            var approved = ApprovedFacts(evidence);
+            foreach (var clause in FactClauses(answer))
+            {
+                var scope = ExplicitProducts(clause);
+                if (scope.Count == 0) scope = requested.Count > 0 ? requested : mentioned;
+                foreach (Match number in ConcreteNumberRegex.Matches(clause))
+                {
+                    // Questions/uncertainty are not new factual assertions,
+                    // but the existing global number validator still applies.
+                    if (!KnowledgeEngineV2Semantics.HasAffirmativeTerm(clause, number.Value))
+                        return true;
+                    var kind = NumericKind(clause, number.Value);
+                    Func<string, string, bool> matches = (source, conditions) => FactClauses(source).Any(candidate =>
+                        ContainsNumericEvidence(candidate, number.Value)
+                        && NumericKind(candidate, number.Value) == kind
+                        && QualifiersCompatible(clause, candidate + " " + conditions, question));
+                    if (scope.Count > 0)
+                    {
+                        if (requested.Count > 0 && scope.Any(id => !requested.Contains(id, StringComparer.OrdinalIgnoreCase)))
+                            return true;
+                        if (!scope.All(id => approved.Any(fact => fact.Products.Contains(id, StringComparer.OrdinalIgnoreCase)
+                            && matches(fact.Answer, fact.Conditions)))) return true;
+                    }
+                    else if (!approved.Any(fact => fact.Products.Count == 0 && matches(fact.Answer, fact.Conditions))
+                        && !matches(storeFacts, string.Empty)) return true;
+                }
+            }
+            return false;
+        }
+
+        internal static bool HasUnverifiedProductConclusion(string question, string answer, string evidence)
+        {
+            var requested = RequestedProducts(question, evidence);
+            var mentioned = ExplicitProducts(answer);
+            if (requested.Count == 0 && mentioned.Count == 0) return false;
+            var blocks = ApprovedFacts(evidence);
+            foreach (var clause in FactClauses(answer))
             {
                 var directions = ProductAssertionPolarities(clause).Distinct().ToList();
                 if (directions.Count == 0) continue;
-                var scope = KnowledgeEngineV2Semantics.ExtractEntities(clause)
-                    .Where(KnowledgeEngineV2Semantics.IsProductEntity).ToList();
+                var scope = ExplicitProducts(clause);
                 if (scope.Count == 0) scope = requested.Count > 0 ? requested : mentioned;
+                var features = CapabilityFeatures(clause);
+                if (features.Count == 0) features = CapabilityFeatures(question);
                 if (directions.Count != 1 || scope.Count == 0
+                    || (requested.Count > 0 && scope.Any(id => !requested.Contains(id, StringComparer.OrdinalIgnoreCase)))
                     || !scope.All(id => blocks.Any(block =>
                         block.Products.Contains(id, StringComparer.OrdinalIgnoreCase)
-                        && block.Directions.Count == 1 && block.Directions[0] == directions[0])))
+                        && FactClauses(block.Answer).Any(approved =>
+                        {
+                            var polarity = ProductAssertionPolarities(approved).Distinct().ToList();
+                            return polarity.Count == 1 && polarity[0] == directions[0]
+                                && CapabilityFeaturesMatch(features, approved, block.Question)
+                                && QualifiersCompatible(clause, approved + " " + block.Conditions, question);
+                        }))))
                     return true;
             }
             return false;
+        }
+
+        private static List<string> CapabilityFeatures(string value)
+        {
+            return KnowledgeEngineV2Semantics.ExtractEntities(value)
+                .Where(x => !KnowledgeEngineV2Semantics.IsProductEntity(x))
+                .Select(x => string.Equals(x, "TV", StringComparison.OrdinalIgnoreCase) ? "电视" : x)
+                .Distinct(StringComparer.OrdinalIgnoreCase).ToList();
+        }
+
+        private static bool CapabilityFeaturesMatch(List<string> requested, string approvedAnswer, string approvedQuestion)
+        {
+            if (requested.Count == 0) return true;
+            // Prefer the actual answer's objects. A title asking about A
+            // cannot authorize A when the saved answer explicitly discusses B.
+            var declared = CapabilityFeatures(approvedAnswer);
+            if (declared.Count == 0) declared = CapabilityFeatures(approvedQuestion);
+            return requested.All(x => declared.Contains(x, StringComparer.OrdinalIgnoreCase));
         }
 
         private static IEnumerable<int> ProductAssertionPolarities(string answer)

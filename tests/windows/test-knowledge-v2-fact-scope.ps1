@@ -24,6 +24,10 @@ Assert-Equal ($polarity.Invoke($null, @('A支持，B不支持'))) 0 'mixed polar
 Assert-Equal ($scope.Invoke($null, @('我没有会员', '会员'))) $false 'negative scope'
 Assert-Equal ($scope.Invoke($null, @('我有会员', '会员'))) $true 'affirmative scope'
 Assert-Equal ($scope.Invoke($null, @('版本1.5', '版本15'))) $false 'version punctuation'
+Assert-Equal ($scope.Invoke($null, @('会员未开通', '会员'))) $false 'suffix-negated condition'
+Assert-Equal ($scope.Invoke($null, @('如果有会员', '会员'))) $false 'hypothetical condition'
+Assert-Equal ($scope.Invoke($null, @('版本1.50', '版本1.5'))) $false 'numeric prefix'
+
 $recordType = $assembly.GetType('Bot.Knowledge.KnowledgeV2Record', $true)
 $queryType = $assembly.GetType('Bot.Knowledge.KnowledgeV2Query', $true)
 $record = [Activator]::CreateInstance($recordType)
@@ -65,6 +69,18 @@ Assert-Equal ($conflictProperty.GetValue($follow, $null)) $true 'overflow ambigu
 $follow = $parse.Invoke($null, [object[]]@('这款商品ID:12345678 是否支持', $memory))
 Assert-Equal ($conflictProperty.GetValue($follow, $null)) $false 'explicit fresh product replaces previous ambiguity'
 
+
+$scopedNumbers = $validator.GetMethod('HasUnverifiedScopedNumbers', $flags)
+$price = "V2知识1：`n问题：首单多少钱`n答案：首单价格10元`n商品ID：12345678`n适用条件：首单`n"
+Assert-Equal ($scopedNumbers.Invoke($null, @('商品ID:12345678 首单多少钱','首单价格10元',$price,''))) $false 'same product and qualifier'
+Assert-Equal ($scopedNumbers.Invoke($null, @('商品ID:87654321 首单多少钱','首单价格10元',$price,''))) $true 'price from wrong product'
+Assert-Equal ($scopedNumbers.Invoke($null, @('商品ID:12345678 续费多少钱','续费10元',$price,''))) $true 'renewal cannot inherit first order price'
+Assert-Equal ($scopedNumbers.Invoke($null, @('商品ID:12345678 多少钱','价格10元',$price,''))) $true 'omitted first order condition'
+Assert-Equal ($scopedNumbers.Invoke($null, @('商品ID:12345678 退款多少','退款10元',$price,''))) $true 'sale price cannot authorize refund'
+$shipping = "V2知识1：`n问题：发货时效`n答案：发货2天`n商品ID：12345678`n"
+Assert-Equal ($scopedNumbers.Invoke($null, @('商品ID:12345678 发货多久','发货2天',$shipping,''))) $false 'shipping time is supported'
+Assert-Equal ($scopedNumbers.Invoke($null, @('商品ID:12345678 退款多久','退款2天',$shipping,''))) $true 'shipping time cannot become refund time'
+Assert-Equal ($scopedNumbers.Invoke($null, @('商品ID:12345678 首单多少钱','首单不是10元',$price,''))) $true 'positive evidence cannot authorize negative numeric claim'
 $unverified = $validator.GetMethod('HasUnverifiedProductConclusion', $flags)
 $promise = $validator.GetMethod('HasTransactionalPromise', $flags)
 $overlap = $semantics.GetMethod('ProductScopesOverlap', $flags)
@@ -79,6 +95,10 @@ Assert-Equal ($unverified.Invoke($null, @($productQuestion, '支持', $unrelated
 Assert-Equal ($unverified.Invoke($null, @($productQuestion, '不支持', $scopedPositive))) $true 'wrong direction blocked'
 Assert-Equal ($unverified.Invoke($null, @($productQuestion, '商品ID:87654321 支持', $scopedPositive))) $true 'generated new product not authorized'
 Assert-Equal ($unverified.Invoke($null, @('商品ID:12345678 商品ID:87654321 是否支持', '支持', $scopedPositive))) $true 'partial scope not sufficient'
+$tvFact = "V2知识1：`n问题：电视是否支持`n答案：电视支持`n商品ID：12345678`n"
+Assert-Equal ($unverified.Invoke($null, @('商品ID:12345678 手机是否支持','支持',$tvFact))) $true 'TV evidence cannot authorize phone capability'
+Assert-Equal ($unverified.Invoke($null, @('商品ID:12345678 电视是否支持','支持',$tvFact))) $false 'same feature capability'
+
 
 Assert-Equal ($promise.Invoke($null, @('我马上给您退款'))) $true 'unauthorized transactional promise'
 Assert-Equal ($promise.Invoke($null, @('请提供订单号核实退款情况'))) $false 'refund clarification'
@@ -147,4 +167,81 @@ $sorted = @($latencies | Sort-Object)
 $p95 = $sorted[[Math]::Ceiling($sorted.Count * 0.95) - 1]
 $deltaBytes = [GC]::GetTotalMemory($true) - $beforeBytes
 Write-Host ("Synthetic V2 recall: records={0}; build_ms={1}; recall_p95_ms={2:N2}; retained_bytes_delta={3}" -f $records.Count, $buildMs, $p95, $deltaBytes)
+
+# Exercise the actual corpus generation fence before any row is published.
+$repoType = $assembly.GetType('Bot.Knowledge.KnowledgeEngineV2Repository', $true)
+$stateType = $repoType.GetNestedType('RepositoryState', [Reflection.BindingFlags]'NonPublic')
+$state = [Activator]::CreateInstance($stateType, $true)
+$version = $stateType.GetField('CorpusVersion')
+$mutation = $stateType.GetField('LastMutationId')
+$mark = $repoType.GetMethod('MarkCorpusMutation', $flags)
+Assert-Equal ($version.GetValue($state)) 0 'initial corpus generation'
+$null = $mark.Invoke($null, [object[]]@($state, 'first'))
+Assert-Equal ($version.GetValue($state)) 1 'invalidate generation before first write'
+Assert-Equal ($mutation.GetValue($state)) 'first' 'single-row identity'
+$null = $mark.Invoke($null, [object[]]@($state, $null))
+Assert-Equal ($version.GetValue($state)) 2 'bulk commit invalidates prior generation'
+Assert-Equal ($mutation.GetValue($state)) $null 'bulk change cannot patch one row'
+
+# A very large exact alias bucket must remain bounded and cannot imply consensus.
+$exactRecords = [Activator]::CreateInstance($listType)
+$exactQuery = $parse.Invoke($null, [object[]]@('手机操作说明', $null))
+for ($i = 0; $i -lt 120; $i++) {
+    $entry = [Activator]::CreateInstance($recordType)
+    $entry.Id = 'same-' + $i.ToString('D3')
+    $entry.Title = '手机操作说明'
+    $entry.Answer = '支持'
+    if ($i -eq 119) { $entry.Answer = '不支持' }
+    $entry.Intent = $exactQuery.Intent
+    $entry.Predicate = $exactQuery.Predicate
+    $entry.Enabled = $true
+    $entry.Status = 'active'
+    $entry.Type = 'business_fact'
+    $entry.SourceType = 'manual_reviewed_direct'
+    $entry.Confidence = 1
+    $entry.Authority = 1
+    $exactRecords.Add($entry)
+}
+$exactSnapshot = $buildSnapshot.Invoke($null, [object[]]@('exact-overflow', $exactRecords))
+$recalled = $recall.Invoke($null, [object[]]@($exactSnapshot, $exactQuery))
+Assert-Equal ($recalled.Count -le 96) $true 'exact match overflow bounded'
+$ambiguous = $queryType.GetProperty('RecallBudgetAmbiguous', [Reflection.BindingFlags]'Instance,Public,NonPublic')
+Assert-Equal ($ambiguous.GetValue($exactQuery, $null)) $true 'exact overflow cannot hide conflict'
+
+# Independent changes relative to the same cloud baseline must converge without
+# keeping an arbitrary contradictory production answer.
+$cloudType = $assembly.GetType('Bot.Knowledge.KnowledgeV2CloudSyncService', $true)
+$merge = $cloudType.GetMethod('MergeCloudAndLocal', $flags)
+$contentFingerprint = $cloudType.GetMethod('RecordContentFingerprint', $flags)
+function New-CloudRecord([string]$answer) {
+    $r = [Activator]::CreateInstance($recordType)
+    $r.Id = 'stable-cloud-id'
+    $r.Title = '商品是否支持'
+    $r.Answer = $answer
+    $r.ShortAnswer = $answer
+    $r.Type = 'business_fact'
+    $r.Status = 'active'
+    $r.Enabled = $true
+    $r.SourceType = 'manual_reviewed_direct'
+    $r.Authority = 1
+    $r.Confidence = 1
+    return $r
+}
+$baseRecord = New-CloudRecord '旧答案'
+$baseline = [System.Collections.Generic.Dictionary[string,string]]::new()
+$baseline.Add($baseRecord.Id, $contentFingerprint.Invoke($null, [object[]]@($baseRecord)))
+$cloud = [Activator]::CreateInstance($listType)
+$local = [Activator]::CreateInstance($listType)
+$cloud.Add((New-CloudRecord '支持'))
+$local.Add((New-CloudRecord '不支持'))
+$mergeArgs = [object[]]::new(4)
+$mergeArgs[0] = $cloud
+$mergeArgs[1] = $local
+$mergeArgs[2] = $true
+$mergeArgs[3] = $baseline
+$merged = $merge.Invoke($null, $mergeArgs)
+Assert-Equal ($merged.Count) 2 'both conflicting variants retained'
+Assert-Equal (@($merged | Where-Object { $_.Enabled }).Count) 0 'no arbitrary active cloud winner'
+Assert-Equal (@($merged | Where-Object { $_.Id -eq 'stable-cloud-id' }).Count) 1 'stable ID retained'
+
 Write-Host 'Knowledge V2 compiled fact and scope regression cases passed.'

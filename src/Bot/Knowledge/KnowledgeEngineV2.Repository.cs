@@ -12,6 +12,7 @@ using System.Linq;
 using System.Security.Cryptography;
 using System.Text;
 using System.Text.RegularExpressions;
+using System.Threading;
 
 namespace Bot.Knowledge
 {
@@ -22,6 +23,8 @@ namespace Bot.Knowledge
             public readonly object Sync = new object();
             public SQLiteHelper Db;
             public string Path;
+            public long CorpusVersion;
+            public string LastMutationId;
         }
 
         private static readonly IShopScopedPathProvider Paths = new ShopScopedPathProvider();
@@ -33,6 +36,48 @@ namespace Bot.Knowledge
         private static readonly Regex AutoLearningPersonalData = new Regex(
             @"(?<!\d)1[3-9]\d{9}(?!\d)|(?<!\d)\d{17}[0-9Xx](?!\d)|(?<!\d)\d{16,19}(?!\d)|(?<!\d)(?:\+?1[-.\s]?)?\(?\d{3}\)?[-.\s]?\d{3}[-.\s]?\d{4}(?!\d)|[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}",
             RegexOptions.Compiled | RegexOptions.IgnoreCase);
+
+        // Called inside state.Sync immediately before a corpus write. Even a failed
+        // transaction invalidates the previous snapshot; no stale decision can
+        // pass while the committed SQLite rows are newer than the index.
+        private static void MarkCorpusMutation(RepositoryState state, string id = null)
+        {
+            state.LastMutationId = id;
+            Interlocked.Increment(ref state.CorpusVersion);
+        }
+
+        internal static long GetCorpusVersion(string seller)
+        {
+            var state = GetState(ResolveShopRequired(seller));
+            return Interlocked.Read(ref state.CorpusVersion);
+        }
+
+        internal static List<KnowledgeV2Record> LoadSnapshotCorpus(string seller, out long version)
+        {
+            var state = GetState(ResolveShopRequired(seller));
+            EnsureSchemaInitialized(state);
+            lock (state.Sync)
+            {
+                // ReadTable throws on SQLite failure rather than returning an
+                // empty/partial list that could be published as a valid snapshot.
+                var records = state.Db.ReadTable<KnowledgeV2RecordRow>().Select(FromRow).Where(x => x != null).ToList();
+                version = state.CorpusVersion;
+                return records;
+            }
+        }
+
+        internal static KnowledgeV2Record LoadCommittedRecordForSnapshot(string seller, string id, out long version, out string mutationId)
+        {
+            var state = GetState(ResolveShopRequired(seller));
+            EnsureSchemaInitialized(state);
+            lock (state.Sync)
+            {
+                version = state.CorpusVersion;
+                mutationId = state.LastMutationId;
+                var committed = state.Db.Select(typeof(KnowledgeV2RecordRow), "where Id = ?", id).OfType<KnowledgeV2RecordRow>().SingleOrDefault();
+                return committed == null ? null : FromRow(committed);
+            }
+        }
 
         public static List<KnowledgeV2Record> LoadAll(string seller)
         {
@@ -69,7 +114,11 @@ namespace Bot.Knowledge
             var state = GetState(shop);
             EnsureSchemaInitialized(state);
             NormalizeForSave(record);
-            lock (state.Sync) state.Db.SaveOneRecord(ToRow(record));
+            lock (state.Sync)
+            {
+                MarkCorpusMutation(state, record.Id);
+                state.Db.SaveOneRecord(ToRow(record));
+            }
             KnowledgeEngineV2Service.ApplyRecordUpdate(seller, record);
         }
 
@@ -101,6 +150,7 @@ namespace Bot.Knowledge
                             .Select(KnowledgeEngineV2Semantics.Compact).Contains(question, StringComparer.Ordinal))
                         return false;
                 }
+                MarkCorpusMutation(state, record.Id);
                 state.Db.SaveOneRecord(ToRow(record));
             }
             KnowledgeEngineV2Service.ApplyRecordUpdate(seller, record);
@@ -145,11 +195,13 @@ namespace Bot.Knowledge
                     };
                     var receipt = RemoteMutationReceipt(operationReceipt, "revision_apply");
                     if (receipt != null) writes.Add(receipt);
+                    MarkCorpusMutation(state, record.Id);
                     state.Db.SaveRecordsInTransaction(writes);
                 }
                 else
                 {
                     if (!string.IsNullOrEmpty(operationReceipt)) return false;
+                    MarkCorpusMutation(state, record.Id);
                     state.Db.SaveOneRecord(ToRow(record));
                 }
             }
@@ -348,6 +400,7 @@ namespace Bot.Knowledge
                             return false;
                         }
                     }
+                    MarkCorpusMutation(state, record.Id);
                     state.Db.SaveRecordsInTransaction(new List<object> { ToRow(record), revision });
                     var readbackRow = state.Db.ReadOneRecord<KnowledgeV2RecordRow>(x => x.Id == record.Id);
                     var readback = readbackRow == null ? null : FromRow(readbackRow);
@@ -506,6 +559,7 @@ namespace Bot.Knowledge
                     NormalizeForSave(currentUpdated);
                     rowsToSave.Add(ToRow(currentUpdated));
 
+                    MarkCorpusMutation(state);
                     state.Db.SaveRecordsInTransaction(rowsToSave);
                     current = currentUpdated;
                 }
@@ -815,6 +869,7 @@ namespace Bot.Knowledge
                     CurrentJson = JsonConvert.SerializeObject(record),
                     CreatedAtTicks = now.Ticks
                 };
+                MarkCorpusMutation(state, record.Id);
                 state.Db.SaveRecordsInTransaction(new List<object> { ToRow(record), revision });
 
                 var readback = state.Db.ReadOneRecord<KnowledgeV2RecordRow>(x => x.Id == record.Id);
@@ -1055,6 +1110,7 @@ namespace Bot.Knowledge
                     CurrentJson = JsonConvert.SerializeObject(applied),
                     CreatedAtTicks = DateTime.Now.Ticks
                 };
+                MarkCorpusMutation(state, applied.Id);
                 state.Db.SaveRecordsInTransaction(new List<object> { ToRow(applied), revision });
             }
             KnowledgeEngineV2Service.ApplyRecordUpdate(seller, applied);
@@ -1121,9 +1177,10 @@ namespace Bot.Knowledge
                     tombstone.UpdatedAt = DateTime.Now;
                     // Keep a syncable, disabled tombstone instead of physically
                     // removing the row. Other devices can now observe the rollback.
+                    MarkCorpusMutation(state, tombstone.Id);
                     state.Db.SaveRecordsInTransaction(new List<object> { ToRow(tombstone), rollback });
                 }
-                else state.Db.SaveRecordsInTransaction(new List<object> { ToRow(restore), rollback });
+                else { MarkCorpusMutation(state, restore.Id); state.Db.SaveRecordsInTransaction(new List<object> { ToRow(restore), rollback }); }
             }
             if (delete)
             {
@@ -1239,6 +1296,7 @@ namespace Bot.Knowledge
                     CurrentJson = JsonConvert.SerializeObject(corrected),
                     CreatedAtTicks = DateTime.Now.Ticks
                 };
+                MarkCorpusMutation(state, corrected.Id);
                 state.Db.SaveRecordsInTransaction(new List<object> { ToRow(corrected), revision });
             }
             KnowledgeEngineV2Service.ApplyRecordUpdate(seller, corrected);
@@ -1389,6 +1447,7 @@ namespace Bot.Knowledge
                     CurrentJson = JsonConvert.SerializeObject(corrected),
                     CreatedAtTicks = DateTime.Now.Ticks
                 };
+                MarkCorpusMutation(state, corrected.Id);
                 state.Db.SaveRecordsInTransaction(new List<object> { ToRow(corrected), revision });
                 updatedCorpusFingerprint = ComputeRepositoryCorpusFingerprint(
                     state.Db.ReadRecords<KnowledgeV2RecordRow>(null).Select(FromRow).Where(x => x != null));
@@ -1635,6 +1694,7 @@ namespace Bot.Knowledge
                 var writes = new List<object> { ToRow(restored), rollback };
                 var receipt = RemoteMutationReceipt(operationReceipt, "rollback");
                 if (receipt != null) writes.Add(receipt);
+                MarkCorpusMutation(state, restored.Id);
                 state.Db.SaveRecordsInTransaction(writes);
             }
             KnowledgeEngineV2Service.ApplyRecordUpdate(seller, restored);
@@ -1683,6 +1743,7 @@ namespace Bot.Knowledge
                         CreatedAtTicks = DateTime.Now.Ticks
                     });
                 }
+                MarkCorpusMutation(state);
                 state.Db.SaveRecordsInTransaction(writes);
             }
             KnowledgeEngineV2Service.ReplaceSnapshot(seller, null);
@@ -1719,6 +1780,7 @@ namespace Bot.Knowledge
                         PreviousJson = before, CurrentJson = JsonConvert.SerializeObject(record), CreatedAtTicks = DateTime.Now.Ticks
                     });
                 }
+                MarkCorpusMutation(state);
                 state.Db.SaveRecordsInTransaction(writes);
             }
             KnowledgeEngineV2Service.ReplaceSnapshot(seller, null);
@@ -1754,6 +1816,7 @@ namespace Bot.Knowledge
                     CurrentJson = JsonConvert.SerializeObject(tombstone),
                     CreatedAtTicks = DateTime.Now.Ticks
                 };
+                MarkCorpusMutation(state, tombstone.Id);
                 state.Db.SaveRecordsInTransaction(new List<object> { ToRow(tombstone), revision });
             }
             KnowledgeEngineV2Service.ApplyRecordDelete(seller, id);
@@ -1782,6 +1845,7 @@ namespace Bot.Knowledge
                 });
                 // Full-package imports are destructive replacements too. Keep the old
                 // corpus visible until every imported row and its schema marker commit.
+                MarkCorpusMutation(state);
                 state.Db.ReplaceRecordsInTransaction(
                     new List<Type> { typeof(KnowledgeV2RecordRow) },
                     replacementRows);
@@ -1894,6 +1958,7 @@ namespace Bot.Knowledge
                 // The compare-and-swap check and replacement remain under the repository
                 // lock; the actual DELETE + INSERT + metadata write are now one SQLite
                 // transaction, so a process crash cannot leave a partially cleared corpus.
+                MarkCorpusMutation(state);
                 state.Db.ReplaceRecordsInTransaction(
                     new List<Type> { typeof(KnowledgeV2RecordRow) },
                     replacementRows);
@@ -2038,6 +2103,7 @@ namespace Bot.Knowledge
                     record.Status = "candidate";
                     record.UpdatedAt = DateTime.Now;
                 }
+                MarkCorpusMutation(state);
                 state.Db.SaveRecordsInTransaction(
                     candidatesToNormalize.Select(record => (object)ToRow(record)).ToList());
             }

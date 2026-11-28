@@ -95,6 +95,8 @@ namespace Bot.Knowledge
             public int Correction;
             public int Withdraw;
             public int SendFailed;
+            public int Negative;
+            public readonly Dictionary<string, Aggregate> ByAnswer = new Dictionary<string, Aggregate>(StringComparer.Ordinal);
             public DateTime LastUsedAt;
             public DateTime LastEvidenceAt;
             public string LastEvidence;
@@ -155,7 +157,13 @@ namespace Bot.Knowledge
 
             if (IsPositiveAcknowledgement(text))
             {
-                if (!RemovePending(pending)) return;
+                lock (pending.Sync)
+                {
+                    // A thank-you after a failed or withdrawn answer is not
+                    // evidence that the original answer was correct.
+                    if (pending.NegativeBuyerReaction || pending.WithdrawalRecorded) return;
+                    if (!RemovePending(pending)) return;
+                }
                 AppendEvent(pending.Seller, pending.Buyer, pending.KnowledgeId, "accepted",
                     pending.Question, pending.Answer, "buyer_positive:" + Truncate(text, 100));
                 return;
@@ -220,22 +228,28 @@ namespace Bot.Knowledge
                 pending.Question, pending.Answer, Truncate(evidence, 180));
         }
 
-        public static double GetQualityAdjustment(string seller, string knowledgeId)
+        public static double GetQualityAdjustment(string seller, string knowledgeId, string answer)
         {
             knowledgeId = Clean(knowledgeId);
             if (knowledgeId.Length == 0) return 0;
             Aggregate aggregate;
             if (!GetAggregates(seller).TryGetValue(knowledgeId, out aggregate) || aggregate == null) return 0;
+            var version = AnswerVersion(answer);
+            if (version == null) return 0;
             int sent;
             int accepted;
             int correction;
             int withdraw;
+            int negative;
             lock (aggregate)
             {
-                sent = aggregate.Sent;
-                accepted = aggregate.Accepted;
-                correction = aggregate.Correction;
-                withdraw = aggregate.Withdraw;
+                Aggregate exact;
+                if (!aggregate.ByAnswer.TryGetValue(version, out exact)) return 0;
+                sent = exact.Sent;
+                accepted = exact.Accepted;
+                correction = exact.Correction;
+                withdraw = exact.Withdraw;
+                negative = exact.Negative;
             }
             if (sent < 2) return 0;
 
@@ -244,9 +258,12 @@ namespace Bot.Knowledge
             var correctionRatio = correction / (double)uses;
             var withdrawRatio = withdraw / (double)uses;
             // Transport send failures are intentionally excluded from knowledge-quality penalties.
+            // Buyer disagreement alone is weaker than verified human
+            // correction; it can reduce confidence, but cannot auto-edit facts.
             var adjustment = Math.Min(0.04, acceptedRatio * 0.04)
                 - correctionRatio * 0.14
-                - withdrawRatio * 0.18;
+                - withdrawRatio * 0.18
+                - Math.Min(0.04, negative / (double)uses * 0.04);
             if (correction + withdraw >= 2) adjustment -= 0.025;
             return Math.Max(-0.18, Math.Min(0.05, adjustment));
         }
@@ -405,25 +422,47 @@ namespace Bot.Knowledge
             }
         }
 
+        private static string AnswerVersion(string answer)
+        {
+            answer = Clean(answer);
+            // The ledger retains at most 1400 characters. An exactly capped
+            // value might be truncated, so do not use it as version evidence.
+            if (answer.Length == 0 || answer.Length >= 1400) return null;
+            using (var sha = SHA256.Create())
+                return BitConverter.ToString(sha.ComputeHash(Encoding.UTF8.GetBytes(answer))).Replace("-", "");
+        }
+
         private static void ApplyEventToAggregate(ConcurrentDictionary<string, Aggregate> target, KnowledgeV2FeedbackEventRow row)
         {
             if (target == null || row == null || string.IsNullOrWhiteSpace(row.KnowledgeId)) return;
             var item = target.GetOrAdd(row.KnowledgeId, _ => new Aggregate());
             lock (item)
             {
-                var type = (row.EventType ?? string.Empty).Trim().ToLowerInvariant();
-                if (type == "sent") item.Sent++;
-                else if (type == "accepted") item.Accepted++;
-                else if (type == "correction") item.Correction++;
-                else if (type == "withdrawal") item.Withdraw++;
-                else if (type == "send_failed") item.SendFailed++;
-                var at = SafeDate(row.CreatedAtTicks);
-                if (type == "sent" && at > item.LastUsedAt) item.LastUsedAt = at;
-                if (at >= item.LastEvidenceAt)
-                {
-                    item.LastEvidenceAt = at;
-                    item.LastEvidence = type + (string.IsNullOrWhiteSpace(row.Evidence) ? string.Empty : "：" + row.Evidence);
-                }
+                Accumulate(item, row);
+                var version = AnswerVersion(row.Answer);
+                if (version == null) return;
+                Aggregate exact;
+                if (!item.ByAnswer.TryGetValue(version, out exact))
+                    item.ByAnswer[version] = exact = new Aggregate();
+                Accumulate(exact, row);
+            }
+        }
+
+        private static void Accumulate(Aggregate item, KnowledgeV2FeedbackEventRow row)
+        {
+            var type = (row.EventType ?? string.Empty).Trim().ToLowerInvariant();
+            if (type == "sent") item.Sent++;
+            else if (type == "accepted") item.Accepted++;
+            else if (type == "correction") item.Correction++;
+            else if (type == "withdrawal") item.Withdraw++;
+            else if (type == "buyer_negative") item.Negative++;
+            else if (type == "send_failed") item.SendFailed++;
+            var at = SafeDate(row.CreatedAtTicks);
+            if (type == "sent" && at > item.LastUsedAt) item.LastUsedAt = at;
+            if (at >= item.LastEvidenceAt)
+            {
+                item.LastEvidenceAt = at;
+                item.LastEvidence = type + (string.IsNullOrWhiteSpace(row.Evidence) ? string.Empty : "：" + row.Evidence);
             }
         }
 

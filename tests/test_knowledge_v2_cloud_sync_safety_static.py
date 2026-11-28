@@ -457,3 +457,13 @@ def test_steady_state_cloud_checkpoint_does_not_rehash_and_concurrent_demotion_w
     assert "state.BaselinePersisted=true;" in service
     assert "if (!local.Enabled && cloud.Enabled)" in service
     assert "merged[index]=inactive" in service
+
+
+def test_concurrent_conflicting_edits_do_not_publish_arbitrary_cloud_winner():
+    code = read("src/Bot/Knowledge/KnowledgeV2CloudSyncService.cs")
+    gate = code[code.index("if (baseline != null && baseline.ContainsKey(id) && cloud.Enabled && local.Enabled"):code.index("// Concurrent demotion and edit")]
+    assert "SameBusinessClaims(cloud, local)" in gate
+    assert "AddCandidate(merged, mergedIds, local, id)" in gate
+    assert 'cloud.Enabled = false' in gate
+    assert 'cloud.Status = "candidate"' in gate
+    assert 'cloud.Type = "learning_candidate"' in gate

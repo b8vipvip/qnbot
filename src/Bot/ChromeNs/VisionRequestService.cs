@@ -512,16 +512,25 @@ namespace Bot.ChromeNs
                         return false;
                     if (!PreSendAnswerValidator.AllowsUnresolvedKnowledgeReply(result.ContextKnowledgeDecision, answer))
                         return false;
-                    if (result.LocalOcrConfidence >= 0.88
-                        && PreSendAnswerValidator.HasUnverifiedProductConclusion(
-                            burst.CombinedQuestion + "\n" + result.LocalOcrText, answer, result.ApprovedV2KnowledgeEvidence))
-                        return false;
+                    if (result.LocalOcrConfidence >= 0.88)
+                    {
+                        var ocrProductQuestion = burst.CombinedQuestion + " " + string.Join(" ",
+                            KnowledgeEngineV2Semantics.ExtractEntities(result.LocalOcrText)
+                            .Where(KnowledgeEngineV2Semantics.IsProductEntity)
+                            .Select(id => "商品ID:" + id.Substring("product:".Length)));
+                        if (PreSendAnswerValidator.HasUnverifiedProductConclusion(
+                                ocrProductQuestion, answer, result.ApprovedV2KnowledgeEvidence)
+                            || PreSendAnswerValidator.HasUnverifiedScopedNumbers(
+                                ocrProductQuestion, answer, result.ApprovedV2KnowledgeEvidence,
+                                StorePromptProfileService.GetStandardPrompt())) return false;
+                    }
                     // OCR/pixel summaries are untrusted observations, not business facts.
                     // Do not add them to price, order-status or promise authority.
                     var validation = PreSendAnswerValidator.Validate(
                         burst.SellerNick, burst.BuyerNick, burst.CombinedQuestion,
-                        answer, true, result.ApprovedV2KnowledgeEvidence);
-                    return validation.Action == AnswerValidationAction.Pass;
+                        answer, true, result.ApprovedV2KnowledgeEvidence, result.ContextKnowledgeDecision);
+                    return validation.Action == AnswerValidationAction.Pass
+                        && KnowledgeEngineV2RuntimeBridge.IsContextKnowledgeCurrent(burst.SellerNick, burst.ShopKey, context);
                 }
             }
             catch (Exception ex)

@@ -627,11 +627,12 @@ def test_default_prompt_addon_fails_closed_without_legacy_knowledge_store():
 def test_exact_aliases_survive_broad_recall_budget_for_conflict_detection():
     index = read("src/Bot/Knowledge/KnowledgeEngineV2.Service.Index.cs")
     recall = index.split("private static HashSet<int> Recall", 1)[1].split("private static KnowledgeV2Match Score", 1)[0]
-    assert "var exactIds = exact ?? new HashSet<int>()" in recall
+    assert "var exactIds = new HashSet<int>(applicableExact.Take(96))" in recall
     assert "result.Where(i => !exactIds.Contains(i))" in recall
     assert ".Take(Math.Max(0, 96 - exactIds.Count))" in recall
     assert "new HashSet<int>(exactIds)" in recall
-    assert "selected.UnionWith(ordered)" in recall
+    assert "selected.UnionWith(ordered.Take(Math.Max(0, 96 - exactIds.Count)))" in recall
+    assert "query.RecallBudgetAmbiguous = true" in recall
 
 
 def test_context_entity_extraction_reuses_production_snapshot_not_full_database():

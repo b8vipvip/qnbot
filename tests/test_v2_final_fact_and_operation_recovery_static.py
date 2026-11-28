@@ -172,3 +172,33 @@ def test_cross_scope_conflicts_are_visible_but_never_bulk_disabled():
     web = read("services/api-control-plane/static/bot-web-v2-operations.js")
     assert "x.RequiresScopeReview?[]:" in web
     assert "y.ProductIds" in web and "y.Exclusions" in web
+
+
+def test_corpus_version_fences_all_active_mutation_paths_before_commit():
+    repo = read("src/Bot/Knowledge/KnowledgeEngineV2.Repository.cs")
+    assert "Interlocked.Increment(ref state.CorpusVersion)" in repo
+    assert "LoadSnapshotCorpus" in repo and "ReadTable<KnowledgeV2RecordRow>()" in repo
+    lines = repo.splitlines()
+    for i, line in enumerate(lines):
+        if "state.Db.SaveOneRecord(ToRow" in line or "state.Db.SaveRecordsInTransaction(new List<object> { ToRow" in line:
+            assert "MarkCorpusMutation" in line or "MarkCorpusMutation" in lines[i - 1]
+    index = read("src/Bot/Knowledge/KnowledgeEngineV2.Service.Index.cs")
+    assert "existing.CorpusVersion == KnowledgeEngineV2Repository.GetCorpusVersion(seller)" in index
+    assert "snapshot.CorpusVersion = version" in index
+    inc = read("src/Bot/Knowledge/KnowledgeEngineV2.Service.Incremental.cs")
+    assert "version != current.CorpusVersion + 1" in inc and "id, mutationId" in inc
+    public = read("src/Bot/Knowledge/KnowledgeEngineV2.Service.Public.cs")
+    assert "current.CorpusVersion == KnowledgeEngineV2Repository.GetCorpusVersion(seller)" in public
+
+
+def test_claim_scoped_numbers_and_recall_overflow_are_final_send_gates():
+    val = read("src/Bot/ChromeNs/PreSendAnswerValidator.cs")
+    assert "HasUnverifiedScopedNumbers(scopedQuestion" in val
+    assert "NumericKind(candidate, number.Value) == kind" in val
+    assert "QualifiersCompatible(clause" in val
+    assert "fact.Products.Contains(id" in val
+    index = read("src/Bot/Knowledge/KnowledgeEngineV2.Service.Index.cs")
+    assert "applicableExact.Take(96)" in index
+    assert "query.RecallBudgetAmbiguous" in index
+    public = read("src/Bot/Knowledge/KnowledgeEngineV2.Service.Public.cs")
+    assert "decision.HasConflict = query.RecallBudgetAmbiguous" in public
