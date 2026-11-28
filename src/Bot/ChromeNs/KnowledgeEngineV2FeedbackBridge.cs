@@ -99,7 +99,7 @@ namespace Bot.ChromeNs
         {
             if (message == null) return;
             var messageTime = GetMessageTime(message);
-            if (messageTime != DateTime.MinValue && messageTime < StartedAt.AddSeconds(-8)) return;
+            if (messageTime == DateTime.MinValue || messageTime < StartedAt.AddSeconds(-8)) return;
 
             ShopContext shop;
             try
@@ -113,7 +113,7 @@ namespace Bot.ChromeNs
                 Log.ErrorWithMaxCount("Knowledge V2反馈观察拒绝无法唯一解析消息来源店铺: " + ex.Message, 10);
                 return;
             }
-            if (shop == null || string.IsNullOrWhiteSpace(shop.ShopKey)
+            if (shop == null || !shop.HasStableSellerId || string.IsNullOrWhiteSpace(shop.ShopKey)
                 || string.IsNullOrWhiteSpace(shop.SellerNick)) return;
 
             using (ShopSettingsScope.Enter(shop))
@@ -168,15 +168,19 @@ namespace Bot.ChromeNs
                 var isWithdrawal = ConversationContextStore.IsWithdrawalNotice(message, text);
                 if (isWithdrawal)
                 {
-                    KnowledgeEngineV2FeedbackService.ObserveWithdrawal(seller, buyer, text);
+                    // Generic withdrawal tips lack the original outgoing message ID.
+                    // Do not attribute them to the last answer as verified quality evidence.
+                    // Retain the observer API for explicitly correlated withdrawal sources.
+                    if (isSeller && text.EndsWith("[A]", StringComparison.OrdinalIgnoreCase))
+                        KnowledgeEngineV2FeedbackService.ObserveWithdrawal(seller, buyer, text, messageTime);
                     return;
                 }
                 if (ConversationContextStore.IsPlatformSystemTip(message, text)) return;
 
                 if (isBuyer)
-                    KnowledgeEngineV2FeedbackService.ObserveBuyerMessage(seller, buyer, text);
+                    KnowledgeEngineV2FeedbackService.ObserveBuyerMessage(seller, buyer, text, messageTime);
                 else if (isSeller)
-                    KnowledgeEngineV2FeedbackService.ObserveSellerMessage(seller, buyer, text);
+                    KnowledgeEngineV2FeedbackService.ObserveSellerMessage(seller, buyer, text, messageTime);
             }
         }
 

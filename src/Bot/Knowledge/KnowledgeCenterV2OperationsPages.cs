@@ -360,6 +360,8 @@ namespace Bot.Knowledge
         public string ExportedAt { get; set; }
         public List<KnowledgeV2Record> Records { get; set; }
         public KnowledgeV2Settings Settings { get; set; }
+        public string SourceShopKey { get; set; }
+        public List<KnowledgeV2FeedbackEventRow> FeedbackEvents { get; set; }
 
         public KnowledgeV2PortablePackage()
         {
@@ -426,7 +428,7 @@ namespace Bot.Knowledge
             root.Children.Add(new TextBlock { Text = "导入导出", FontSize = 20, FontWeight = FontWeights.SemiBold });
             root.Children.Add(new TextBlock
             {
-                Text = "完整包包含 V2 全部结构化知识及 Knowledge Engine V2 设置。导入前会自动备份现有 V2 数据。",
+                Text = "完整包包含 V2 结构化知识、检索设置及本店反馈事件（可能包含买家消息，请妥善保管）。反馈仅恢复到原店铺，按事件ID合并去重。跨店迁移请使用仅导出结构化知识。",
                 TextWrapping = TextWrapping.Wrap,
                 Foreground = Brushes.DimGray,
                 Margin = new Thickness(0, 5, 0, 14)
@@ -493,6 +495,16 @@ namespace Bot.Knowledge
                 if (dialog.ShowDialog(_owner) != true) return;
                 var package = ParseValidatedPackage(
                     File.ReadAllText(dialog.FileName, System.Text.Encoding.UTF8));
+                if (package.FeedbackEvents != null && package.FeedbackEvents.Count > 0
+                    && !string.Equals(package.SourceShopKey, _shopKey, StringComparison.Ordinal))
+                    throw new InvalidDataException("该完整包含其他店铺反馈事件，禁止跨店恢复。");
+                if (package.FeedbackEvents != null)
+                {
+                    var shop = RequireShop();
+                    if (package.FeedbackEvents.Any(x => !DirectOrderIdentityResolver.IdentityEquals(x.Seller, shop.SellerNick)
+                        && !DirectOrderIdentityResolver.IdentityEquals(x.Seller, shop.DisplayName)))
+                        throw new InvalidDataException("知识包反馈卖家身份不匹配。");
+                }
                 if (MessageBox.Show(_owner,
                     "将用导入包的 " + package.Records.Count + " 条记录替换店铺 " + _seller
                     + "（ShopKey: " + _shopKey + "）的 V2 结构化知识。"
@@ -509,8 +521,10 @@ namespace Bot.Knowledge
                 if (package.Settings != null)
                     KnowledgeEngineV2Service.SetSettings(_seller, package.Settings.Enabled, package.Settings.Mode,
                         package.Settings.DirectThreshold, package.Settings.MinConfidence);
+                var restoredFeedback = package.FeedbackEvents == null || package.FeedbackEvents.Count == 0 ? 0
+                    : KnowledgeEngineV2FeedbackService.MergeBackupEvents(_seller, package.SourceShopKey, package.FeedbackEvents);
                 KnowledgeEngineV2Service.Warm(_seller);
-                _status.Text = "导入完成，共 " + package.Records.Count + " 条。导入前备份：" + backup;
+                _status.Text = "导入完成，共 " + package.Records.Count + " 条；新增反馈 " + restoredFeedback + " 条。导入前备份：" + backup;
             }
             catch (Exception ex) { MessageBox.Show(_owner, "导入失败：" + ex.Message); }
         }
@@ -578,6 +592,10 @@ namespace Bot.Knowledge
             var package = root.ToObject<KnowledgeV2PortablePackage>();
             foreach (var record in package.Records)
                 record.Id = record.Id.Trim();
+            var feedback = root.GetValue("FeedbackEvents", StringComparison.OrdinalIgnoreCase);
+            if (feedback != null && feedback.Type != JTokenType.Null && !(feedback is JArray))
+                throw new InvalidDataException("反馈事件必须为数组。");
+            KnowledgeEngineV2FeedbackService.ValidateBackupEvents(package.FeedbackEvents, package.Records);
             var settings = root.GetValue("Settings", StringComparison.OrdinalIgnoreCase);
             if (settings == null || settings.Type == JTokenType.Null)
                 package.Settings = null;
@@ -610,12 +628,16 @@ namespace Bot.Knowledge
 
         private KnowledgeV2PortablePackage BuildPackage()
         {
+            var records = KnowledgeEngineV2Repository.LoadAll(_seller);
+            var ids = new HashSet<string>(records.Select(x => x.Id), StringComparer.Ordinal);
             return new KnowledgeV2PortablePackage
             {
                 SchemaVersion = KnowledgeEngineV2Constants.SchemaVersion,
                 ExportedAt = DateTime.Now.ToString("yyyy-MM-dd HH:mm:ss"),
-                Records = KnowledgeEngineV2Repository.LoadAll(_seller),
-                Settings = KnowledgeEngineV2Service.GetSettingsView(_seller)
+                Records = records,
+                Settings = KnowledgeEngineV2Service.GetSettingsView(_seller),
+                SourceShopKey = _shopKey,
+                FeedbackEvents = KnowledgeEngineV2FeedbackService.ExportEvents(_seller).Where(x => ids.Contains(x.KnowledgeId)).ToList()
             };
         }
 

@@ -50,3 +50,11 @@ def test_portable_import_preserves_tombstones_and_uses_exact_backup_snapshot_for
     assert 'tombstone.Status = "deleted"' in source
     assert "rows[old.Id] = old;" in source
     assert "deletedEvidence.Contains((row.SourceId ?? string.Empty).Trim())" in source
+
+def test_complete_backup_carries_same_shop_feedback_without_replacing_existing_events():
+    page = read("src/Bot/Knowledge/KnowledgeCenterV2OperationsPages.cs")
+    assert "SourceShopKey = _shopKey" in page
+    assert "KnowledgeEngineV2FeedbackService.ExportEvents(_seller)" in page
+    assert "KnowledgeEngineV2FeedbackService.ValidateBackupEvents(package.FeedbackEvents, package.Records)" in page
+    assert "package.SourceShopKey, _shopKey" in page
+    assert "KnowledgeEngineV2FeedbackService.MergeBackupEvents" in page

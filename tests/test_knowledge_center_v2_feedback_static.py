@@ -23,8 +23,9 @@ def test_feedback_loop_uses_explicit_evidence_and_ignores_fast_bot_echo():
     assert '"buyer_negative"' in feedback
     assert '"manual_reply:"' in feedback
     assert '"withdrawal"' in feedback
-    assert "similarity >= 0.92 && age <= TimeSpan.FromSeconds(20)" in feedback
-    assert "Normally the seller-side echo of the Bot message" in feedback
+    assert "if (similarity >= 0.92) return;" in feedback
+    assert "manual_same_answer" not in feedback
+    assert "IsAfterSend(pending, messageTime)" in feedback
     assert "BuyerIdentityAliasService.AreEquivalent" in feedback
 
 
@@ -130,3 +131,12 @@ def test_feedback_cache_build_and_event_write_share_repository_lock():
     ui = read("src/Bot/Knowledge/KnowledgeCenterV2QualityUi.cs")
     assert "ShopContextLocator.ResolveRuntimeByShopKey(_shopKey)" in ui
     assert "InShop(() => KnowledgeEngineV2FeedbackService.GetQualityItems" in ui
+
+def test_feedback_restore_is_shop_bound_idempotent_and_invalidates_cache():
+    source = read("src/Bot/Knowledge/KnowledgeEngineV2FeedbackService.cs")
+    restore = source.split("internal static int MergeBackupEvents",1)[1].split("private static bool RemovePending",1)[0]
+    assert "shop.ShopKey, sourceShopKey" in restore
+    assert "ids.Add(x.Id)" in restore
+    assert "state.Db.SaveRecordsInTransaction(additions)" in restore
+    assert "AggregateCaches.TryRemove(shop.ShopKey" in restore
+    assert "messageTime >= pending.SentAt" in source

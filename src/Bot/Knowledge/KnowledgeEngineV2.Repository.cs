@@ -1481,7 +1481,7 @@ namespace Bot.Knowledge
                 }
                 state.Db.SaveRecordsInTransaction(writes);
             }
-            foreach (var id in expected.Keys) KnowledgeEngineV2Service.ApplyRecordDelete(seller, id);
+            KnowledgeEngineV2Service.ReplaceSnapshot(seller, null);
             return true;
         }
 

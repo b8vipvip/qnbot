@@ -126,10 +126,10 @@ namespace Bot.Knowledge
             CleanupPending();
         }
 
-        public static void ObserveBuyerMessage(string seller, string buyer, string text)
+        public static void ObserveBuyerMessage(string seller, string buyer, string text, DateTime messageTime)
         {
             PendingReply pending;
-            if (!TryGetPending(seller, buyer, out pending)) return;
+            if (!TryGetPending(seller, buyer, out pending) || !IsAfterSend(pending, messageTime)) return;
             text = Clean(text);
             if (text.Length == 0) return;
 
@@ -154,14 +154,17 @@ namespace Bot.Knowledge
             }
         }
 
-        public static void ObserveSellerMessage(string seller, string buyer, string text)
+        public static void ObserveSellerMessage(string seller, string buyer, string text, DateTime messageTime)
         {
             PendingReply pending;
-            if (!TryGetPending(seller, buyer, out pending)) return;
+            if (!TryGetPending(seller, buyer, out pending) || !IsAfterSend(pending, messageTime)) return;
             text = Clean(text);
             if (text.Length == 0) return;
 
-            var age = DateTime.Now - pending.SentAt;
+            // An unmarked late echo is not proof of human approval either.
+            if (text.EndsWith("[A]", StringComparison.OrdinalIgnoreCase)
+                || text.EndsWith("[AI]", StringComparison.OrdinalIgnoreCase)) return;
+            var age = messageTime - pending.SentAt;
             if (age > TimeSpan.FromMinutes(3))
             {
                 RemovePending(pending);
@@ -169,18 +172,9 @@ namespace Bot.Knowledge
             }
 
             var similarity = KnowledgeEngineV2Semantics.TextSimilarity(pending.Answer, text);
-            if (similarity >= 0.92 && age <= TimeSpan.FromSeconds(20))
-            {
-                // Normally the seller-side echo of the Bot message, not human approval.
-                return;
-            }
-            if (similarity >= 0.92)
-            {
-                if (!RemovePending(pending)) return;
-                AppendEvent(pending.Seller, pending.Buyer, pending.KnowledgeId, "accepted",
-                    pending.Question, pending.Answer, "manual_same_answer");
-                return;
-            }
+            // Identical seller text may be a delayed Bot echo at any age.
+            // Only buyer acknowledgements can establish acceptance here.
+            if (similarity >= 0.92) return;
 
             bool negative;
             lock (pending.Sync) negative = pending.NegativeBuyerReaction || pending.WithdrawalRecorded;
@@ -192,10 +186,10 @@ namespace Bot.Knowledge
             }
         }
 
-        public static void ObserveWithdrawal(string seller, string buyer, string evidence)
+        public static void ObserveWithdrawal(string seller, string buyer, string evidence, DateTime messageTime)
         {
             PendingReply pending;
-            if (!TryGetPending(seller, buyer, out pending)) return;
+            if (!TryGetPending(seller, buyer, out pending) || !IsAfterSend(pending, messageTime)) return;
             lock (pending.Sync)
             {
                 if (pending.WithdrawalRecorded) return;
@@ -458,6 +452,69 @@ namespace Bot.Knowledge
             return true;
         }
 
+        private static bool IsAfterSend(PendingReply pending, DateTime messageTime)
+        {
+            return pending != null && messageTime != DateTime.MinValue
+                && messageTime >= pending.SentAt
+                && messageTime <= DateTime.Now.AddSeconds(5)
+                && messageTime - pending.SentAt <= TimeSpan.FromMinutes(3);
+        }
+
+        internal static List<KnowledgeV2FeedbackEventRow> ExportEvents(string seller)
+        {
+            var state = GetState(ResolveShopRequired(seller));
+            lock (state.Sync)
+                return state.Db.ReadRecords<KnowledgeV2FeedbackEventRow>(null)
+                    .Where(x => x != null).OrderBy(x => x.CreatedAtTicks).ToList();
+        }
+
+        internal static void ValidateBackupEvents(IEnumerable<KnowledgeV2FeedbackEventRow> events, IEnumerable<KnowledgeV2Record> records)
+        {
+            var ids = new HashSet<string>(StringComparer.Ordinal);
+            var knowledgeIds = new HashSet<string>((records ?? Enumerable.Empty<KnowledgeV2Record>())
+                .Where(x => x != null).Select(x => x.Id), StringComparer.Ordinal);
+            var types = new HashSet<string>(new[] { "sent", "send_failed", "accepted", "correction", "withdrawal", "buyer_negative" }, StringComparer.Ordinal);
+            foreach (var row in events ?? Enumerable.Empty<KnowledgeV2FeedbackEventRow>())
+            {
+                Guid eventId;
+                if (row == null || !Guid.TryParseExact(row.Id, "N", out eventId) || eventId == Guid.Empty
+                    || !ids.Add(row.Id) || !knowledgeIds.Contains(row.KnowledgeId)
+                    || !types.Contains(row.EventType) || row.CreatedAtTicks <= 0
+                    || row.CreatedAtTicks > DateTime.Now.AddMinutes(5).Ticks
+                    || (row.Question ?? string.Empty).Length > 800 || (row.Answer ?? string.Empty).Length > 1400
+                    || (row.Evidence ?? string.Empty).Length > 500)
+                    throw new InvalidDataException("知识包反馈事件无效、重复或没有对应知识。");
+            }
+        }
+
+        internal static int MergeBackupEvents(string seller, string sourceShopKey, IEnumerable<KnowledgeV2FeedbackEventRow> events)
+        {
+            var shop = ResolveShopRequired(seller);
+            if (!string.Equals(shop.ShopKey, sourceShopKey, StringComparison.Ordinal))
+                throw new InvalidOperationException("反馈备份仅允许恢复到原店铺。");
+            var records = KnowledgeEngineV2Repository.LoadAll(seller);
+            var incoming = (events ?? Enumerable.Empty<KnowledgeV2FeedbackEventRow>()).ToList();
+            ValidateBackupEvents(incoming, records);
+            if (incoming.Any(x => !DirectOrderIdentityResolver.IdentityEquals(x.Seller, shop.SellerNick)
+                && !DirectOrderIdentityResolver.IdentityEquals(x.Seller, shop.DisplayName)))
+                throw new InvalidDataException("反馈事件卖家身份不匹配。");
+            var state = GetState(shop);
+            lock (state.Sync)
+            {
+                var ids = new HashSet<string>(state.Db.ReadRecords<KnowledgeV2FeedbackEventRow>(null)
+                    .Where(x => x != null).Select(x => x.Id), StringComparer.Ordinal);
+                var cutoff = DateTime.Now.AddDays(-180).Ticks;
+                var additions = incoming.Where(x => x.CreatedAtTicks >= cutoff && ids.Add(x.Id)).Cast<object>().ToList();
+                if (additions.Count > 0)
+                {
+                    state.Db.SaveRecordsInTransaction(additions);
+                    AggregateCache ignored;
+                    AggregateCaches.TryRemove(shop.ShopKey, out ignored);
+                }
+                return additions.Count;
+            }
+        }
+
         private static bool RemovePending(PendingReply pending)
         {
             if (pending == null) return false;
@@ -478,7 +535,7 @@ namespace Bot.Knowledge
         {
             var compact = Compact(value);
             if (compact.Length > 16) return false;
-            var tokens = new[] { "好", "好的", "可以", "行", "谢谢", "感谢", "明白", "明白了", "知道了", "收到", "嗯", "哦", "ok", "okay", "解决了" };
+            var tokens = new[] { "谢谢", "感谢", "明白了", "解决了", "已解决", "问题解决了" };
             return tokens.Any(x => string.Equals(compact, x, StringComparison.OrdinalIgnoreCase));
         }
 
