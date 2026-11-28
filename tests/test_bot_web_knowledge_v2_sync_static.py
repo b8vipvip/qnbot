@@ -28,7 +28,7 @@ def test_server_exposes_client_isolated_v2_bridge():
     assert '@router.post("/api/runtime/v1/bot-web/knowledge-v2-sync")' in s
     assert "Depends(bot_web_console._web_client)" in s
     assert "bot_web_console._runtime_client(request)" in s
-    assert "_MAX_RECORDS = 5000" in s and "4 * 1024 * 1024" in s
+    assert "_MAX_RECORDS = 10000" in s and "16 * 1024 * 1024" in s
     assert "seen_ids=set()" in s
     assert "记录 ID 不允许重复" in s
     assert "math.isfinite(number)" in s
@@ -705,3 +705,41 @@ def test_remote_result_acknowledgement_is_claim_specific_and_idempotent():
     assert 'elif phase=="interrupted":' in console
     assert 'knowledgeReceipts = root["knowledge_result_receipts"] as JArray' in client
     assert 'x.Value<long?>("id") == pair.Key && (string)x["claim"] == claim' in client
+
+
+@pytest.mark.skipif(importlib.util.find_spec("fastapi") is None, reason="server dependencies are not installed")
+def test_revision_history_two_devices_isolated_idempotent_and_never_replays_corpus(tmp_path):
+    from fastapi import HTTPException
+    import json
+    module = _load_v2_cas_module(tmp_path)
+    with module._cp.db() as conn:
+        conn.execute("CREATE TABLE bot_client_shop_binding (client_id INTEGER PRIMARY KEY, shop_key TEXT)")
+        conn.execute("INSERT INTO bot_client_shop_binding VALUES (1,'shop-a')")
+    row={"Id":"a"*32,"KnowledgeId":"a","MessageRecordId":"revision-candidate:example",
+         "Action":"apply","PreviousJson":json.dumps(_v2_cas_record("before")),
+         "CurrentJson":json.dumps(_v2_cas_record("after")),"CreatedAtTicks":638000000000000000}
+    send=module.runtime_revision_sync
+    model=module.KnowledgeV2RevisionHistoryInput
+    first=send(model(rows=[row]),None,"shop-a")
+    assert first["ack_ids"]==[row["Id"]]
+    other=send(model(),None,"shop-a")
+    assert other["rows"]==[row]
+    assert send(model(epoch=other["epoch"],cursor=other["cursor"],rows=[row]),None,"shop-a")["rows"]==[]
+    with pytest.raises(HTTPException) as conflict:
+        send(model(rows=[dict(row,Action="rollback")]),None,"shop-a")
+    assert conflict.value.status_code==409
+    with pytest.raises(HTTPException) as isolated:
+        send(model(),None,"shop-b")
+    assert isolated.value.status_code==403
+    assert module._state(1)["records"]==[]
+
+
+@pytest.mark.skipif(importlib.util.find_spec("fastapi") is None, reason="server dependencies are not installed")
+def test_sqlite_snapshot_sync_accepts_5001_records_and_preserves_cas(tmp_path):
+    module=_load_v2_cas_module(tmp_path)
+    records=[dict(_v2_cas_record("answer"),Id=f"r-{i}") for i in range(5001)]
+    saved=module._save(1,records,"windows",expected_revision=0)
+    assert saved["revision"]==1 and len(saved["records"])==5001
+    assert len(module._state(1)["records"])==5001
+    stale=module._save(1,[records[0]],"windows",expected_revision=0)
+    assert stale["revision"]==1 and len(stale["records"])==5001
