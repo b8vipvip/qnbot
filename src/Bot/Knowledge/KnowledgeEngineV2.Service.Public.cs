@@ -357,7 +357,8 @@ namespace Bot.Knowledge
             // An explicit human correction of this exact standalone question wins over
             // older generic answers; unrelated queries still use conflict rejection.
             decision.HasConflict = manualExactConflict || (manualExact == null
-                && allProductionMatches.Any(x => !ReferenceEquals(x, best) && HasConflict(best, x)));
+                && allProductionMatches.Any(x => !ReferenceEquals(x, best) && HasConflict(best, x)))
+                || allProductionMatches.Any(x => !ReferenceEquals(x, best) && HasApplicableScopedConflict(best, x, query));
             var margin = second == null ? best.Score : best.Score - second.Score;
             var threshold = settings.DirectThreshold;
             var minConfidence = settings.MinConfidence;
