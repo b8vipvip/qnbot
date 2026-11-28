@@ -45,11 +45,15 @@ namespace Bot.Knowledge
         public int NewTypeCount { get; set; }
         public int UnsupportedImageSkipped { get; set; }
         public List<KnowledgeV2Record> AddedItems { get; set; }
+        // Include duplicates for historical source-token coverage; promotion
+        // remains independently deduplicated at the repository.
+        public List<KnowledgeV2Record> AnalyzedItems { get; set; }
         public Dictionary<string, KnowledgeV2ImportEvidence> SourceEvidenceByToken { get; set; }
 
         public KnowledgeImportResult()
         {
             AddedItems = new List<KnowledgeV2Record>();
+            AnalyzedItems = new List<KnowledgeV2Record>();
             SourceEvidenceByToken = new Dictionary<string, KnowledgeV2ImportEvidence>(StringComparer.Ordinal);
         }
     }
@@ -232,6 +236,7 @@ namespace Bot.Knowledge
 
                 total.UnsupportedImageSkipped += parsed.UnsupportedImages;
                 total.AiGenerated += parsed.Items.Count;
+                total.AnalyzedItems.AddRange(parsed.Items);
 
                 var save = SaveDeduped(parsed.Items);
                 total.Added += save.Added;
@@ -620,6 +625,7 @@ namespace Bot.Knowledge
                 if (predicate.Length == 0) predicate = KnowledgeEngineV2Semantics.DetectPredicate(title + " " + answer);
                 var risk = ReadText(item, "risk_level");
                 if (string.Equals(risk, "high", StringComparison.OrdinalIgnoreCase)
+                    || string.Equals(risk, "critical", StringComparison.OrdinalIgnoreCase)
                     || KnowledgeEngineV2Semantics.IsHighRisk(title + " " + answer))
                     risk = "high";
                 else
@@ -628,12 +634,12 @@ namespace Bot.Knowledge
                 double confidence;
                 if (!double.TryParse(ReadText(item, "confidence"), out confidence)
                     || double.IsNaN(confidence) || double.IsInfinity(confidence))
-                    confidence = 0.86;
+                    confidence = 0;
                 confidence = Math.Max(0, Math.Min(1, confidence));
                 double authority;
                 if (!double.TryParse(ReadText(item, "authority"), out authority)
                     || double.IsNaN(authority) || double.IsInfinity(authority))
-                    authority = 0.90;
+                    authority = 0;
                 authority = Math.Max(0, Math.Min(1, authority));
 
                 var now = DateTime.Now;
@@ -666,11 +672,13 @@ namespace Bot.Knowledge
                     ImportEvidenceTokens = ReadStrings(item, "source_evidence_ids"),
                     CreatedAt = now,
                     UpdatedAt = now,
-                    LastVerifiedAt = now
+                    LastVerifiedAt = DateTime.MinValue
                 });
             }
 
-            if (result.Count < 1) throw new Exception("没有有效的 Knowledge V2 记录。");
+            // An explicit empty V2 array means the input contains no reusable
+            // facts, not an invalid response. Nonempty malformed arrays still fail.
+            if (result.Count < 1 && records.Count > 0) throw new Exception("没有有效的 Knowledge V2 记录。");
             return result;
         }
 
@@ -783,7 +791,7 @@ namespace Bot.Knowledge
 
         public static string ContentHash(string question, string answer)
         {
-            return Hash(NormalizeQuestion(question) + "\n" + NormalizeDisplay(answer).ToLowerInvariant());
+            return Hash(NormalizeDisplay(question) + "\n" + NormalizeDisplay(answer));
         }
 
         private static string Hash(string value)

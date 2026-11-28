@@ -222,8 +222,8 @@ def test_ai_auto_published_source_is_not_misclassified_as_human_approved():
     assert "string.Equals(record.Status, \"candidate\"" in candidate
     assert "string.Equals(record.Type, \"learning_candidate\"" in candidate
     assert "ApplyAutoPublished(record);" in bridge
-    assert "record.Authority = Math.Max(record.Authority, 0.90);" in bridge
-    assert "record.Confidence = Math.Max(record.Confidence, 0.90);" in bridge
+    assert "record.Authority = Math.Max(record.Authority, 0.90);" not in bridge
+    assert "record.Confidence = Math.Max(record.Confidence, 0.90);" not in bridge
     assert "IsUnapprovedLegacyLearningEntry" not in bridge
 
 def test_generated_content_and_aliases_survive_checkpoint_restart_revalidation():
@@ -441,7 +441,7 @@ def test_auto_published_human_evidence_answers_strongly_similar_questions_withou
     production = public.split("var allProductionMatches =", 1)[1].split(
         "// Operator-reviewed", 1
     )[0]
-    eligibility = public.split("private static bool IsEligibleProductionMatch(", 1)[1].split(
+    eligibility = public.split("internal static bool IsEligibleProductionMatch(", 1)[1].split(
         "private static bool IsStrongManualReviewedSimilarMatch(", 1
     )[0]
 

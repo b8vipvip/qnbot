@@ -121,7 +121,7 @@ def test_v2_runtime_initialization_and_working_memory_are_shop_scoped():
 
 def test_duplicate_manual_exact_aliases_fail_closed():
     public = read("src/Bot/Knowledge/KnowledgeEngineV2.Service.Public.cs")
-    assert "var manualExactMatches = rankedMatches.Where(IsApprovedProductionMatch)" in public
+    assert "var manualExactMatches = allProductionMatches" in public
     assert "var manualExactConflict = manualExactMatches.Count > 1;" in public
     assert "allProductionMatches.Any(x => !ReferenceEquals(x, best) && HasConflict(best, x))" in public
 

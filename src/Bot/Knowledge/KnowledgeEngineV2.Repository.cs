@@ -1400,6 +1400,25 @@ namespace Bot.Knowledge
             return true;
         }
 
+        internal static Dictionary<string, long> GetCommittedRevisionCandidateReceipts(string seller)
+        {
+            var state = GetState(ResolveShopRequired(seller));
+            EnsureSchemaInitialized(state);
+            lock (state.Sync)
+            {
+                const string prefix = "revision-candidate:";
+                // This ledger was written in the same SQLite transaction as the
+                // actual knowledge revision. It remains proof even after later
+                // edits, deletion, or rollback of that knowledge.
+                return state.Db.ReadRecords<KnowledgeV2ManualEditRevisionRow>(null)
+                    .Where(x => x != null && x.Action == "apply"
+                        && (x.MessageRecordId ?? string.Empty).StartsWith(prefix, StringComparison.Ordinal)
+                        && !string.IsNullOrWhiteSpace(x.KnowledgeId))
+                    .GroupBy(x => x.MessageRecordId.Substring(prefix.Length) + "\n" + x.KnowledgeId, StringComparer.Ordinal)
+                    .ToDictionary(g => g.Key, g => g.Min(x => x.CreatedAtTicks), StringComparer.Ordinal);
+            }
+        }
+
         internal static List<object> GetRollbackOptions(string seller)
         {
             var state = GetState(ResolveShopRequired(seller));
@@ -1947,10 +1966,8 @@ namespace Bot.Knowledge
             record.Exclusions = NormalizeList(record.Exclusions, 20);
             record.RequiredContext = NormalizeList(record.RequiredContext, 20);
             record.ProductIds = NormalizeList(record.ProductIds, 20);
-            record.Authority = double.IsNaN(record.Authority) || double.IsInfinity(record.Authority) || record.Authority <= 0
-                ? 0.90 : Clamp(record.Authority);
-            record.Confidence = double.IsNaN(record.Confidence) || double.IsInfinity(record.Confidence) || record.Confidence <= 0
-                ? 0.80 : Clamp(record.Confidence);
+            record.Authority = Clamp(record.Authority);
+            record.Confidence = Clamp(record.Confidence);
             if (record.CreatedAt == DateTime.MinValue) record.CreatedAt = DateTime.Now;
             record.UpdatedAt = DateTime.Now;
             // Only explicit evidence/approval paths may establish verification.

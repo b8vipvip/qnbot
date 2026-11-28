@@ -132,11 +132,12 @@ namespace Bot.ChromeNs
             }
 
             VisualImageKnowledgeMatch imageKnowledgeMatch = null;
+            bool ambiguousImageMatch = false;
             try
             {
                 VisualImageKnowledgeService.TryMatch(
                     task.ShopKey, knowledgeSeller, ocr.Text, ocr.ImageSha256, ocr.Confidence,
-                    out imageKnowledgeMatch);
+                    out imageKnowledgeMatch, out ambiguousImageMatch);
             }
             catch (Exception ex)
             {
@@ -157,6 +158,9 @@ namespace Bot.ChromeNs
             {
                 Log.ErrorWithMaxCount("图片OCR与买家消息/图片知识关联持久化失败；本轮仍继续安全检索: " + ex.Message, 10);
             }
+
+            if (ambiguousImageMatch)
+                return BuildVisualFallback(null, ocr, "本店图片知识存在冲突，禁止依据任一规则提前直答", null);
 
             if (!IsHighConfidenceUsefulText(ocr))
             {
@@ -230,14 +234,14 @@ namespace Bot.ChromeNs
                             knowledgeSeller,
                             task.BuyerNick,
                             question,
-                            evidenceText,
+                            ocr.Text,
                             evidenceSubject)
                         : KnowledgeEngineV2Service.ResolveWithCuratedImageKnowledgeEvidence(
                             knowledgeSeller,
                             task.BuyerNick,
                             question,
                             evidenceText,
-                            evidenceSubject);
+                            evidenceSubject, commerceAuthority == null ? null : commerceAuthority.CommerceContext, ocr.Text);
                     cancellationToken.ThrowIfCancellationRequested();
 
                     // Structured orders always require the shared commerce authority.
@@ -493,7 +497,8 @@ namespace Bot.ChromeNs
 
         private static bool IsHighConfidenceUsefulText(LocalOcrResult ocr)
         {
-            if (ocr == null || !ocr.Success || ocr.Confidence < DirectKnowledgeMinOcrConfidence) return false;
+            if (ocr == null || !ocr.Success || double.IsNaN(ocr.Confidence) || double.IsInfinity(ocr.Confidence)
+                || ocr.Confidence < DirectKnowledgeMinOcrConfidence || ocr.Confidence > 1) return false;
             var text = (ocr.Text ?? string.Empty).Trim();
             if (text.Length < MinUsefulTextChars) return false;
             var semanticChars = text.Count(ch => IsCjk(ch) || char.IsLetter(ch));

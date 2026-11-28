@@ -259,7 +259,7 @@ def test_bot_web_sync_acknowledges_only_the_exact_command_result_snapshot():
 
     assert "PendingCommandResultsSync" in state
     assert "lock (state.PendingCommandResultsSync)" in flush
-    assert "AcknowledgeCommandResults(state, resultSnapshot);" in flush
+    assert "AcknowledgeCommandResults(state, resultSnapshot, knowledgeReceipts);" in flush
     assert "SetPendingCommandResult(state, id," in commands
     assert "state.PendingCommandResults[id] = Result(" not in commands
     assert "ReferenceEquals(current, pair.Value)" in ack

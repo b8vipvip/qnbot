@@ -151,12 +151,14 @@ namespace Bot.Knowledge
             string message,
             string evidenceText,
             string evidenceSubject,
-            CommerceContextSnapshot commerce = null)
+            CommerceContextSnapshot commerce = null,
+            string observedEvidenceText = null)
         {
             var hasCuratedImageKnowledge = !string.IsNullOrWhiteSpace(evidenceText)
                 && evidenceText.IndexOf("【已命中本店人工维护的图片知识】", StringComparison.Ordinal) >= 0;
             return ResolveInternal(
-                seller, buyer, message, false, evidenceText, evidenceSubject, hasCuratedImageKnowledge, commerce);
+                seller, buyer, message, false, evidenceText, evidenceSubject, hasCuratedImageKnowledge, commerce,
+                observedEvidenceText ?? string.Empty);
         }
 
         // Simulator-specific safety evaluation: retain every knowledge, conflict,
@@ -175,7 +177,8 @@ namespace Bot.Knowledge
             string evidenceText,
             string evidenceSubject,
             bool curatedImageEvidence,
-            CommerceContextSnapshot commerce = null)
+            CommerceContextSnapshot commerce = null,
+            string observedEvidenceText = null)
         {
             var total = Stopwatch.StartNew();
             var settings = GetSettings(seller);
@@ -217,8 +220,18 @@ namespace Bot.Knowledge
                     // Prefer an explicitly labeled OCR product ID over generic OCR terms.
                     .OrderByDescending(x => x.StartsWith("product:", StringComparison.OrdinalIgnoreCase))
                     .ToList();
-                var evidenceHasProductId = evidenceEntities.Any(
-                    x => x.StartsWith("product:", StringComparison.OrdinalIgnoreCase));
+                // Product identifiers may only originate in the current OCR text,
+                // not in a reference screenshot, rule label or configured description.
+                var actualProducts = KnowledgeEngineV2Semantics.ExtractEntities(observedEvidenceText ?? evidenceText)
+                    .Where(x => x.StartsWith("product:", StringComparison.OrdinalIgnoreCase)).ToList();
+                evidenceEntities = actualProducts.Concat(evidenceEntities.Where(x => !x.StartsWith("product:", StringComparison.OrdinalIgnoreCase)))
+                    .Distinct(StringComparer.OrdinalIgnoreCase).ToList();
+                var evidenceHasProductId = actualProducts.Count > 0;
+                var buyerProducts = KnowledgeEngineV2Semantics.ExtractEntities(message)
+                    .Where(x => x.StartsWith("product:", StringComparison.OrdinalIgnoreCase)).ToList();
+                if (buyerMessageHasProductId && evidenceHasProductId &&
+                    !new HashSet<string>(buyerProducts, StringComparer.OrdinalIgnoreCase).SetEquals(actualProducts))
+                    query.ProductEvidenceConflict = true;
                 if (buyerMessageHasProductId)
                 {
                     // The current buyer-authored product ID is authoritative over OCR.
@@ -237,7 +250,7 @@ namespace Bot.Knowledge
                 var configuredSubject = (evidenceSubject ?? string.Empty).Trim();
                 if (configuredSubject.Contains("{") || configuredSubject.Contains("}"))
                     configuredSubject = string.Empty;
-                if (configuredSubject.Length >= 2)
+                if (configuredSubject.Length >= 2 && !configuredSubject.StartsWith("product:", StringComparison.OrdinalIgnoreCase))
                     evidenceEntities.Insert(0, configuredSubject);
 
                 if (!buyerMessageHasProductId && evidenceHasProductId)
@@ -275,8 +288,24 @@ namespace Bot.Knowledge
                         ? configuredSubject
                         : configuredSubject + "/" + query.Subject;
             }
+            if (commerce != null && commerce.HasStructuredOrder && !string.IsNullOrWhiteSpace(commerce.ItemId))
+            {
+                var authoritative = "product:" + commerce.ItemId.Trim();
+                var queryProducts = (query.Entities ?? new List<string>()).Where(x => x.StartsWith("product:", StringComparison.OrdinalIgnoreCase)).ToList();
+                if (queryProducts.Any(x => !string.Equals(x, authoritative, StringComparison.OrdinalIgnoreCase)))
+                    query.ProductEvidenceConflict = true;
+                else if (!queryProducts.Contains(authoritative, StringComparer.OrdinalIgnoreCase))
+                    query.Entities.Insert(0, authoritative);
+            }
             decision.Query = query;
             decision.ParseMs = parseSw.ElapsedMilliseconds;
+            if (query.ProductEvidenceConflict)
+            {
+                decision.HasConflict = true;
+                decision.Reason = "买家问题、当前图片或已核验订单商品不一致，禁止自动采用知识答案";
+                decision.TotalMs = total.ElapsedMilliseconds;
+                return decision;
+            }
 
             var snapshot = GetSnapshot(seller);
             var recallSw = Stopwatch.StartNew();
@@ -291,7 +320,7 @@ namespace Bot.Knowledge
             // Operator-reviewed direct replies take precedence at the exact question
             // boundary; confidence observations never delay an explicit manual save.
             // Other semantically similar questions continue through normal safety ranking.
-            var manualExactMatches = rankedMatches.Where(IsApprovedProductionMatch)
+            var manualExactMatches = allProductionMatches
                 .Where(x => x != null
                     && x.Record != null
                     && string.Equals((x.Record.SourceType ?? "").Trim(),
@@ -345,8 +374,8 @@ namespace Bot.Knowledge
                 && !highRisk
                 && standaloneSafe
                 && best.Record.Enabled
+                && best.ConfidenceScore >= minConfidence
                 && (approvedExact || (best.Score >= threshold
-                    && best.ConfidenceScore >= minConfidence
                     && (best.AliasScore >= 0.94 || best.PredicateScore >= 0.99)
                     && (effectiveMargin >= 0.08 || best.AliasScore >= 0.98)));
             decision.SelectedMatch = decision.CanDirectReply ? best : null;
@@ -361,13 +390,15 @@ namespace Bot.Knowledge
             return decision;
         }
 
-        private static bool IsEligibleProductionMatch(KnowledgeV2Match match, KnowledgeV2Query query)
+        internal static bool IsEligibleProductionMatch(KnowledgeV2Match match, KnowledgeV2Query query)
         {
-            if (!IsApprovedProductionMatch(match) || query == null) return false;
+            if (!IsApprovedProductionMatch(match) || query == null || query.ProductEvidenceConflict) return false;
             // Numeric qualifiers in a buyer question must be backed by a saved
             // wording, not by a generic predicate score or punctuation folding.
             // Product IDs independently proven in the structured scope are excluded.
             if (!HasCompatibleQuestionNumbers(match.Record, query)) return false;
+            string reason;
+            if (!KnowledgeEngineV2Semantics.IsApplicable(match.Record, query, out reason)) return false;
             if (match == null || match.Record == null
                 || !KnowledgeV2AuthorityPolicy.IsAutoPublishedHumanEvidenceSource(match.Record.SourceType))
                 return true;
@@ -379,6 +410,22 @@ namespace Bot.Knowledge
                 .Concat(new[] { match.Record.Title })
                 .Any(alias => ExactQuestionMatches(alias, query.Original));
             return exactAlias || IsStrongAutoPublishedHumanEvidenceSimilarMatch(match, query);
+        }
+
+        // Context/conditional paths must not turn the debugging display list
+        // into an alternate source of authority.
+        internal static bool HasContextConflict(IEnumerable<KnowledgeV2Match> matches)
+        {
+            return HasAnswerDisagreement(matches.Select(x => x.Record).ToList());
+        }
+
+        internal static bool IsEligibleContextMatch(KnowledgeV2Match match, KnowledgeV2Query query)
+        {
+            return IsEligibleProductionMatch(match, query)
+                && !string.Equals(match.Record.RiskLevel, "high", StringComparison.OrdinalIgnoreCase)
+                && !string.Equals(match.Record.RiskLevel, "critical", StringComparison.OrdinalIgnoreCase)
+                && !KnowledgeEngineV2Semantics.IsHighRisk(match.Record.Answer)
+                && !(match.Record.RequiredContext ?? new List<string>()).Any(ConditionalBusinessAdviceService.IsEvidenceRequirement);
         }
 
         private static bool IsStrongManualReviewedSimilarMatch(

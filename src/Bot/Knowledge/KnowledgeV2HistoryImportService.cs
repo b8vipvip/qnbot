@@ -116,6 +116,7 @@ namespace Bot.Knowledge
                         JsonConvert.SerializeObject(source)) ?? new KnowledgeV2Record();
                     var parsed = KnowledgeEngineV2Semantics.Parse(title, null);
                     var risk = string.Equals(record.RiskLevel, "high", StringComparison.OrdinalIgnoreCase)
+                        || string.Equals(record.RiskLevel, "critical", StringComparison.OrdinalIgnoreCase)
                         || KnowledgeEngineV2Semantics.IsHighRisk(title + " " + answer);
                     var modelCandidate = string.Equals(record.Status, "candidate", StringComparison.OrdinalIgnoreCase)
                         || string.Equals(record.Type, "learning_candidate", StringComparison.OrdinalIgnoreCase);
@@ -211,6 +212,35 @@ namespace Bot.Knowledge
                     result.SourceItems, result.Added, result.DuplicateSkipped));
                 return result;
             }
+        }
+
+        internal static HashSet<string> GetExactlyReferencedTokens(IEnumerable<KnowledgeV2Record> records,
+            IDictionary<string, KnowledgeV2ImportEvidence> evidence)
+        {
+            var covered = new HashSet<string>(StringComparer.Ordinal);
+            foreach (var record in records ?? Enumerable.Empty<KnowledgeV2Record>())
+            {
+                if (record == null) continue;
+                foreach (var token in record.ImportEvidenceTokens ?? new List<string>())
+                {
+                    KnowledgeV2ImportEvidence pair;
+                    if (evidence.TryGetValue(token, out pair) && pair != null
+                        && MatchesSourceText(record.Title, pair.QuestionText)
+                        && MatchesSourceText(record.Answer, pair.AnswerText))
+                        covered.Add(token);
+                }
+            }
+            return covered;
+        }
+
+        internal static bool IsReusableOmittedPair(KnowledgeV2ImportEvidence pair)
+        {
+            return pair != null && pair.EvidenceType == "historical_human_reply"
+                && (pair.QuestionText ?? string.Empty).Trim().Length >= 4
+                && (pair.AnswerText ?? string.Empty).Trim().Length >= 2
+                && pair.QuestionMessageIds.Count > 0 && pair.AnswerMessageIds.Count > 0
+                && !KnowledgeEngineV2Semantics.Parse(pair.QuestionText, null).ContextDependent
+                && KnowledgeEngineV2Repository.IsSafeHistoryImportForAutoPublish(pair.QuestionText, pair.AnswerText);
         }
 
         private static string BuildVerifiedHistorySourceId(

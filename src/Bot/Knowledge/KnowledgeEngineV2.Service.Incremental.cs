@@ -115,7 +115,9 @@ namespace Bot.Knowledge
             {
                 ShopKey = source.ShopKey,
                 BuiltAt = source.BuiltAt,
-                Records = source.Records.Select(Clone).ToList(),
+                // Records in a published snapshot are never modified in place;
+                // only the replacement row needs a deep copy.
+                Records = source.Records.ToList(),
                 Exact = CloneIndex(source.Exact),
                 Intent = CloneIndex(source.Intent),
                 Predicate = CloneIndex(source.Predicate),
@@ -128,23 +130,25 @@ namespace Bot.Knowledge
         {
             var result = NewIndex();
             foreach (var pair in source ?? NewIndex())
-                result[pair.Key] = new HashSet<int>(pair.Value ?? new HashSet<int>());
+                // Share unchanged buckets. Incremental Add/Remove clone each
+                // affected bucket before mutation, preserving older readers.
+                result[pair.Key] = pair.Value;
             return result;
         }
 
         private static void AddRecordToIndexes(Snapshot snapshot, KnowledgeV2Record record, int id)
         {
             if (snapshot == null || record == null || !record.Enabled) return;
-            Add(snapshot.Intent, record.Intent, id);
-            Add(snapshot.Predicate, record.Predicate, id);
+            AddIncremental(snapshot.Intent, record.Intent, id);
+            AddIncremental(snapshot.Predicate, record.Predicate, id);
             foreach (var entity in RecordEntities(record))
-                Add(snapshot.Entity, KnowledgeEngineV2Semantics.Compact(entity), id);
+                AddIncremental(snapshot.Entity, KnowledgeEngineV2Semantics.Compact(entity), id);
             foreach (var alias in (record.Aliases ?? new List<string>()).Concat(new[] { record.Title }))
             {
                 var exact = KnowledgeEngineV2Semantics.Compact(alias);
-                if (exact.Length >= 2) Add(snapshot.Exact, exact, id);
+                if (exact.Length >= 2) AddIncremental(snapshot.Exact, exact, id);
                 foreach (var gram in KnowledgeEngineV2Semantics.RecallNgrams(exact, 2, 24))
-                    Add(snapshot.Ngram, gram, id);
+                    AddIncremental(snapshot.Ngram, gram, id);
             }
         }
 
@@ -164,14 +168,27 @@ namespace Bot.Knowledge
             }
         }
 
+        private static void AddIncremental(Dictionary<string, HashSet<int>> index, string key, int id)
+        {
+            key = (key ?? string.Empty).Trim();
+            if (key.Length == 0 || key == "general") return;
+            HashSet<int> previous;
+            if (index.TryGetValue(key, out previous) && previous != null && previous.Contains(id)) return;
+            var next = previous == null ? new HashSet<int>() : new HashSet<int>(previous);
+            next.Add(id);
+            index[key] = next;
+        }
+
         private static void Remove(Dictionary<string, HashSet<int>> index, string key, int id)
         {
             key = (key ?? string.Empty).Trim();
             if (key.Length == 0 || key == "general") return;
             HashSet<int> values;
-            if (!index.TryGetValue(key, out values) || values == null) return;
-            values.Remove(id);
-            if (values.Count == 0) index.Remove(key);
+            if (!index.TryGetValue(key, out values) || values == null || !values.Contains(id)) return;
+            var next = new HashSet<int>(values);
+            next.Remove(id);
+            if (next.Count == 0) index.Remove(key);
+            else index[key] = next;
         }
     }
 }

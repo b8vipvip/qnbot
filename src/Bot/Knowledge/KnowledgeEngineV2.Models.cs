@@ -155,9 +155,9 @@ namespace Bot.Knowledge
 
         public static double Resolve(KnowledgeV2Record record, double stored)
         {
-            if (stored > 0 && Math.Abs(stored - LegacyUniformSentinel) > 0.000001)
-                return Clamp(stored);
-            return Estimate(record);
+            // Zero is a deliberate deny value; absent/invalid input is also
+            // untrusted. Estimation is only an explicit authoring operation.
+            return Clamp(stored);
         }
 
         public static double Estimate(KnowledgeV2Record record)
@@ -209,6 +209,7 @@ namespace Bot.Knowledge
         public string UserOriginal { get; set; }
         // Populated only from the verified order ledger, never buyer/OCR text.
         internal string VerifiedCommerceScope { get; set; }
+        internal bool ProductEvidenceConflict { get; set; }
         public string Normalized { get; set; }
         public string Intent { get; set; }
         public string Subject { get; set; }

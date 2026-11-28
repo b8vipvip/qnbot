@@ -32,6 +32,8 @@ namespace Bot.Knowledge
         public int ObservedTurns { get; set; }
         public int AnalyzedHumanPairs { get; set; }
         public int ModelReferencedPairs { get; set; }
+        public int SupplementedPairs { get; set; }
+        public int NonReusablePairs { get; set; }
         public int PublishedKnowledge { get; set; }
         public int CandidateKnowledge { get; set; }
         public int DuplicateKnowledge { get; set; }
@@ -48,6 +50,8 @@ namespace Bot.Knowledge
         public int ObservedTurns { get; set; }
         public int AnalyzedHumanPairs { get; set; }
         public int ModelReferencedPairs { get; set; }
+        public int SupplementedPairs { get; set; }
+        public int NonReusablePairs { get; set; }
         public int PublishedKnowledge { get; set; }
         public int CandidateKnowledge { get; set; }
         public int DuplicateKnowledge { get; set; }
@@ -151,7 +155,8 @@ namespace Bot.Knowledge
                     Total = value.Contacts.Count, Completed = value.Completed.Count,
                     LearnKnowledge = value.LearnKnowledge, ArchivedMessages = value.ArchivedMessages,
                     ObservedTurns = value.ObservedTurns, AnalyzedHumanPairs = value.AnalyzedHumanPairs,
-                    ModelReferencedPairs = value.ModelReferencedPairs, PublishedKnowledge = value.PublishedKnowledge,
+                    ModelReferencedPairs = value.ModelReferencedPairs, SupplementedPairs = value.SupplementedPairs,
+                    NonReusablePairs = value.NonReusablePairs, PublishedKnowledge = value.PublishedKnowledge,
                     CandidateKnowledge = value.CandidateKnowledge, DuplicateKnowledge = value.DuplicateKnowledge,
                     ScanAll = value.ScanAll, MaxContacts = value.MaxContacts,
                     StartTime = value.StartTime, EndTime = value.EndTime,

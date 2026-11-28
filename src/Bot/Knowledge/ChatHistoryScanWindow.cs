@@ -225,7 +225,9 @@ namespace Bot.Knowledge
                 sb.Append("整理完成：联系人 ").Append(scan.ScannedContacts).Append("/").Append(scan.ContactCount);
                 sb.Append("，有效聊天消息 ").Append(scan.ObservedTurns);
                 sb.Append("，有效问答轮次 ").Append(scan.AnalyzedHumanPairs);
-                sb.Append("，模型返回的证据轮次 ").Append(scan.ModelReferencedPairs);
+                sb.Append("，模型精确引用证据轮次 ").Append(scan.ModelReferencedPairs);
+                sb.Append("，补充候选 ").Append(scan.SupplementedPairs);
+                sb.Append("，不可复用未引用轮次 ").Append(scan.NonReusablePairs);
                 sb.Append("，V2发布 ").Append(scan.PublishedKnowledge);
                 sb.Append("，V2候选 ").Append(scan.CandidateKnowledge);
                 sb.Append("，V2重复跳过 ").Append(scan.DuplicateKnowledge);

@@ -24,7 +24,7 @@ def test_structured_product_ids_participate_in_full_and_incremental_knowledge_in
     assert "foreach (var entity in RecordEntities(record))" in index
     assert "EntitySimilarity(query.Entities, RecordEntities(record))" in index
     assert "foreach (var entity in RecordEntities(record))" in incremental
-    assert "Add(snapshot.Entity" in incremental
+    assert "AddIncremental(snapshot.Entity" in incremental
     assert "Remove(snapshot.Entity" in incremental
     assert "foreach (var productId in ExtractProductIds(value))" in semantics
     extractor = semantics.split("private static List<string> ExtractProductIds", 1)[1].split(
@@ -68,7 +68,7 @@ def test_ocr_evidence_enriches_knowledge_recall_without_rewriting_buyer_query_or
     ]
     internal = service[
         service.index("private static KnowledgeV2Decision ResolveInternal"):
-        service.index("private static bool IsEligibleProductionMatch")
+        service.index("internal static bool IsEligibleProductionMatch")
     ]
 
     assert "ResolveInternal(seller, buyer, message, false, evidenceText, evidenceSubject, false)" in resolve
@@ -171,7 +171,8 @@ def test_v2_context_handoff_excludes_conflict_candidate_and_high_risk_records():
     assert "IsProductionApproved(match.Record)" in helper
     assert "match.Score >= 0.52" in helper
     assert "match.ConfidenceScore >= 0.68" in helper
-    assert 'match.Record.RiskLevel, "high"' in helper
+    assert "KnowledgeEngineV2Service.IsEligibleContextMatch(match, decision.Query)" in helper
+    assert "KnowledgeEngineV2Service.HasContextConflict(matches)" in helper
 
 
 def test_ai_general_route_does_not_retrieve_weak_or_unapproved_legacy_candidates():
@@ -369,7 +370,7 @@ def test_current_image_product_id_is_not_dropped_by_the_ten_entity_retrieval_bou
     service = read("src/Bot/Knowledge/KnowledgeEngineV2.Service.Public.cs")
     internal = service[
         service.index("private static KnowledgeV2Decision ResolveInternal"):
-        service.index("private static bool IsEligibleProductionMatch")
+        service.index("internal static bool IsEligibleProductionMatch")
     ]
 
     assert "if (!buyerMessageHasProductId && evidenceHasProductId)" in internal
@@ -659,3 +660,28 @@ def test_conflicting_knowledge_is_not_equivalent_by_text_similarity_alone():
     assert "allProductionMatches.Any(x => !ReferenceEquals(x, best) && HasConflict(best, x))" in public
     assert "if (!AnswersEquivalent(best.Record.Answer, candidate.Record.Answer)) return false;" in public
     assert "query.ContextDependent || !string.IsNullOrWhiteSpace(query.WorkingMemoryReason)" in public
+
+def test_zero_confidence_and_authority_are_never_promoted_by_normalization_or_exact_match():
+    models = read("src/Bot/Knowledge/KnowledgeEngineV2.Models.cs")
+    repo = read("src/Bot/Knowledge/KnowledgeEngineV2.Repository.cs")
+    bridge = read("src/Bot/ChromeNs/KnowledgeEngineV2LearningBridge.cs")
+    service = read("src/Bot/Knowledge/KnowledgeEngineV2.Service.Public.cs")
+    resolve = models.split("public static double Resolve(KnowledgeV2Record record, double stored)", 1)[1].split("public static double Estimate", 1)[0]
+    assert "return Clamp(stored);" in resolve and "return Estimate(record)" not in resolve
+    assert "record.Authority = Clamp(record.Authority);" in repo
+    assert "record.Confidence = Clamp(record.Confidence);" in repo
+    assert "record.Authority > 0" in bridge and "record.Confidence > 0" in bridge
+    assert "&& best.ConfidenceScore >= minConfidence" in service
+    assert "var manualExactMatches = allProductionMatches" in service
+
+def test_context_and_conditional_advice_share_production_applicability_and_numeric_guards():
+    service = read("src/Bot/Knowledge/KnowledgeEngineV2.Service.Public.cs")
+    runtime = read("src/Bot/ChromeNs/KnowledgeEngineV2RuntimeBridge.cs")
+    conditional = read("src/Bot/ChromeNs/ConditionalBusinessAdviceService.cs")
+    assert "KnowledgeEngineV2Semantics.IsApplicable(match.Record, query, out reason)" in service
+    assert "IsEligibleProductionMatch(match, query)" in service
+    assert 'match.Record.RiskLevel, "critical"' in service
+    assert "Any(ConditionalBusinessAdviceService.IsEvidenceRequirement)" in service
+    assert "IsEligibleContextMatch(match, decision.Query)" in runtime
+    assert "IsEligibleProductionMatch(match, decision.Query)" in conditional
+    assert "record.ProductIds" in runtime
