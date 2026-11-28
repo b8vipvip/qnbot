@@ -1,7 +1,8 @@
 ﻿param(
     [string]$BotAssembly = 'src\Bot\bin\x64\Release\Bot.exe',
     [string]$DbPath = '',
-    [ValidateSet('parent','before','after')][string]$Mode = 'parent'
+    [ValidateSet('parent','before','after')][string]$Mode = 'parent',
+    [ValidateRange(10,14400)][int]$SoakSeconds = 60
 )
 $ErrorActionPreference = 'Stop'
 $BotAssembly = (Resolve-Path -LiteralPath $BotAssembly).Path
@@ -26,13 +27,13 @@ function Assert-True([bool]$value, [string]$message) {
     if (!$value) { throw $message }
 }
 function Open-Db([string]$path) {
-    $types = New-Object 'System.Collections.Generic.List[System.Type]'
-    $types.Add($rowType); $types.Add($revType); $types.Add($metaType)
-    $ctor = [object[]]::new(2)
-    $ctor[0] = $path
-    $ctor[1] = $types
     $constructor = $helperType.GetConstructors() | Where-Object { $_.GetParameters().Count -eq 2 } | Select-Object -First 1
     if ($null -eq $constructor) { throw 'SQLiteHelper constructor not found' }
+    $types = [Activator]::CreateInstance($constructor.GetParameters()[1].ParameterType)
+    $types.Add($rowType); $types.Add($revType); $types.Add($metaType)
+    $ctor = [object[]]::new(2)
+    $ctor[0] = [string]$path
+    $ctor[1] = $types
     return $constructor.Invoke($ctor)
 }
 function New-TestRow([string]$id, [string]$answer, [string]$product) {
@@ -71,7 +72,7 @@ if ($Mode -ne 'parent') {
     $revision.PreviousJson = '{}'
     $revision.CurrentJson = '{}'
     $revision.CreatedAtTicks = [DateTime]::Now.Ticks
-    $writes = New-Object 'System.Collections.Generic.List[System.Object]'
+    $writes = [System.Collections.Generic.List[object]]::new()
     $writes.Add($row); $writes.Add($revision); $writes.Add($receipt)
     if ($Mode -eq 'before') {
         # Use the same actual SQLite connection transaction helper, then
@@ -98,7 +99,7 @@ New-Item -Path $root -ItemType Directory | Out-Null
 try {
     $DbPath = Join-Path $root 'knowledge.db'
     $db = Open-Db $DbPath
-    $writes = New-Object 'System.Collections.Generic.List[System.Object]'
+    $writes = [System.Collections.Generic.List[object]]::new()
     $timer = [Diagnostics.Stopwatch]::StartNew()
     for ($i = 0; $i -lt 5001; $i++) {
         $product = [string](20000000 + $i)
@@ -131,7 +132,7 @@ try {
     $query = $parse.Invoke($null, [object[]]@('商品ID:12345678 商品操作说明', $null))
     $readback = Open-Db $DbPath
     $base = [GC]::GetTotalMemory($true)
-    $latencies = New-Object 'System.Collections.Generic.List[double]'
+    $latencies = [System.Collections.Generic.List[double]]::new()
     # Reload and rebuild the actual persisted corpus, not just in-memory fixtures.
     for ($round = 0; $round -lt 20; $round++) {
         $timer.Restart()
@@ -154,6 +155,54 @@ try {
     $retained = [GC]::GetTotalMemory($true) - $base
     Write-Host ("Windows SQLite: 5001 records, write_ms={0}, reload_rebuild_recall_p95_ms={1:N1}, retained_bytes_delta={2}" -f $writeMs,$p95,$retained)
     Write-Host 'Windows SQLite commit-boundary crash recovery passed.'
+    # Continuous bounded recall with periodic persisted updates and index rebuilds.
+    # Report per-window latency and post-GC retained heap; keep only a bounded window
+    # of measurements so the test harness cannot itself cause unbounded growth.
+    $warm = [GC]::GetTotalMemory($true)
+    $process = [Diagnostics.Process]::GetCurrentProcess()
+    $process.Refresh()
+    $privateStart = $process.PrivateMemorySize64
+    $handlesStart = $process.HandleCount
+    $soak = [Diagnostics.Stopwatch]::StartNew()
+    $window = [System.Collections.Generic.List[double]]::new()
+    $nextReport = 10
+    $count = 0
+    $maxP95 = 0.0
+    while ($soak.Elapsed.TotalSeconds -lt $SoakSeconds) {
+        $timer.Restart()
+        $matches = $recall.Invoke($null, [object[]]@($snapshot, $query))
+        Assert-True ($matches.Contains($target)) 'Soak lost applicable product'
+        $window.Add($timer.Elapsed.TotalMilliseconds)
+        $count++
+        if ($count % 250 -eq 0) {
+            $db.SaveOneRecord((New-TestRow 'r-00000' 'committed' '12345678'))
+            $records = [Activator]::CreateInstance($listType)
+            $target = -1
+            foreach ($row in $db.ReadTable($rowType)) {
+                if ($row.Id -eq 'r-00000') { $target = $records.Count }
+                $records.Add($fromRow.Invoke($null, [object[]]@($row)))
+            }
+            $args2[1] = $records
+            $snapshot = $build.Invoke($null, $args2)
+        }
+        if ($soak.Elapsed.TotalSeconds -ge $nextReport -or $soak.Elapsed.TotalSeconds -ge $SoakSeconds) {
+            $ordered = @($window | Sort-Object)
+            $windowP95 = $ordered[[int][Math]::Ceiling($ordered.Count * 0.95) - 1]
+            $maxP95 = [Math]::Max($maxP95, $windowP95)
+            $heap = [GC]::GetTotalMemory($true)
+            $process.Refresh()
+            Write-Host ("soak_seconds={0:N1}; recalls={1}; p95_ms={2:N2}; heap_delta={3}; private_bytes={4}; handles={5}" -f $soak.Elapsed.TotalSeconds,$count,$windowP95,($heap-$warm),$process.PrivateMemorySize64,$process.HandleCount)
+            $window.Clear()
+            $nextReport += 10
+        }
+    }
+    $process.Refresh()
+    $finalHeapDelta = [GC]::GetTotalMemory($true) - $warm
+    Assert-True ($count -gt 0) 'Soak must exercise actual recall'
+    Assert-True ($finalHeapDelta -lt 64MB) "Retained managed heap grew excessively: $finalHeapDelta"
+    Assert-True (($process.HandleCount - $handlesStart) -lt 128) 'Process handle count grew excessively'
+    Assert-True ($maxP95 -lt 2000) "Recall p95 exceeded 2 seconds: $maxP95"
+    Write-Host ("SQLite soak passed: seconds={0:N1}; recalls={1}; max_p95_ms={2:N2}; heap_delta={3}; private_delta={4}; handles_delta={5}" -f $soak.Elapsed.TotalSeconds,$count,$maxP95,$finalHeapDelta,($process.PrivateMemorySize64-$privateStart),($process.HandleCount-$handlesStart))
 } finally {
     # SQLiteHelper caches its connection for the lifetime of the process;
     # leave any locked temp files to runner teardown, never touch live shop data.
