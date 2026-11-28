@@ -114,6 +114,9 @@ jobs:
           msbuild src/Bot.sln /t:Build /m /nologo /verbosity:minimal /p:Configuration=Release /p:Platform=x64 /bl:msbuild.binlog '/flp:logfile=msbuild.log;verbosity=diagnostic'
           $code = $LASTEXITCODE
           if ($code -ne 0) { Select-String -Path msbuild.log -Pattern ': error ',' error CS',' error MSB' | Select-Object -Last 120 | ForEach-Object { Write-Host $_.Line }; exit $code }
+      - name: Run compiled Knowledge V2 fact and scope regressions
+        shell: powershell
+        run: .\tests\windows\test-knowledge-v2-fact-scope.ps1
       - name: Upload MSBuild diagnostics
         if: always()
         uses: actions/upload-artifact@v7
