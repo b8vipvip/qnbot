@@ -1095,12 +1095,18 @@ namespace Bot.ChromeNs
             if (payload == null) throw new Exception("V2 运行设置参数为空");
             var seller = (state.Shop.DisplayName ?? string.Empty).Trim();
             if (seller.Length == 0) throw new Exception("本店客服账号未识别，不能保存 V2 运行设置");
-            // The remote setting contract may still send an old "enabled" or
-            // "shadow" field, but Knowledge V2 is now mandatory and production-only.
+            // Reject a stale queued command rather than falsely reporting that a
+            // disabled/shadow configuration was applied to the sole V2 engine.
+            if (payload.Value<bool?>("enabled") != true
+                || !string.Equals(payload.Value<string>("mode"), "production", StringComparison.OrdinalIgnoreCase))
+                throw new Exception("Knowledge V2 始终启用且仅支持 production 模式");
             var enabled = true;
             var mode = "production";
-            var threshold = payload.Value<double?>("direct_threshold") ?? 0.82;
-            var confidence = payload.Value<double?>("min_confidence") ?? 0.72;
+            var threshold = payload.Value<double?>("direct_threshold") ?? double.NaN;
+            var confidence = payload.Value<double?>("min_confidence") ?? double.NaN;
+            if (double.IsNaN(threshold) || double.IsInfinity(threshold)
+                || double.IsNaN(confidence) || double.IsInfinity(confidence))
+                throw new Exception("V2 运行阈值必须是有限数值");
             if (threshold < 0.70 || threshold > 0.96) throw new Exception("V2 本地直答匹配阈值必须在 0.70~0.96");
             if (confidence < 0.50 || confidence > 0.95) throw new Exception("V2 最低知识可信度必须在 0.50~0.95");
             Bot.Knowledge.KnowledgeEngineV2Service.SetSettings(seller, enabled, mode, threshold, confidence);

@@ -36,9 +36,22 @@ def test_mobile_runtime_settings_require_confirmation_and_show_safety_semantics(
     assert 'id="knowledgeV2RuntimeMode"' in h
     assert 'id="knowledgeV2DirectThreshold"' in h
     assert 'id="knowledgeV2MinConfidence"' in h
-    assert 'src="/static/bot-web-v2.js?v=12"' in h
+    assert 'src="/static/bot-web-v2.js?v=13"' in h
     assert 'api("/api/bot-web/knowledge-v2/runtime-settings/read"' in s
     assert 'api("/api/bot-web/knowledge-v2/runtime-settings"' in s
-    assert "Production 会允许满足安全门控" in s
-    assert "Shadow 只计算 V2 结果" in s
+    assert "Knowledge V2 是唯一检索引擎，始终启用" in s
+    assert 'id="knowledgeV2RuntimeEnabled" type="checkbox" checked disabled' in h
+    assert 'id="knowledgeV2RuntimeMode" disabled' in h
+    assert '<option value="shadow">' not in h
+    assert 'mode="production",enabled=true' in s
+    assert "Number.isFinite(threshold)" in s
+    assert "Shadow 只计算 V2 结果" not in s
     assert "confirm(" in s
+
+def test_web_and_windows_reject_unsupported_legacy_settings_instead_of_acknowledging_them():
+    server=read(SERVER)
+    windows=read(WINDOWS)
+    assert 'if mode != "production" or not payload.enabled:' in server
+    assert 'payload.Value<bool?>("enabled") != true' in windows
+    assert 'payload.Value<string>("mode"), "production"' in windows
+    assert 'double.IsNaN(threshold)' in windows

@@ -306,8 +306,8 @@ def web_v2_runtime_settings_read(client=Depends(bot_web_console._web_client)):
 @router.post("/api/bot-web/knowledge-v2/runtime-settings")
 def web_v2_runtime_settings_save(payload: KnowledgeV2RuntimeSettingsInput, client=Depends(bot_web_console._web_client)):
     mode=(payload.mode or "").strip().lower()
-    if mode not in ("production","shadow"):
-        raise HTTPException(status_code=400,detail="运行模式只能是 production 或 shadow")
+    if mode != "production" or not payload.enabled:
+        raise HTTPException(status_code=400,detail="Knowledge V2 是唯一知识库，始终启用且仅支持 production 模式")
     threshold=float(payload.direct_threshold)
     confidence=float(payload.min_confidence)
     if not math.isfinite(threshold) or not math.isfinite(confidence):
