@@ -41,3 +41,20 @@ def test_v2_exact_record_navigation_does_not_guess_from_similar_answers():
     assert "不会自动选择相似条目" in text
     assert 'Col("状态", "Status", 80)' in text
     assert 'Col("更新", "UpdatedAtText", 126)' in text
+
+
+def test_v2_editor_rejects_stale_writes_and_does_not_mutate_selected_record():
+    text = source_text()
+    repository = (ROOT / "src" / "Bot" / "Knowledge" / "KnowledgeEngineV2.Repository.cs").read_text(encoding="utf-8-sig")
+    editor = text[text.index("private void LoadEditor"):text.index("private void DeleteCurrent")]
+    assert "_selectedFingerprint =" in editor
+    assert "KnowledgeEngineV2Repository.EditorRecordFingerprint(item)" in editor
+    assert "selected == null ? string.Empty : _selectedFingerprint" in editor
+    assert "JsonConvert.DeserializeObject<KnowledgeV2Record>" in editor
+    assert "TrySaveEditorRecord(_seller, record, expectedFingerprint)" in editor
+    method = repository[repository.index("internal static bool TrySaveEditorRecord"):repository.index("internal static string EditorRecordFingerprint")]
+    assert method.index("lock (state.Sync)") < method.index("ReadOneRecord<KnowledgeV2RecordRow>") < method.index("state.Db.SaveOneRecord")
+    assert "EditorRecordFingerprint(FromRow(row))" in method
+    assert 'string.Equals(row.Status, "deleted"' in method
+    assert "if (!string.IsNullOrEmpty(expectedFingerprint)) return false;" in method
+    assert "KnowledgeEngineV2Service.ApplyRecordUpdate(seller, record)" in method
