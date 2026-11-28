@@ -456,10 +456,16 @@ namespace Bot.Knowledge
                         rowsToSave.Add(ToRow(preserved));
                     }
 
+                    // The corrected answer is verified for this scenario, not every
+                    // scenario attached to the previous version. Keep other conditions,
+                    // but replace obsolete atomic scenario keys instead of requiring
+                    // two mutually exclusive order scopes at once.
                     currentUpdated.Conditions = NormalizeList(
-                        (currentUpdated.Conditions ?? new List<string>()).Concat(new[] { scopeToken }), 40);
+                        new[] { scopeToken }.Concat((currentUpdated.Conditions ?? new List<string>())
+                            .Where(x => !KnowledgeEngineV2Semantics.IsCommerceScope(x))), 40);
                     currentUpdated.RequiredContext = NormalizeList(
-                        (currentUpdated.RequiredContext ?? new List<string>()).Concat(new[] { scopeToken }), 40);
+                        new[] { scopeToken }.Concat((currentUpdated.RequiredContext ?? new List<string>())
+                            .Where(x => !KnowledgeEngineV2Semantics.IsCommerceScope(x))), 40);
                     currentUpdated.Exclusions = (currentUpdated.Exclusions ?? new List<string>())
                         .Where(x => !string.Equals(x, scopeToken, StringComparison.OrdinalIgnoreCase)).ToList();
                     currentUpdated.Authority = Math.Max(currentUpdated.Authority, 0.94);

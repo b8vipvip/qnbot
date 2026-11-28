@@ -185,7 +185,7 @@ def test_ai_general_route_does_not_retrieve_weak_or_unapproved_legacy_candidates
     assert "Route = SmartReplyRouteKind.AiGeneral" in build
     assert "Candidates = new List<SmartKnowledgeCandidate>()" in build
     assert "ConversationStateService.Build(" in build
-    assert "KnowledgeEngineV2Service.GetRecords(seller)" in state
+    assert "KnowledgeEngineV2Service.GetProductionContextRecords(seller)" in state
     assert "KnowledgeV2AuthorityPolicy.IsProductionApproved(x)" in state
     assert "BotFeatureStore.GetKnowledgeBase()" not in router
 
@@ -469,7 +469,7 @@ def test_smart_reply_router_uses_v2_conversation_state_without_legacy_retrieval(
     assert "Candidates = new List<SmartKnowledgeCandidate>()" in build
     assert "CanUseLegacyKnowledgeAuthority" not in smart
     assert "RetrieveCandidates" not in smart
-    assert "KnowledgeEngineV2Service.GetRecords(seller)" in state
+    assert "KnowledgeEngineV2Service.GetProductionContextRecords(seller)" in state
     assert "KnowledgeV2AuthorityPolicy.IsProductionApproved(x)" in state
     assert "BotFeatureStore.GetKnowledgeBase()" not in smart
 

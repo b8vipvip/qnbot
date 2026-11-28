@@ -356,7 +356,7 @@ def test_concurrent_delete_wins_across_different_ids_for_same_verified_human_evi
     evidence = merge.split(
         "if (evidenceId.Length > 0 && recordsByHumanEvidence.TryGetValue(evidenceId, out evidenceRecord))",
         1
-    )[1].split("if (preserveLocalOnly)", 1)[0]
+    )[1].split("if (preserveLocalOnly || IsDeleteTombstone(local))", 1)[0]
     assert "IsDeleteTombstone(local) && !IsDeleteTombstone(evidenceRecord)" in evidence
     assert "AddCandidate(merged, mergedIds, evidenceRecord, evidenceRecord.Id);" in evidence
     assert "var tombstone = CloneRecord(local);" in evidence

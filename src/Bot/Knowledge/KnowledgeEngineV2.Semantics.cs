@@ -370,7 +370,7 @@ namespace Bot.Knowledge
                 .ToList();
         }
 
-        private static bool IsCommerceScope(string term)
+        internal static bool IsCommerceScope(string term)
         {
             return (term ?? string.Empty).Trim().StartsWith("commerce_scope", StringComparison.OrdinalIgnoreCase);
         }

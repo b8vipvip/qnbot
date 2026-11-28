@@ -118,7 +118,9 @@ def test_v2_direct_reply_obeys_shared_commerce_authority_before_resolve():
     assert gate < resolve
     assert "commerceAuthority.AllowLocalTerminalReply" in text[gate:resolve]
     assert "Knowledge Engine V2已让出终态直答权" in text
-    assert "return KnowledgeV2RuntimeResult.Continue();" in text[gate:resolve]
+    contextual = text[resolve:text.index("KnowledgeV2Decision decision;", resolve)]
+    assert "contextualDecision.CanDirectReply = false" in contextual
+    assert "return KnowledgeV2RuntimeResult.Continue(commercePrompt);" in contextual
     assert "OrderGuidanceDeliveryGuard.TryGetLatestOrderSnapshot" not in text[gate:resolve]
 
 
@@ -136,15 +138,20 @@ def test_validator_only_promotes_verified_order_context_to_authoritative_evidenc
 
 
 def test_human_correction_preserves_old_answer_and_scopes_new_answer():
-    text = read("src/Bot/ChromeNs/CommerceKnowledgeLearningBridge.cs")
-    assert "ConversationSessionLearningService.ReportsChanged += OnReportsChanged" in text
-    assert "BuildPolicyScopeToken" in text
-    assert 'SourceType = "场景分流保留-纠错前答案"' in text
-    assert "oldProfile.DoNotApplyWhen = MergeCondition(oldProfile.DoNotApplyWhen, scopeToken)" in text
-    assert "currentProfile.ApplyWhen = scopeToken" in text
-    assert "currentProfile.RequiredContext = scopeToken" in text
-    assert "currentProfile.AnswerMode = KnowledgeAnswerModes.Contextual" in text
-    assert "currentProfile.Confidence = Math.Max(currentProfile.Confidence, 0.94)" in text
+    bridge = read("src/Bot/ChromeNs/CommerceKnowledgeLearningBridge.cs")
+    repo = read("src/Bot/Knowledge/KnowledgeEngineV2.Repository.cs")
+    assert "ConversationSessionLearningService.ReportsChanged += OnReportsChanged" in bridge
+    assert "BuildPolicyScopeToken" in bridge
+    assert "KnowledgeEngineV2Repository.TryApplyCommerceScenarioScope(" in bridge
+    assert 'preserved.SourceType = "commerce_scenario_preserved"' in repo
+    assert "preserved.Answer = oldAnswer" in repo
+    assert "preserved.Exclusions = NormalizeList(" in repo
+    assert "currentUpdated.Conditions = NormalizeList(" in repo
+    assert "currentUpdated.RequiredContext = NormalizeList(" in repo
+    assert "new[] { scopeToken }.Concat" in repo
+    assert repo.count(".Where(x => !KnowledgeEngineV2Semantics.IsCommerceScope(x))") >= 2
+    assert "currentUpdated.Confidence = Math.Max(currentUpdated.Confidence, 0.94)" in repo
+    assert "state.Db.SaveRecordsInTransaction(rowsToSave)" in repo
 
 
 def test_style_and_business_facts_remain_separate_learning_concerns():
