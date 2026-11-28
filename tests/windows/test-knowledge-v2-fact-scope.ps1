@@ -67,6 +67,22 @@ $right.ProductIds = [System.Collections.Generic.List[string]]@('87654321')
 Assert-Equal ($overlap.Invoke($null, @($left, $right))) $false 'disjoint product scopes'
 $right.ProductIds.Add('12345678')
 Assert-Equal ($overlap.Invoke($null, @($left, $right))) $true 'overlapping product scopes'
+$ruleService = $assembly.GetType('Bot.ChromeNs.VisualUnderstandingRuleService', $true)
+$ruleType = $assembly.GetType('Bot.ChromeNs.VisualUnderstandingRuleEntity', $true)
+$fingerprint = $ruleService.GetMethod('RuleFingerprint', $flags)
+$rule = [Activator]::CreateInstance($ruleType)
+$rule.EntityId = 'rule'
+$rule.ShopKey = 'shop-a'
+$rule.Seller = 'seller-a'
+$rule.Name = 'synthetic'
+$rule.RequiredKeywords = '账号中心'
+$rule.Enabled = $true
+$originalFingerprint = $fingerprint.Invoke($null, @($rule))
+$rule.ExcludedKeywords = '登录'
+Assert-Equal ($fingerprint.Invoke($null, @($rule)) -ne $originalFingerprint) $true 'changed exclusion invalidates rule evidence'
+$rule.ExcludedKeywords = $null
+$rule.Enabled = $false
+Assert-Equal ($fingerprint.Invoke($null, @($rule)) -ne $originalFingerprint) $true 'disabled rule invalidates evidence'
 # Exercise the actual compiled in-memory recall index with a large same-intent bucket.
 # This is synthetic index coverage, not a live SQLite/UI or long-duration benchmark.
 $service = $assembly.GetType('Bot.Knowledge.KnowledgeEngineV2Service', $true)
