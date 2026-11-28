@@ -583,14 +583,9 @@ def test_active_streaming_smart_reply_does_not_mark_failed_send_as_completed():
 
 
 def test_specialized_knowledge_and_vision_send_failures_do_not_complete_progress_cards():
-    memory = read("src/Bot/ChromeNs/KnowledgeMemoryEngine.cs")
+    assert not (ROOT / "src/Bot/ChromeNs/KnowledgeMemoryEngine.cs").exists()
     v2 = read("src/Bot/ChromeNs/KnowledgeEngineV2RuntimeBridge.cs")
     vision = read("src/Bot/ChromeNs/VisionWithdrawalAwarePipeline.cs")
-
-    memory_terminal = memory.split("var sendCancelled = !sendOk && qn.Rpa != null && qn.Rpa.LastSendWasCancelled;", 1)[1]
-    assert "else if (sendOk)" in memory_terminal
-    assert "ResponseProgressTracker.Fail(" in memory_terminal
-    assert "Knowledge Memory答案已生成，但实际发送未确认：" in memory_terminal
 
     v2_terminal = v2.split("var sendCancelled = !sendOk && qn.Rpa != null && qn.Rpa.LastSendWasCancelled;", 1)[1]
     assert "else if (sendOk)" in v2_terminal

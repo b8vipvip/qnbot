@@ -10,7 +10,7 @@ def read(path: str) -> str:
 def test_knowledge_v2_rejects_terminal_generation_before_answer_ready():
     source = read("src/Bot/ChromeNs/KnowledgeEngineV2RuntimeBridge.cs")
     method = source[source.index("internal static async Task<bool> TryHandleAsync"):source.index(
-        "private static bool IsApprovedMatchForLogging"
+        "internal static bool IsSelectedKnowledgeCurrent"
     )]
 
     direct = method.index("decision == null || !decision.CanDirectReply")
@@ -30,7 +30,7 @@ def test_knowledge_v2_rejects_terminal_generation_before_answer_ready():
 def test_knowledge_v2_keeps_second_generation_barrier_immediately_before_send():
     source = read("src/Bot/ChromeNs/KnowledgeEngineV2RuntimeBridge.cs")
     method = source[source.index("internal static async Task<bool> TryHandleAsync"):source.index(
-        "private static bool IsApprovedMatchForLogging"
+        "internal static bool IsSelectedKnowledgeCurrent"
     )]
 
     answer_ready = method.index("ResponseProgressTracker.SetAnswerReady(")

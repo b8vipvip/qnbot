@@ -340,6 +340,20 @@ namespace Bot.ChromeNs
                     + task.BuyerNick);
             }
 
+            if (decision != null && decision.CanDirectReply)
+            {
+                using (ShopSettingsScope.Enter(shop, false))
+                {
+                    if (!KnowledgeEngineV2RuntimeBridge.IsSelectedKnowledgeCurrent(knowledgeSeller, task.ShopKey, decision))
+                    {
+                        decision.CanDirectReply = false;
+                        decision.Answer = string.Empty;
+                        decision.SelectedMatch = null;
+                        decision.Matches.Clear();
+                    }
+                }
+            }
+
             var approvedV2KnowledgeEvidence = KnowledgeEngineV2RuntimeBridge.BuildContextPromptAddon(decision);
 
             // A saved image knowledge description is an operator-confirmed image-class
@@ -410,6 +424,7 @@ namespace Bot.ChromeNs
             {
                 Success = true,
                 IsKnowledgeV2DirectAnswer = true,
+                SelectedKnowledgeDecision = decision,
                 ApprovedV2KnowledgeEvidence = approvedV2KnowledgeEvidence,
                 Answer = answer,
                 Error = string.Empty,
@@ -426,7 +441,7 @@ namespace Bot.ChromeNs
                 MatchedVisualKnowledgeId = visualMatch == null ? string.Empty : "ocr-direct-knowledge-v2:" + visualMatch.RuleId,
                 MatchedImageKnowledgeId = imageKnowledgeMatch == null ? string.Empty : imageKnowledgeMatch.KnowledgeId,
                 ImageKnowledgeScore = imageKnowledgeMatch == null ? 0d : imageKnowledgeMatch.Score,
-                VisualKnowledgeScore = decision.Matches == null || decision.Matches.Count < 1 ? 0d : decision.Matches.Max(x => x.Score),
+                VisualKnowledgeScore = decision.SelectedMatch == null ? 0d : decision.SelectedMatch.Score,
                 LocalOcrText = ocr.Text,
                 LocalOcrConfidence = ocr.Confidence,
                 LocalOcrLatencyMs = ocr.ElapsedMs,

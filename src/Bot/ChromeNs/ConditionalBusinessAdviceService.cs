@@ -330,8 +330,9 @@ namespace Bot.ChromeNs
         {
             if (decision == null || decision.Matches == null || decision.Matches.Count == 0)
                 return false;
-            var selected = decision.Matches
-                .Where(x => x != null && x.Record != null)
+            var selected = decision.SelectedMatch ?? decision.Matches
+                .Where(x => x != null && x.Record != null
+                    && KnowledgeV2AuthorityPolicy.IsProductionApproved(x.Record))
                 .OrderByDescending(x => x.Score)
                 .FirstOrDefault();
             return selected != null && (selected.Record.RequiredContext ?? new List<string>())

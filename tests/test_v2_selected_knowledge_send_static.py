@@ -30,3 +30,20 @@ def test_delayed_direct_reply_revalidates_selected_record_and_mode_before_transp
     assert 'string.Equals(committed.Status, "deleted"' in current
     assert 'string.Equals(committed.Status, "disabled"' in current
     assert "if (!sendOk && knowledgeVersionSuppressed)" in runtime
+
+
+def test_ocr_direct_answer_carries_selected_knowledge_to_last_mile_guard():
+    ocr = read("src/Bot/ChromeNs/OcrFirstKnowledgeDecisionService.cs")
+    vision = read("src/Bot/ChromeNs/VisionWithdrawalAwarePipeline.cs")
+    typed = read("src/Bot/ChromeNs/ConditionalBusinessAdviceService.cs")
+    assert "decision.SelectedMatch ?? decision.Matches" in typed
+    assert "SelectedKnowledgeDecision = decision" in ocr
+    assert "decision.SelectedMatch.Score" in ocr
+    assert "IsSelectedKnowledgeCurrent(knowledgeSeller, task.ShopKey, decision)" in ocr
+    assert "trustedOcrKnowledge && !IsOcrSelectedKnowledgeCurrent(burst, result)" in vision
+    assert "result.SelectedKnowledgeDecision = null;" in vision
+    assert "burst.SellerNick, burst.ShopKey, result.SelectedKnowledgeDecision" in vision
+
+def test_reading_authority_does_not_manufacture_verification_timestamp():
+    source = read("src/Bot/ChromeNs/KnowledgeEngineV2LearningBridge.cs")
+    assert "record.LastVerifiedAt = DateTime.Now" not in source

@@ -20,7 +20,7 @@ def test_v2_is_in_the_only_text_reply_path_before_ai_generation():
     pipeline = read("src/Bot/ChromeNs/BuyerStreamingReplyPipeline.cs")
     method = runtime[
         runtime.index("internal static async Task<bool> TryHandleAsync"):
-        runtime.index("private static bool IsApprovedMatchForLogging")
+        runtime.index("internal static bool IsSelectedKnowledgeCurrent")
     ]
     entry = pipeline[pipeline.index("private static async Task ProcessTextBurstStreamingAsync"):]
     assert "KnowledgeEngineV2RuntimeBridge.TryHandleWithContextAsync(qn, lease)" in entry

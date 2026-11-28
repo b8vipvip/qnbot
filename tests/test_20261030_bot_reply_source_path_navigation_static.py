@@ -65,8 +65,8 @@ def test_v2_direct_answers_record_actual_match_id_before_ready():
     runtime = src("src/Bot/ChromeNs/KnowledgeEngineV2RuntimeBridge.cs")
     assert 'var sourceLabel = best != null && best.Record != null' in runtime
     assert '"本地知识V2（记录ID：" + best.Record.Id + "）"' in runtime
-    assert runtime.index("var best = decision.Matches.FirstOrDefault(IsApprovedMatchForLogging);") < runtime.index(
-        "sourceLabel,", runtime.index("var best = decision.Matches.FirstOrDefault(IsApprovedMatchForLogging);")
+    assert runtime.index("var best = decision.SelectedMatch;") < runtime.index(
+        "sourceLabel,", runtime.index("var best = decision.SelectedMatch;")
     )
 
 

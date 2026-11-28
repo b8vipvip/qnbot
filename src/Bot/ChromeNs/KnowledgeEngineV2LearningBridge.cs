@@ -91,7 +91,7 @@ namespace Bot.Knowledge
                 record.Type = "business_fact";
             record.Authority = Math.Max(record.Authority, 0.90);
             record.Confidence = Math.Max(record.Confidence, 0.90);
-            if (record.LastVerifiedAt == DateTime.MinValue) record.LastVerifiedAt = DateTime.Now;
+            // Reading a legacy record must not invent a new verification time or change its fingerprint.
         }
 
         private static void ApplyHumanConfirmed(KnowledgeV2Record record)
@@ -108,7 +108,7 @@ namespace Bot.Knowledge
             }
             record.Authority = Math.Max(record.Authority, 0.98);
             record.Confidence = Math.Max(record.Confidence, 0.94);
-            if (record.LastVerifiedAt == DateTime.MinValue) record.LastVerifiedAt = DateTime.Now;
+            // Reading a legacy record must not invent a new verification time or change its fingerprint.
         }
     }
 }

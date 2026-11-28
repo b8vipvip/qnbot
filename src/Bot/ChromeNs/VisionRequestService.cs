@@ -1,4 +1,5 @@
 using Bot.ShopScope;
+using Bot.Knowledge;
 using BotLib;
 using Newtonsoft.Json;
 using Newtonsoft.Json.Linq;
@@ -37,6 +38,7 @@ namespace Bot.ChromeNs
         public string KnowledgeV2ContextPromptAddon { get; set; }
         public string ApprovedV2KnowledgeEvidence { get; set; }
         public bool IsKnowledgeV2DirectAnswer { get; set; }
+        public KnowledgeV2Decision SelectedKnowledgeDecision { get; set; }
         public string ConditionalAdviceKey { get; set; }
         public string ConditionalAdviceOrderId { get; set; }
         public string ConditionalAdviceItemId { get; set; }

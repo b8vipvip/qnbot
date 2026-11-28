@@ -19,7 +19,8 @@ def test_vision_routing_retains_placeholder_but_calls_ocr_or_multimodal():
     assert 'CanUseServerOcr(shopKey)' in pre
     assert 'if (!KnowledgeEngineV2Service.IsEnabled(knowledgeSeller)' in ocr
     assert ocr.index('PrepareForVision(task.ShopKey, knowledgeSeller)') < ocr.index('LocalOcrService.TryRecognizeAsync')
-    assert ocr.index('LocalOcrService.TryRecognizeAsync') < ocr.index('KnowledgeEngineV2Service.IsSnapshotReady')
+    assert ocr.index('LocalOcrService.TryRecognizeAsync') < ocr.index('KnowledgeEngineV2Service.ResolveWithEvidence(')
+    assert 'KnowledgeEngineV2Service.IsSnapshotReady' not in ocr
     assert 'ReplyModeService.IsLocalFirst(task.SellerNick)' not in ocr
     assert '[VisionRoute] route=local_ocr_knowledge' in vision
     assert '[VisionRoute] route=multimodal_ai' in vision
