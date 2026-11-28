@@ -59,10 +59,8 @@ def test_smart_import_and_repository_normalize_non_finite_confidence_values():
 
     assert "double.IsNaN(value)" in number
     assert "double.IsInfinity(value)" in number
-    assert "double.IsNaN(record.Authority)" in normalize
-    assert "double.IsInfinity(record.Authority)" in normalize
-    assert "double.IsNaN(record.Confidence)" in normalize
-    assert "double.IsInfinity(record.Confidence)" in normalize
+    assert "record.Authority = Clamp(record.Authority);" in normalize
+    assert "record.Confidence = Clamp(record.Confidence);" in normalize
     assert "double.IsNaN(value)" in clamp
     assert "double.IsInfinity(value)" in clamp
     confidence = read(ROOT / "src/Bot/Knowledge/KnowledgeEngineV2.Models.cs")

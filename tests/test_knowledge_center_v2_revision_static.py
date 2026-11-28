@@ -101,3 +101,14 @@ def test_revision_clusters_require_factual_compatibility_and_strict_distinct_buy
     assert "dominance = distinctBuyers /" in service
     assert "dominance <= 0.50" in service
     assert ".Where(KnowledgeV2AuthorityPolicy.IsProductionApproved)" in service
+
+def test_revision_candidate_recovers_from_atomic_knowledge_receipt_without_reapplying():
+    repo = read("src/Bot/Knowledge/KnowledgeEngineV2.Repository.cs")
+    revision = read("src/Bot/Knowledge/KnowledgeEngineV2RevisionService.cs")
+    assert 'MessageRecordId = revisionSource, Action = "apply"' in repo
+    assert "GetCommittedRevisionCandidateReceipts" in repo
+    assert 'x.Action == "apply"' in repo
+    assert "RecoverCommittedCandidates(seller);" in revision
+    assert 'receipts.TryGetValue(row.Id + "\\n" + row.KnowledgeId' in revision
+    assert 'row.Status = "applied";' in revision
+    assert "row.AppliedAtTicks = committedAt" in revision

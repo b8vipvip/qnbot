@@ -143,6 +143,7 @@ namespace Bot.Knowledge
             seller = Clean(seller);
             if (seller.Length == 0) throw new InvalidOperationException("无法识别当前店铺客服账号。");
 
+            RecoverCommittedCandidates(seller);
             var result = new KnowledgeV2RevisionGenerationResult();
             var records = KnowledgeEngineV2Repository.LoadAll(seller)
                 .Where(KnowledgeV2AuthorityPolicy.IsProductionApproved)
@@ -275,7 +276,14 @@ namespace Bot.Knowledge
 
         public static List<KnowledgeV2RevisionCandidate> GetCandidates(string seller, string status, int maxCount)
         {
-            var rows = ReadRows(seller);
+            var shop = ResolveShopRequired(seller);
+            List<KnowledgeV2RevisionCandidateRow> rows;
+            using (ShopSettingsScope.Enter(shop))
+            lock (OperationLocks.GetOrAdd(shop.ShopKey, _ => new object()))
+            {
+                RecoverCommittedCandidates(seller);
+                rows = ReadRows(seller);
+            }
             status = Clean(status).ToLowerInvariant();
             IEnumerable<KnowledgeV2RevisionCandidateRow> query = rows.Where(x => x != null);
             if (status.Length > 0 && status != "all")
@@ -301,12 +309,15 @@ namespace Bot.Knowledge
         {
             error = string.Empty;
             seller = Clean(seller);
+            RecoverCommittedCandidates(seller);
             var row = FindRow(seller, candidateId);
             if (row == null)
             {
                 error = "修订候选不存在。";
                 return false;
             }
+            if (string.Equals(row.Status, "applied", StringComparison.OrdinalIgnoreCase))
+                return true; // idempotent retry after a committed revision or lost response
             if (!string.Equals(row.Status, "pending", StringComparison.OrdinalIgnoreCase))
             {
                 error = "该候选已处理，当前状态：" + row.Status;
@@ -315,7 +326,7 @@ namespace Bot.Knowledge
 
             var record = KnowledgeEngineV2Repository.LoadAll(seller)
                 .FirstOrDefault(x => x != null && string.Equals(x.Id, row.KnowledgeId, StringComparison.Ordinal));
-            if (record == null || !record.Enabled || !string.Equals(record.Status, "active", StringComparison.OrdinalIgnoreCase))
+            if (!KnowledgeV2AuthorityPolicy.IsProductionApproved(record))
             {
                 MarkStatus(seller, row, "stale", "原知识已不存在或已停用，候选自动过期。", false);
                 error = "原知识已不存在，候选已标记过期。";
@@ -371,6 +382,7 @@ namespace Bot.Knowledge
         {
             error = string.Empty;
             seller = Clean(seller);
+            RecoverCommittedCandidates(seller);
             var row = FindRow(seller, candidateId);
             if (row == null)
             {
@@ -501,6 +513,24 @@ namespace Bot.Knowledge
                 if (string.IsNullOrEmpty(row.OriginalFingerprint)
                     || !string.Equals(row.OriginalFingerprint, KnowledgeEngineV2Repository.EditorRecordFingerprint(record), StringComparison.Ordinal))
                     MarkStatus(seller, row, "stale", "原知识已在候选生成后修改。", false);
+            }
+        }
+
+        private static void RecoverCommittedCandidates(string seller)
+        {
+            var rows = ReadRows(seller).Where(x => x != null
+                && string.Equals(x.Status, "pending", StringComparison.OrdinalIgnoreCase)).ToList();
+            if (rows.Count == 0) return;
+            var receipts = KnowledgeEngineV2Repository.GetCommittedRevisionCandidateReceipts(seller);
+            foreach (var row in rows)
+            {
+                long committedAt;
+                if (!receipts.TryGetValue(row.Id + "\n" + row.KnowledgeId, out committedAt)) continue;
+                row.Status = "applied";
+                row.ResolutionNote = "根据知识库同事务修订凭证恢复已应用状态，未重复写入知识。";
+                row.AppliedAtTicks = committedAt;
+                row.UpdatedAtTicks = DateTime.Now.Ticks;
+                SaveRow(seller, row);
             }
         }
 

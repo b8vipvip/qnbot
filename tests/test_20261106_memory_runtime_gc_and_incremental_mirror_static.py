@@ -88,3 +88,12 @@ def test_gc_etw_collection_is_bounded_opt_in_and_does_not_change_processes():
     assert "GC]::Collect" not in script
     assert "Invoke-WebRequest" not in script
     assert "Upload" not in script
+
+def test_v2_incremental_snapshot_copies_only_mutated_index_buckets():
+    source = read("src/Bot/Knowledge/KnowledgeEngineV2.Service.Incremental.cs")
+    assert "Records = source.Records.ToList()" in source
+    assert "result[pair.Key] = pair.Value;" in source
+    assert "new HashSet<int>(previous)" in source
+    assert "new HashSet<int>(values)" in source
+    assert "next.Remove(id)" in source
+    assert "Snapshots[shopKey] = next;" in source

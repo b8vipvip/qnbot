@@ -179,3 +179,15 @@ def test_image_save_verifies_existing_and_temporary_files_before_atomic_commit()
     assert "现有图片记录引用了内容哈希不一致的文件" in save
     assert "(createdImage || replacedImage)" in save
     assert "old == null || !SamePath(old.ImagePath, targetPath)" in save
+
+def test_image_knowledge_prioritizes_exact_identity_and_rejects_same_priority_ambiguity():
+    service=read("src/Bot/ChromeNs/VisualImageKnowledgeService.cs")
+    ocr=read("src/Bot/ChromeNs/OcrFirstKnowledgeDecisionService.cs")
+    public=read("src/Bot/Knowledge/KnowledgeEngineV2.Service.Public.cs")
+    assert 'var priority = exactImage ? 3 : matchMode == "hit_info" ? 2 : 1;' in service
+    assert "bestScore - x.Item2 <= 0.05d" in service
+    assert "ambiguous = true;" in service
+    assert "if (ambiguousImageMatch)" in ocr
+    assert "double.IsNaN(ocr.Confidence)" in ocr
+    assert "observedEvidenceText ?? evidenceText" in public
+    assert "query.ProductEvidenceConflict = true;" in public
