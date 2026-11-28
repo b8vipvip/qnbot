@@ -126,7 +126,7 @@ def test_web_v2_edits_use_compare_and_swap_to_prevent_stale_device_overwrites():
     assert "expected_revision:state.knowledgeV2EditRevision" in js
     assert "err.status===409" in js
     assert "await loadKnowledgeV2(false)" in js
-    assert 'bot-web-v2.js?v=14' in html
+    assert 'bot-web-v2.js?v=15' in html
 
 
 class _V2CasFakeControlPlane:
@@ -570,3 +570,113 @@ def test_web_v2_editor_and_packages_do_not_call_legacy_knowledge_api():
     assert 'id="knowledgeDialog"' not in html
     render=js.split("function renderKnowledgeV2(",1)[1].split("function openKnowledgeV2Dialog",1)[0]
     assert 'esc(quality)' in render
+
+@pytest.mark.skipif(importlib.util.find_spec("fastapi") is None, reason="server dependencies are not installed")
+def test_remote_v2_operations_are_shop_bound_confirmed_and_exclusive(tmp_path):
+    from fastapi import HTTPException
+    m=_load_v2_cas_module(tmp_path)
+    with m._cp.db() as conn:
+        conn.execute("CREATE TABLE bot_client_shop_binding(client_id INTEGER PRIMARY KEY,shop_key TEXT)")
+        conn.execute("INSERT INTO bot_client_shop_binding VALUES(1,'shop-a')")
+        conn.execute("ALTER TABLE bot_commands ADD COLUMN completed_at TEXT")
+        conn.execute("INSERT INTO bot_knowledge_v2_devices VALUES(1,'shop-a','aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa','2026-11-28T08:00:00+00:00')")
+    with pytest.raises(HTTPException):
+        m.web_v2_operation(m.KnowledgeV2OperationInput(action="history_scan"),{"id":1})
+    with pytest.raises(HTTPException):
+        m.web_v2_operation(m.KnowledgeV2OperationInput(action="rollback",confirmed=True),{"id":1})
+    task=m.web_v2_operation(m.KnowledgeV2OperationInput(action="history_scan",confirmed=True,device_id="a"*32),{"id":1})
+    with pytest.raises(HTTPException) as busy:
+        m.web_v2_operation(m.KnowledgeV2OperationInput(action="revision_list",device_id="a"*32),{"id":1})
+    assert busy.value.status_code==409
+    assert m.web_v2_operation_status(task["command_id"],{"id":1})["status"]=="pending"
+    assert m.web_v2_operation_cancel(task["command_id"],{"id":1})["status"]=="cancelled"
+    assert m.web_v2_operation(m.KnowledgeV2OperationInput(action="history_status",device_id="a"*32),{"id":1})["command_id"]!=task["command_id"]
+
+def test_remote_v2_operations_claim_before_dispatch_and_guard_results():
+    s=read(ROOT/"services/api-control-plane/bot_web_console.py")
+    claim=s.split("def _command_rows(",1)[1].split("def _decode_message_attachment",1)[0]
+    assert 'conn.execute("BEGIN IMMEDIATE")' in claim
+    assert "payload[\"claim\"]=secrets.token_hex(24)" in claim
+    assert "payload.get(\"shop_key\")!=shop_key" in claim
+    assert "status='running'" in claim and "status='pending'" in claim
+    assert "secrets.compare_digest(expected,supplied)" in s
+    assert "knowledge_v2_operation_cancel" in claim
+
+def test_web_operations_ui_uses_selected_device_and_atomic_bulk_revision():
+    web=read(ROOT/"services/api-control-plane/static/bot-web-v2-operations.js")
+    html=read(ROOT/"services/api-control-plane/static/bot-web.html")
+    windows=read(ROOT/"src/Bot/ChromeNs/BotWebConsoleSyncService.cs")
+    repo=read(ROOT/"src/Bot/Knowledge/KnowledgeEngineV2.Repository.cs")
+    for action in ("history_status","history_scan","history_resume","revision_generate","revision_apply","revision_reject","conflict_list","conflict_resolve","rollback_list","rollback"):
+        assert action in web and action in windows
+    assert "device_id:selected" in web
+    assert "v2Ops.checkpointDevice===$(" in web
+    assert 'expected_revision:expected' in web and "v2BulkIds.clear()" in web
+    assert 'Status:"deleted"' in web
+    assert "knowledgeV2BulkDelete" in html
+    assert "knowledge_v2_operation_cancel" in windows
+    assert 'EditorRecordFingerprint(before) != EditorRecordFingerprint(applied)' in repo
+    assert "expectedRevisionId" in repo
+
+@pytest.mark.skipif(importlib.util.find_spec("fastapi") is None, reason="server dependencies are not installed")
+def test_remote_operation_claims_once_across_two_devices_and_rejects_unclaimed_results(tmp_path):
+    m=_load_v2_cas_module(tmp_path)
+    spec=importlib.util.spec_from_file_location("bot_web_console_claim_test",ROOT/"services/api-control-plane/bot_web_console.py")
+    console=importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(console)
+    console._cp=m._cp
+    with m._cp.db() as conn:
+        conn.execute("CREATE TABLE bot_client_shop_binding(client_id INTEGER PRIMARY KEY,shop_key TEXT)")
+        conn.execute("INSERT INTO bot_client_shop_binding VALUES(1,'shop-a')")
+        conn.execute("ALTER TABLE bot_commands ADD COLUMN completed_at TEXT")
+        for device in ("a"*32,"b"*32):
+            conn.execute("INSERT INTO bot_knowledge_v2_devices VALUES(1,'shop-a',?,?)",(device,m._cp.iso_now()))
+    task=m.web_v2_operation(m.KnowledgeV2OperationInput(action="history_scan",confirmed=True,device_id="a"*32),{"id":1})
+    assert console._command_rows(1,"shop-a","b"*32)==[]
+    barrier=threading.Barrier(2)
+    def claim():
+        barrier.wait(timeout=5)
+        return console._command_rows(1,"shop-a","a"*32)
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        futures=[pool.submit(claim),pool.submit(claim)]
+        rows=[row for future in futures for row in future.result(timeout=10)]
+    assert len(rows)==1
+    command=rows[0];cid=command["id"];claim_token=command["payload"]["claim"]
+    console._apply_command_results(1,[{"id":cid,"success":True,"result":{"forged":True}}])
+    assert m.web_v2_operation_status(cid,{"id":1})["status"]=="running"
+    console._apply_command_results(1,[{"id":cid,"claim":claim_token,"phase":"running","success":True,"result":{"messages":150}}])
+    assert m.web_v2_operation_status(cid,{"id":1})["result"]["messages"]==150
+    assert m.web_v2_operation_cancel(cid,{"id":1})["status"]=="cancel_requested"
+    assert console._command_rows(1,"shop-a","b"*32)==[]
+    assert console._command_rows(1,"shop-a","a"*32)[0]["type"]=="knowledge_v2_operation_cancel"
+    console._apply_command_results(1,[{"id":cid,"claim":claim_token,"phase":"cancelled","success":False,"result":{}}])
+    assert m.web_v2_operation_status(cid,{"id":1})["status"]=="cancelled"
+    console._apply_command_results(1,[{"id":cid,"claim":claim_token,"success":True,"result":{"duplicate":True}}])
+    assert m.web_v2_operation_status(cid,{"id":1})["status"]=="cancelled"
+
+@pytest.mark.skipif(importlib.util.find_spec("fastapi") is None, reason="server dependencies are not installed")
+def test_feedback_convergence_requires_two_registered_persisted_device_receipts(tmp_path):
+    import hashlib,uuid,base64
+    from datetime import datetime,timezone
+    m=_load_v2_cas_module(tmp_path)
+    m._cp.iso_now=lambda:datetime.now(timezone.utc).isoformat()
+    with m._cp.db() as conn:
+        conn.execute("CREATE TABLE bot_client_shop_binding(client_id INTEGER PRIMARY KEY,shop_key TEXT)")
+        conn.execute("INSERT INTO bot_client_shop_binding VALUES(1,'shop-a')")
+        for device in ("a"*32,"b"*32):
+            conn.execute("INSERT INTO bot_knowledge_v2_devices VALUES(1,'shop-a',?,?)",(device,m._cp.iso_now()))
+    event={"Id":uuid.uuid4().hex,"KnowledgeId":"a","EventType":"sent","UtcTicks":m._feedback_now_ticks()}
+    canonical="\n".join((event["Id"],base64.b64encode(event["KnowledgeId"].encode()).decode(),event["EventType"],str(event["UtcTicks"])))
+    digest=hashlib.sha256(canonical.encode()).hexdigest()
+    initial=m.runtime_feedback_sync(m.KnowledgeV2FeedbackInput(events=[event],device_id="a"*32,local_event_count=1,local_event_digest=digest),None,"shop-a")
+    assert not m.web_v2_devices({"id":1})["two_device_nonempty_convergence"]
+    def prove(device,digest):
+        return m.runtime_feedback_sync(m.KnowledgeV2FeedbackInput(epoch=initial["epoch"],cursor=initial["cursor"],device_id=device,
+            local_event_count=1,local_event_digest=digest),None,"shop-a")
+    prove("a"*32,digest);prove("b"*32,"0"*64)
+    assert m.web_v2_devices({"id":1})["verified_devices"]==1
+    prove("b"*32,digest)
+    proof=m.web_v2_devices({"id":1})
+    assert proof["verified_devices"]==2 and proof["two_device_nonempty_convergence"]
+    m.runtime_feedback_sync(m.KnowledgeV2FeedbackInput(events=[dict(event,Id=uuid.uuid4().hex)]),None,"shop-a")
+    assert not m.web_v2_devices({"id":1})["two_device_nonempty_convergence"]

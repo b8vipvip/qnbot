@@ -529,7 +529,30 @@ namespace Bot.Knowledge
 
         public static List<KnowledgeV2Conflict> GetConflicts(string seller)
         {
-            return GetSnapshot(seller).Records.Where(KnowledgeV2AuthorityPolicy.IsProductionApproved).GroupBy(KnowledgeEngineV2Semantics.FactKey).Where(g => !string.IsNullOrWhiteSpace(g.Key) && g.Count() > 1).Select(g => new KnowledgeV2Conflict { FactKey = g.Key, Subject = g.First().Subject, Predicate = g.First().Predicate, Records = g.ToList() }).Where(x => HasAnswerDisagreement(x.Records)).ToList();
+            return GetConflictsForRecords(KnowledgeEngineV2Repository.LoadAll(seller));
+        }
+
+        internal static List<KnowledgeV2Conflict> GetConflictsForRecords(IEnumerable<KnowledgeV2Record> records)
+        {
+            return records.Where(KnowledgeV2AuthorityPolicy.IsProductionApproved).GroupBy(KnowledgeEngineV2Semantics.FactKey).Where(g => !string.IsNullOrWhiteSpace(g.Key) && g.Count() > 1).Select(g => new KnowledgeV2Conflict { FactKey = g.Key, Subject = g.First().Subject, Predicate = g.First().Predicate, Records = g.ToList() }).Where(x => HasAnswerDisagreement(x.Records)).ToList();
+        }
+
+        internal static bool TryResolveConflict(string seller, string expectedFingerprint, string factKey, string selectedId, bool asCandidate)
+        {
+            var records = KnowledgeEngineV2Repository.LoadAll(seller);
+            if (string.IsNullOrWhiteSpace(expectedFingerprint) ||
+                KnowledgeEngineV2Repository.ComputeCloudSyncFingerprint(records) != expectedFingerprint) return false;
+            var conflict = GetConflictsForRecords(records).SingleOrDefault(x => x.FactKey == factKey);
+            if (conflict == null || !conflict.Records.Any(x => x.Id == selectedId)) return false;
+            foreach (var record in conflict.Records.Where(x => x.Id != selectedId))
+            {
+                record.Enabled = false;
+                record.Status = asCandidate ? "candidate" : "disabled";
+                if (asCandidate) record.Type = "learning_candidate";
+                record.UpdatedAt = DateTime.Now;
+            }
+            // One CAS transaction for the entire group; never apply a partial resolution.
+            return KnowledgeEngineV2Repository.TryReplaceAllIfUnchanged(seller, expectedFingerprint, records);
         }
 
         public static KnowledgeV2Stats GetStats(string seller)

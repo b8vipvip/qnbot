@@ -49,7 +49,7 @@ def test_apply_is_manual_and_refuses_to_overwrite_newer_knowledge():
     assert 'MarkStatus(seller, row, "stale"' in apply
     assert "record.Answer = row.ProposedAnswer.Trim();" in apply
     assert "record.LastVerifiedAt = DateTime.Now;" in apply
-    assert "KnowledgeEngineV2Repository.TrySaveEditorRecord(seller, record, currentFingerprint)" in apply
+    assert "KnowledgeEngineV2Repository.TrySaveEditorRecord(seller, record, currentFingerprint," in apply
     assert 'MarkStatus(seller, row, "applied"' in apply
 
 

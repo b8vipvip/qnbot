@@ -355,26 +355,39 @@ def _clear_login_attempts(request: Request) -> None:
         _LOGIN_ATTEMPTS.pop(key, None)
 
 
-def _command_rows(client_id: int) -> List[Dict[str, Any]]:
+def _command_rows(client_id: int, shop_key: str = "", device_id: str = "") -> List[Dict[str, Any]]:
+    commands=[]
     with _cp.db() as conn:
+        conn.execute("BEGIN IMMEDIATE")
         rows = conn.execute(
             """
-            SELECT id,command_type,payload_json,created_at
+            SELECT id,command_type,payload_json,created_at,status
             FROM bot_commands
-            WHERE client_id=? AND status='pending'
+            WHERE client_id=? AND (status='pending' OR
+                (command_type='knowledge_v2_operation' AND status='cancel_requested'))
             ORDER BY id ASC LIMIT 30
             """,
             (client_id,),
         ).fetchall()
-    return [
-        {
-            "id": int(row["id"]),
-            "type": row["command_type"],
-            "payload": _parse(row["payload_json"], {}),
-            "created_at": row["created_at"],
-        }
-        for row in rows
-    ]
+        for row in rows:
+            payload=_parse(row["payload_json"],{})
+            kind=row["command_type"]
+            if kind=="knowledge_v2_operation":
+                if not shop_key or payload.get("shop_key")!=shop_key or not device_id or payload.get("device_id")!=device_id:
+                    continue
+                bound=conn.execute("SELECT shop_key FROM bot_client_shop_binding WHERE client_id=?",(client_id,)).fetchone()
+                if not bound or bound["shop_key"]!=shop_key:
+                    continue
+                if row["status"]=="cancel_requested":
+                    kind="knowledge_v2_operation_cancel"
+                else:
+                    # Atomically claim exactly once before returning the command.
+                    payload["claim"]=secrets.token_hex(24)
+                    conn.execute("""UPDATE bot_commands SET status='running',payload_json=?,completed_at=?
+                        WHERE id=? AND client_id=? AND status='pending'""",
+                        (_json(payload),_now(),row["id"],client_id))
+            commands.append({"id":int(row["id"]),"type":kind,"payload":payload,"created_at":row["created_at"]})
+    return commands
 
 
 def _decode_message_attachment(item: Dict[str, Any], withdrawn: bool):
@@ -483,19 +496,31 @@ def _apply_command_results(client_id: int, results: List[Dict[str, Any]]) -> Non
         error = _safe(result.get("error"), 1000)
         result_json = result.get("result") if isinstance(result.get("result"), dict) else {}
         with _cp.db() as conn:
+            conn.execute("BEGIN IMMEDIATE")
             row = conn.execute(
-                "SELECT command_type,payload_json FROM bot_commands WHERE id=? AND client_id=?",
+                "SELECT command_type,payload_json,status FROM bot_commands WHERE id=? AND client_id=?",
                 (command_id, client_id),
             ).fetchone()
             if not row:
                 continue
+            new_status="completed" if success else "failed"
+            if row["command_type"]=="knowledge_v2_operation":
+                expected=_parse(row["payload_json"],{}).get("claim","")
+                supplied=result.get("claim","")
+                if row["status"] not in ("running","cancel_requested") or not expected or not isinstance(supplied,str) or not secrets.compare_digest(expected,supplied):
+                    continue
+                phase=result.get("phase","")
+                if phase=="running":
+                    new_status=row["status"]
+                elif phase=="cancelled":
+                    new_status="cancelled"
             conn.execute(
                 """
                 UPDATE bot_commands
                 SET status=?,result_json=?,error=?,completed_at=?
                 WHERE id=? AND client_id=?
                 """,
-                ("completed" if success else "failed", _json(result_json), error, _now(), command_id, client_id),
+                (new_status, _json(result_json), error, _now(), command_id, client_id),
             )
             if row["command_type"] == "send_text":
                 conn.execute(
@@ -530,6 +555,8 @@ class AdminClientInput(BaseModel):
 
 
 class SyncInput(BaseModel):
+    shop_key: str = ""
+    knowledge_device_id: str = ""
     status: Dict[str, Any] = Field(default_factory=dict)
     current_settings: Dict[str, Any] = Field(default_factory=dict)
     messages: List[Dict[str, Any]] = Field(default_factory=list)
@@ -799,6 +826,15 @@ def runtime_bot_web_sync(
             """,
             (_json(status_data), _json(current_settings), app_version, _json(sellers), _now(), _now(), client_id),
         )
+    # Only a registered device in the authoritative shop binding can receive operations.
+    device_id=data.knowledge_device_id
+    if len(device_id)==32 and all(c in "0123456789abcdef" for c in device_id):
+        with _cp.db() as conn:
+            bound=conn.execute("SELECT shop_key FROM bot_client_shop_binding WHERE client_id=?",(client_id,)).fetchone()
+            if bound and bound["shop_key"]==data.shop_key:
+                conn.execute("""INSERT INTO bot_knowledge_v2_devices(client_id,shop_key,device_id,last_seen_at)
+                    VALUES(?,?,?,?) ON CONFLICT(client_id,shop_key,device_id) DO UPDATE SET last_seen_at=excluded.last_seen_at""",
+                    (client_id,data.shop_key,device_id,_now()))
     settings = _settings_for(client_id)["desired"]
     if bool(settings.get("message_sync_enabled", True)):
         for item in data.messages[:500]:
@@ -810,7 +846,7 @@ def runtime_bot_web_sync(
         "ok": True,
         "server_time": _now(),
         "desired_settings": settings,
-        "commands": _command_rows(client_id),
+        "commands": _command_rows(client_id, data.shop_key, device_id),
     }
 
 

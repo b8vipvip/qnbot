@@ -47,7 +47,7 @@ def test_old_history_checkpoints_are_migrated_and_forced_to_rescan():
         source.index("internal static BuyerHistoryScanResumeInfo Latest")
     ]
 
-    assert "private const int Schema = 3;" in source
+    assert "private const int Schema = 4;" in source
     assert "var requiresFullRescan = value.SchemaVersion == 1 || value.SchemaVersion == 2;" in decode
     assert "value.Contacts = new List<string>();" in decode
     assert "value.Completed = new List<string>();" in decode
@@ -74,3 +74,24 @@ def test_resume_keeps_old_pending_roster_and_fails_closed_on_malformed_history()
     assert "checkpoint.ArchivedMessages -= count" in source
     assert "history_pagination_incomplete:invalid_has_more" in source
     assert 'excluded == "history_missing_timestamp" || excluded == "history_seller_identity_mismatch"' in source
+
+def test_history_learning_commits_each_contact_before_checkpoint_and_never_reuses_archive_only_completion():
+    scan=read("src/Bot/Knowledge/ChatHistoryScanService.cs")
+    checkpoint=read("src/Bot/Knowledge/BuyerHistoryScanCheckpointStore.cs")
+    window=read("src/Bot/Knowledge/ChatHistoryScanWindow.cs")
+    method=scan.split("public async Task<ChatHistoryScanResult> ScanBuyerMessagesAsync",1)[1].split("public async Task<ChatHistoryScanResult> ScanAndImportAsync",1)[0]
+    assert "if (options.LearnKnowledge)" in method
+    assert method.index("analysis.SourceEvidenceByToken = sourceEvidence") < method.index("PromoteHistoryImport(seller, shopKey, analysis)") < method.index("checkpoint.Completed.Add(buyer)")
+    assert "checkpoint.AnalyzedHumanPairs -= pairCount" in method
+    assert "value.LearnKnowledge != options.LearnKnowledge" in checkpoint
+    assert "value.LearnKnowledge = false" in checkpoint
+    assert "buyers.Where(x => x.HasNativeMessageId)" in scan
+    assert "sellers.Where(x => x.HasNativeMessageId)" in scan
+    assert "options.LearnKnowledge = true" in window and "ScanBuyerMessagesAsync" in window
+
+def test_historical_evidence_does_not_store_fallback_message_keys():
+    scan=read("src/Bot/Knowledge/ChatHistoryScanService.cs")
+    assert "NativeEvidenceKey = message.mcode" in scan
+    assert "buyers.Where(x => x.HasNativeMessageId).Select(x => (x.NativeEvidenceKey" in scan
+    assert "sellers.Where(x => x.HasNativeMessageId).Select(x => (x.NativeEvidenceKey" in scan
+    assert "previousSellerMessageId = (turn.NativeEvidenceKey" in scan

@@ -26,6 +26,7 @@ namespace Bot.Knowledge
         public int MaxContacts { get; set; }
         // Supplied only when user explicitly elects to continue a stored job.
         public string ResumeCheckpointId { get; set; }
+        public bool LearnKnowledge { get; set; }
 
         public ChatHistoryScanOptions()
         {
@@ -85,6 +86,12 @@ namespace Bot.Knowledge
         public string ResumeCheckpointId { get; set; }
         public int PreviouslyCompletedContacts { get; set; }
         public bool ContactCoverageVerified { get; set; }
+        public int ObservedTurns { get; set; }
+        public int AnalyzedHumanPairs { get; set; }
+        public int ModelReferencedPairs { get; set; }
+        public int PublishedKnowledge { get; set; }
+        public int CandidateKnowledge { get; set; }
+        public int DuplicateKnowledge { get; set; }
         public string CoverageWarning { get; set; }
     }
 
@@ -111,6 +118,8 @@ namespace Bot.Knowledge
             public string Text;
             public DateTime Time;
             public string MessageKey;
+            public bool HasNativeMessageId;
+            public string NativeEvidenceKey;
             public bool IsBotReply;
         }
 
@@ -178,8 +187,9 @@ namespace Bot.Knowledge
 
 
         // Message-management backfill: enumerate shop contacts and fetch raw history
-        // using the established scanner, but do NOT send any history to AI, write V2
-        // knowledge or persist the buyer identity. Each row retains only sanitized text.
+        // using the established scanner. Ordinary archive-only scans do not call AI.
+        // Explicit learning scans additionally commit evidence-backed V2 records
+        // before advancing the same per-contact durable checkpoint.
         public async Task<ChatHistoryScanResult> ScanBuyerMessagesAsync(
             string seller, ChatHistoryScanOptions options,
             Action<ChatHistoryScanProgress> progress, CancellationToken token)
@@ -193,6 +203,7 @@ namespace Bot.Knowledge
             if (shop == null || !shop.HasStableSellerId || string.IsNullOrWhiteSpace(shop.ShopKey))
                 throw new InvalidOperationException("当前店铺 ShopKey 不可用，已阻止历史扫描。");
             var shopKey = shop.ShopKey;
+            seller = shop.SellerNick;
             if (!ActiveBuyerScans.TryAdd(shopKey, 0))
                 throw new InvalidOperationException("当前店铺已有历史扫描任务，不能同时切换同一千牛会话。");
 
@@ -400,15 +411,49 @@ namespace Bot.Knowledge
                                 seller, turn.Text, receipt, turn.Time, botReply);
                             count++;
                         }
-                        // The archive observes idempotent message keys. Only
-                        // checkpoint a contact after its entire pagination and
-                        // archive write succeeded. A crash before Save will
-                        // replay the contact safely on the next run.
+                        var pairCount = 0;
+                        var referenced = 0;
+                        var promoted = new KnowledgeV2HistoryPromotionResult();
+                        if (options.LearnKnowledge)
+                        {
+                            Dictionary<string, KnowledgeV2ImportEvidence> sourceEvidence;
+                            var transcript = BuildTranscript(new List<ContactHistory>
+                                { new ContactHistory { Buyer = buyer, Turns = turns } }, options, out sourceEvidence);
+                            pairCount = sourceEvidence.Count;
+                            if (pairCount > 0)
+                            {
+                                Report(progress, "正在学习本联系人真实人工问答", ordinal, names.Count,
+                                    string.Empty, read + count, checkpoint.AnalyzedHumanPairs + pairCount, transcript.Length);
+                                var ai = new KnowledgeAiService();
+                                var analysis = await ai.ImportAsync(new ClipboardKnowledgeData { Text = transcript },
+                                    BotFeatureStore.GetSmartImportTimeoutSeconds(), token,
+                                    () => token.IsCancellationRequested ? SmartImportCancelSource.UserCancel : SmartImportCancelSource.None,
+                                    phaseText => Report(progress, phaseText, ordinal, names.Count, string.Empty,
+                                        read + count, checkpoint.AnalyzedHumanPairs + pairCount, transcript.Length));
+                                token.ThrowIfCancellationRequested();
+                                requireOriginalSession();
+                                if (analysis == null) throw new InvalidOperationException("历史AI分析没有返回结果");
+                                analysis.SourceEvidenceByToken = sourceEvidence;
+                                referenced = (analysis.AddedItems ?? new List<KnowledgeV2Record>())
+                                    .SelectMany(x => x.ImportEvidenceTokens ?? new List<string>())
+                                    .Where(sourceEvidence.ContainsKey).Distinct(StringComparer.Ordinal).Count();
+                                promoted = KnowledgeV2HistoryImportService.PromoteHistoryImport(seller, shopKey, analysis);
+                            }
+                        }
+                        // Only checkpoint after complete pagination, archive and (when
+                        // requested) AI analysis and durable V2 promotion. Replaying a
+                        // contact after a crash is safe because V2 inserts are add-only.
                         requireOriginalSession();
                         if (successful.Add(buyer))
                         {
                             checkpoint.Completed.Add(buyer);
                             checkpoint.ArchivedMessages += count;
+                            checkpoint.ObservedTurns += turns.Count;
+                            checkpoint.AnalyzedHumanPairs += pairCount;
+                            checkpoint.ModelReferencedPairs += referenced;
+                            checkpoint.PublishedKnowledge += promoted.Published;
+                            checkpoint.CandidateKnowledge += promoted.Candidates;
+                            checkpoint.DuplicateKnowledge += promoted.DuplicateSkipped;
                             try { BuyerHistoryScanCheckpointStore.Save(seller, checkpoint); }
                             catch
                             {
@@ -416,6 +461,12 @@ namespace Bot.Knowledge
                                 // did not commit; the next retry must re-read this buyer.
                                 checkpoint.Completed.Remove(buyer);
                                 checkpoint.ArchivedMessages -= count;
+                                checkpoint.ObservedTurns -= turns.Count;
+                                checkpoint.AnalyzedHumanPairs -= pairCount;
+                                checkpoint.ModelReferencedPairs -= referenced;
+                                checkpoint.PublishedKnowledge -= promoted.Published;
+                                checkpoint.CandidateKnowledge -= promoted.Candidates;
+                                checkpoint.DuplicateKnowledge -= promoted.DuplicateSkipped;
                                 successful.Remove(buyer);
                                 throw;
                             }
@@ -514,6 +565,13 @@ namespace Bot.Knowledge
                     ScannedContacts = successful.Count,
                     FailedContacts = failed,
                     MessageCount = read,
+                    ObservedTurns = checkpoint.ObservedTurns,
+                    PairCount = checkpoint.AnalyzedHumanPairs,
+                    AnalyzedHumanPairs = checkpoint.AnalyzedHumanPairs,
+                    ModelReferencedPairs = checkpoint.ModelReferencedPairs,
+                    PublishedKnowledge = checkpoint.PublishedKnowledge,
+                    CandidateKnowledge = checkpoint.CandidateKnowledge,
+                    DuplicateKnowledge = checkpoint.DuplicateKnowledge,
                     RetryCount = evidence.Record.RetryAttempts,
                     InterruptionCount = evidence.Record.InterruptedContacts,
                     FilteredMessages = evidence.Record.ExcludedMessages,
@@ -1569,6 +1627,12 @@ namespace Bot.Knowledge
             {
                 Role = role, Text = text, Time = time,
                 MessageKey = IncomingMessageSafety.BuildMessageKey(message, text),
+                HasNativeMessageId = (message.mcode != null && !string.IsNullOrWhiteSpace(message.mcode.messageId))
+                    || (message.ext != null && message.ext.ww_msgid != 0),
+                NativeEvidenceKey = message.mcode != null && !string.IsNullOrWhiteSpace(message.mcode.messageId)
+                    ? "mcode:" + (message.mcode.clientId ?? string.Empty) + ":" + message.mcode.messageId
+                    : message.ext != null && message.ext.ww_msgid != 0
+                        ? "ww:" + message.ext.ww_msgid.ToString(System.Globalization.CultureInfo.InvariantCulture) : string.Empty,
                 IsBotReply = string.Equals(role, "seller", StringComparison.Ordinal)
                     && IsBotMarkedSellerReply(text)
             };
@@ -1712,10 +1776,10 @@ namespace Bot.Knowledge
                 {
                     var question = NormalizeText(string.Join(" ", buyers.Select(x => x.Text)));
                     var answer = NormalizeText(string.Join(" ", sellers.Select(x => x.Text)));
-                    var questionIds = buyers.Select(x => (x.MessageKey ?? string.Empty).Trim())
+                    var questionIds = buyers.Where(x => x.HasNativeMessageId).Select(x => (x.NativeEvidenceKey ?? string.Empty).Trim())
                         .Where(x => x.Length > 0 && !x.StartsWith("scan-turn:", StringComparison.Ordinal))
                         .Distinct(StringComparer.Ordinal).ToList();
-                    var answerIds = sellers.Select(x => (x.MessageKey ?? string.Empty).Trim())
+                    var answerIds = sellers.Where(x => x.HasNativeMessageId).Select(x => (x.NativeEvidenceKey ?? string.Empty).Trim())
                         .Where(x => x.Length > 0 && !x.StartsWith("scan-turn:", StringComparison.Ordinal))
                         .Distinct(StringComparer.Ordinal).ToList();
                     var contextIds = string.IsNullOrWhiteSpace(previousSellerMessageId)
@@ -1795,7 +1859,7 @@ namespace Bot.Knowledge
                     buyers.Clear();
                     sellers.Clear();
                     previousSeller = turn.Text;
-                    previousSellerMessageId = (turn.MessageKey ?? string.Empty).Trim();
+                    previousSellerMessageId = (turn.NativeEvidenceKey ?? string.Empty).Trim();
                     previousSellerTime = turn.Time;
                     botAnsweredPendingQuestion = false;
                 }
@@ -1809,7 +1873,7 @@ namespace Bot.Knowledge
                     // A human seller message before the buyer's short answer is context,
                     // not an answer. Bot echoes are deliberately excluded above.
                     previousSeller = turn.Text;
-                    previousSellerMessageId = (turn.MessageKey ?? string.Empty).Trim();
+                    previousSellerMessageId = (turn.NativeEvidenceKey ?? string.Empty).Trim();
                     previousSellerTime = turn.Time;
                 }
             }

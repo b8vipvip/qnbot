@@ -28,6 +28,13 @@ namespace Bot.Knowledge
         public List<string> Contacts { get; set; }
         public List<string> Completed { get; set; }
         public int ArchivedMessages { get; set; }
+        public bool LearnKnowledge { get; set; }
+        public int ObservedTurns { get; set; }
+        public int AnalyzedHumanPairs { get; set; }
+        public int ModelReferencedPairs { get; set; }
+        public int PublishedKnowledge { get; set; }
+        public int CandidateKnowledge { get; set; }
+        public int DuplicateKnowledge { get; set; }
     }
 
     internal sealed class BuyerHistoryScanResumeInfo
@@ -36,6 +43,18 @@ namespace Bot.Knowledge
         public string UpdatedAt { get; set; }
         public int Total { get; set; }
         public int Completed { get; set; }
+        public bool LearnKnowledge { get; set; }
+        public int ArchivedMessages { get; set; }
+        public int ObservedTurns { get; set; }
+        public int AnalyzedHumanPairs { get; set; }
+        public int ModelReferencedPairs { get; set; }
+        public int PublishedKnowledge { get; set; }
+        public int CandidateKnowledge { get; set; }
+        public int DuplicateKnowledge { get; set; }
+        public bool ScanAll { get; set; }
+        public int MaxContacts { get; set; }
+        public DateTime? StartTime { get; set; }
+        public DateTime? EndTime { get; set; }
         public string State { get; set; }
     }
 
@@ -44,7 +63,7 @@ namespace Bot.Knowledge
         private static readonly Regex IdPattern = new Regex(
             @"^\d{8}T\d{6}Z-[0-9a-f]{10}$", RegexOptions.Compiled);
         private static readonly object Sync = new object();
-        private const int Schema = 3;
+        private const int Schema = 4;
 
         private static string Root(string seller)
         {
@@ -94,6 +113,14 @@ namespace Bot.Knowledge
                 value.ArchivedMessages = 0;
                 value.State = "interrupted";
             }
+            else if (value.SchemaVersion == 3)
+            {
+                // Version 3 was archive-only. Never use its completed roster as
+                // proof that AI learning completed.
+                value.SchemaVersion = Schema;
+                value.LearnKnowledge = false;
+                Save(seller, value);
+            }
             else if (value.SchemaVersion != Schema)
             {
                 throw new InvalidDataException("断点记录版本不受支持。");
@@ -107,7 +134,7 @@ namespace Bot.Knowledge
             return value;
         }
 
-        internal static BuyerHistoryScanResumeInfo Latest(string seller)
+        internal static BuyerHistoryScanResumeInfo Latest(string seller, bool? learnKnowledge = false)
         {
             var root = Root(seller);
             if (!Directory.Exists(root)) return null;
@@ -117,10 +144,17 @@ namespace Bot.Knowledge
                 // Do not mask damaged latest resume data by silently picking an
                 // older task; the operator must be informed.
                 var value = Decode(seller, path);
+                if (learnKnowledge.HasValue && value.LearnKnowledge != learnKnowledge.Value) continue;
                 return new BuyerHistoryScanResumeInfo
                 {
                     Id = value.Id, UpdatedAt = value.UpdatedAt,
                     Total = value.Contacts.Count, Completed = value.Completed.Count,
+                    LearnKnowledge = value.LearnKnowledge, ArchivedMessages = value.ArchivedMessages,
+                    ObservedTurns = value.ObservedTurns, AnalyzedHumanPairs = value.AnalyzedHumanPairs,
+                    ModelReferencedPairs = value.ModelReferencedPairs, PublishedKnowledge = value.PublishedKnowledge,
+                    CandidateKnowledge = value.CandidateKnowledge, DuplicateKnowledge = value.DuplicateKnowledge,
+                    ScanAll = value.ScanAll, MaxContacts = value.MaxContacts,
+                    StartTime = value.StartTime, EndTime = value.EndTime,
                     State = value.State
                 };
             }
@@ -136,7 +170,7 @@ namespace Bot.Knowledge
                 if (!File.Exists(path))
                     throw new FileNotFoundException("未找到本店的断点记录。");
                 var value = Decode(seller, path);
-                if (value.ScanAll != options.ScanAll
+                if (value.LearnKnowledge != options.LearnKnowledge || value.ScanAll != options.ScanAll
                     || value.MaxContacts != options.MaxContacts
                     || value.StartTime != options.StartTime
                     || value.EndTime != options.EndTime)
@@ -154,6 +188,7 @@ namespace Bot.Knowledge
             {
                 SchemaVersion = Schema, Id = id, CreatedAt = now, UpdatedAt = now,
                 LastRunId = id, State = "running", ScanAll = options.ScanAll,
+                LearnKnowledge = options.LearnKnowledge,
                 MaxContacts = options.MaxContacts, StartTime = options.StartTime,
                 EndTime = options.EndTime, Contacts = new List<string>(),
                 Completed = new List<string>()

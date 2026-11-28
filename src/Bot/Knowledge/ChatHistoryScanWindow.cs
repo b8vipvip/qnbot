@@ -1,4 +1,5 @@
-﻿using System;
+﻿using Bot.ShopScope;
+using System;
 using System.Text;
 using System.Threading;
 using System.Windows;
@@ -167,6 +168,37 @@ namespace Bot.Knowledge
             var options = BuildOptions();
             if (options == null) return;
 
+            var shop = ShopContextLocator.ResolveRuntimeByShopKey(_shopKey);
+            if (shop == null || !shop.HasStableSellerId || shop.ShopKey != _shopKey)
+            {
+                MessageBox.Show(_owner, "无法绑定历史学习所属店铺。");
+                return;
+            }
+            options.LearnKnowledge = true;
+            try
+            {
+                using (ShopSettingsScope.Enter(shop))
+                {
+                var prior = BuyerHistoryScanCheckpointStore.Latest(shop.SellerNick, true);
+                if (prior != null && prior.State != "completed")
+                {
+                    var decision = MessageBox.Show(_owner, "发现未完成的历史学习断点。是：继续原任务；否：重新扫描；取消：退出。",
+                        "历史学习断点", MessageBoxButton.YesNoCancel, MessageBoxImage.Question);
+                    if (decision == MessageBoxResult.Cancel) return;
+                    if (decision == MessageBoxResult.Yes)
+                    {
+                        options.ResumeCheckpointId = prior.Id;
+                        options.ScanAll = prior.ScanAll; options.MaxContacts = prior.MaxContacts;
+                        options.StartTime = prior.StartTime; options.EndTime = prior.EndTime;
+                    }
+                }
+            }
+            }
+            catch (Exception ex)
+            {
+                MessageBox.Show(_owner, "读取历史学习断点失败：" + ex.Message);
+                return;
+            }
             _running = true;
             _cts = new CancellationTokenSource();
             SetRunningState(true);
@@ -176,8 +208,10 @@ namespace Bot.Knowledge
             try
             {
                 var service = new ChatHistoryScanService();
-                var scan = await service.ScanAndImportAsync(
-                    _shopKey,
+                ChatHistoryScanResult scan;
+                using (ShopSettingsScope.Enter(shop))
+                scan = await service.ScanBuyerMessagesAsync(
+                    shop.SellerNick,
                     options,
                     p => Dispatcher.BeginInvoke(new Action(() =>
                     {
@@ -186,15 +220,16 @@ namespace Bot.Knowledge
                     })),
                     _cts.Token);
 
-                _summary.Text = "聊天扫描完成，正在把整理结果标准化为当前 Knowledge V2...";
-                var promoted = KnowledgeV2HistoryImportService.PromoteHistoryImport(_seller, _shopKey, scan.ImportResult);
+                _summary.Text = "本轮历史学习结束，已完成联系人的 V2 写入及断点已保存。";
                 var sb = new StringBuilder();
                 sb.Append("整理完成：联系人 ").Append(scan.ScannedContacts).Append("/").Append(scan.ContactCount);
-                sb.Append("，有效聊天消息 ").Append(scan.MessageCount);
-                sb.Append("，有效问答轮次 ").Append(scan.PairCount);
-                sb.Append("，V2发布 ").Append(promoted.Published);
-                sb.Append("，V2候选 ").Append(promoted.Candidates);
-                sb.Append("，V2重复跳过 ").Append(promoted.DuplicateSkipped);
+                sb.Append("，有效聊天消息 ").Append(scan.ObservedTurns);
+                sb.Append("，有效问答轮次 ").Append(scan.AnalyzedHumanPairs);
+                sb.Append("，模型返回的证据轮次 ").Append(scan.ModelReferencedPairs);
+                sb.Append("，V2发布 ").Append(scan.PublishedKnowledge);
+                sb.Append("，V2候选 ").Append(scan.CandidateKnowledge);
+                sb.Append("，V2重复跳过 ").Append(scan.DuplicateKnowledge);
+                sb.Append("。").Append(scan.CoverageWarning);
                 if (scan.FailedContacts > 0) sb.Append("，读取失败 ").Append(scan.FailedContacts);
                 _summary.Text = sb.ToString();
                 _progress.Text = sb + Environment.NewLine
@@ -247,7 +282,7 @@ namespace Bot.Knowledge
                 ScanAll = all,
                 StartTime = all ? (DateTime?)null : _start.SelectedDate.Value.Date,
                 EndTime = all ? (DateTime?)null : _end.SelectedDate.Value.Date,
-                MaxContacts = 1000
+                MaxContacts = 5000
             };
         }
 

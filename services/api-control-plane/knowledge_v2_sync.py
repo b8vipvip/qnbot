@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import hashlib
+import base64
 import math
 import time
 import uuid
@@ -25,6 +26,9 @@ class KnowledgeV2FeedbackInput(BaseModel):
     epoch: str = ""
     cursor: int = 0
     events: list[dict[str, Any]] = []
+    device_id: str = ""
+    local_event_count: int | None = None
+    local_event_digest: str = ""
 
 class KnowledgeV2WebInput(BaseModel):
     records: list[dict[str, Any]]
@@ -39,6 +43,20 @@ class KnowledgeV2PackageInput(BaseModel):
 class KnowledgeV2RestoreInput(BaseModel):
     expected_revision: int
     restore_confirmed: bool = False
+
+class KnowledgeV2OperationInput(BaseModel):
+    action: str
+    confirmed: bool = False
+    candidate_id: str = ""
+    knowledge_id: str = ""
+    revision_id: str = ""
+    fingerprint: str = ""
+    fact_key: str = ""
+    checkpoint_id: str = ""
+    reason: str = ""
+    max_contacts: int = 5000
+    device_id: str = ""
+    learn_knowledge: bool = False
 
 class KnowledgeV2SmartImportInput(BaseModel):
     text: str
@@ -72,6 +90,16 @@ def init_db():
             )
         """)
 
+        conn.execute("""CREATE TABLE IF NOT EXISTS bot_knowledge_v2_devices (
+            client_id INTEGER NOT NULL, shop_key TEXT NOT NULL, device_id TEXT NOT NULL,
+            last_seen_at TEXT NOT NULL, PRIMARY KEY(client_id,shop_key,device_id),
+            FOREIGN KEY(client_id) REFERENCES client_tokens(id) ON DELETE CASCADE)""")
+        conn.execute("""CREATE TABLE IF NOT EXISTS bot_knowledge_v2_feedback_receipts (
+            client_id INTEGER NOT NULL, shop_key TEXT NOT NULL, device_id TEXT NOT NULL,
+            event_count INTEGER NOT NULL, event_digest TEXT NOT NULL, cursor INTEGER NOT NULL,
+            verified INTEGER NOT NULL, received_at TEXT NOT NULL,
+            PRIMARY KEY(client_id,shop_key,device_id),
+            FOREIGN KEY(client_id) REFERENCES client_tokens(id) ON DELETE CASCADE)""")
         conn.execute("""CREATE TABLE IF NOT EXISTS bot_knowledge_v2_backups (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             client_id INTEGER NOT NULL, revision INTEGER NOT NULL, records_json TEXT NOT NULL,
@@ -104,6 +132,14 @@ def _feedback_binding(conn, client_id, requested=None):
     if not bound or (requested is not None and requested != bound):
         raise HTTPException(status_code=403, detail="反馈同步令牌未绑定该店铺")
     return bound
+
+def _feedback_digest(conn,client_id,shop_key,cutoff):
+    rows=conn.execute("""SELECT event_id,seq,knowledge_id,event_type,utc_ticks FROM bot_knowledge_v2_feedback
+        WHERE client_id=? AND shop_key=? AND utc_ticks>=? ORDER BY event_id""",(client_id,shop_key,cutoff)).fetchall()
+    canonical=["\n".join((row["event_id"],base64.b64encode(row["knowledge_id"].encode("utf-8")).decode("ascii"),
+        row["event_type"],str(row["utc_ticks"]))) for row in rows]
+    digest=hashlib.sha256("\n".join(canonical).encode("utf-8")).hexdigest()
+    return len(rows),digest,max((int(row["seq"]) for row in rows),default=0)
 
 def _validate_feedback(events, now):
     if len(events) > 200:
@@ -153,6 +189,23 @@ def runtime_feedback_sync(payload: KnowledgeV2FeedbackInput, request: Request, x
         rows = conn.execute("""SELECT seq,event_id,knowledge_id,event_type,utc_ticks FROM bot_knowledge_v2_feedback
             WHERE client_id=? AND shop_key=? AND seq>? ORDER BY seq LIMIT 201""", (client_id,shop_key,cursor)).fetchall()
         page = rows[:200]
+        # A proof is based on the device's already persisted cursor and local ID
+        # digest, not just its HTTP success. Require an empty outgoing batch and
+        # a registered device, so uploading an event cannot itself prove replay.
+        if (payload.device_id and payload.local_event_count is not None and payload.local_event_count>=0
+            and len(payload.local_event_digest)==64 and all(c in "0123456789abcdef" for c in payload.local_event_digest)
+            and conn.execute("""SELECT 1 FROM bot_knowledge_v2_devices WHERE client_id=?
+                AND shop_key=? AND device_id=?""",(client_id,shop_key,payload.device_id)).fetchone()):
+            count,digest,highwater=_feedback_digest(conn,client_id,shop_key,cutoff)
+            verified=int(not events and payload.epoch==epoch and payload.cursor>=highwater
+                         and payload.local_event_count==count and payload.local_event_digest==digest)
+            conn.execute("""INSERT INTO bot_knowledge_v2_feedback_receipts
+                (client_id,shop_key,device_id,event_count,event_digest,cursor,verified,received_at)
+                VALUES(?,?,?,?,?,?,?,?) ON CONFLICT(client_id,shop_key,device_id) DO UPDATE SET
+                event_count=excluded.event_count,event_digest=excluded.event_digest,cursor=excluded.cursor,
+                verified=excluded.verified,received_at=excluded.received_at""",
+                (client_id,shop_key,payload.device_id,payload.local_event_count,payload.local_event_digest,
+                 payload.cursor,verified,_cp.iso_now()))
         return {"epoch":epoch,"cursor":int(page[-1]["seq"]) if page else cursor,
             "has_more":len(rows)>200,"ack_ids":[e[0] for e in events],
             "events":[{"Id":row["event_id"],"KnowledgeId":row["knowledge_id"],"EventType":row["event_type"],
@@ -480,6 +533,144 @@ def runtime_sync(payload: KnowledgeV2SyncInput, request: Request, x_shop_key: st
         return _save(client_id,payload.records,"windows",expected_revision=payload.revision)
     return current
 
+
+_OPERATION_ACTIONS = {"history_status","history_scan","history_resume","revision_generate","revision_list",
+    "revision_apply","revision_reject","conflict_list","conflict_resolve","rollback_list","rollback"}
+_OPERATION_MUTATIONS = {"history_scan","history_resume","revision_generate","revision_apply","revision_reject","conflict_resolve","rollback"}
+
+@router.get("/api/bot-web/knowledge-v2/devices")
+def web_v2_devices(client=Depends(bot_web_console._web_client)):
+    from datetime import datetime,timezone,timedelta
+    with _cp.db() as conn:
+        shop_key=_feedback_binding(conn,int(client["id"]))
+        client_id=int(client["id"])
+        rows=conn.execute("""SELECT d.device_id,d.last_seen_at,r.event_count,r.event_digest,r.verified,r.received_at
+            FROM bot_knowledge_v2_devices d LEFT JOIN bot_knowledge_v2_feedback_receipts r
+            ON d.client_id=r.client_id AND d.shop_key=r.shop_key AND d.device_id=r.device_id
+            WHERE d.client_id=? AND d.shop_key=? ORDER BY d.last_seen_at DESC LIMIT 30""",(client_id,shop_key)).fetchall()
+        count,digest,_=_feedback_digest(conn,client_id,shop_key,_feedback_now_ticks()-180*86400*_TICKS_PER_SECOND)
+    cutoff=datetime.now(timezone.utc)-timedelta(seconds=90)
+    result=[]
+    for row in rows:
+        try:
+            seen=datetime.fromisoformat(row["last_seen_at"])
+            if seen.tzinfo is None: seen=seen.replace(tzinfo=timezone.utc)
+            online=seen>=cutoff
+        except (ValueError,TypeError):
+            online=False
+        try:
+            receipt=datetime.fromisoformat(row["received_at"])
+            if receipt.tzinfo is None: receipt=receipt.replace(tzinfo=timezone.utc)
+            fresh=receipt>=cutoff
+        except (ValueError,TypeError):
+            fresh=False
+        verified=bool(online and fresh and row["verified"] and row["event_count"]==count and row["event_digest"]==digest)
+        result.append({"id":row["device_id"],"last_seen_at":row["last_seen_at"],"online":online,
+            "feedback_verified":verified,"feedback_event_count":row["event_count"],"feedback_receipt_at":row["received_at"]})
+    return {"items":result,"server_feedback_event_count":count,
+        "verified_devices":sum(1 for item in result if item["feedback_verified"]),
+        "two_device_nonempty_convergence":count>0 and sum(1 for item in result if item["feedback_verified"])>=2}
+
+@router.post("/api/bot-web/knowledge-v2/operations")
+def web_v2_operation(payload: KnowledgeV2OperationInput,client=Depends(bot_web_console._web_client)):
+    action=payload.action
+    if action not in _OPERATION_ACTIONS or (action in _OPERATION_MUTATIONS and not payload.confirmed):
+        raise HTTPException(status_code=400,detail="操作无效或未明确确认")
+    for value in (payload.candidate_id,payload.knowledge_id,payload.revision_id,payload.checkpoint_id,payload.reason,payload.fact_key,payload.fingerprint):
+        if len(value)>1000:
+            raise HTTPException(status_code=400,detail="操作参数过长")
+    if not 1<=payload.max_contacts<=5000:
+        raise HTTPException(status_code=400,detail="扫描联系人范围无效")
+    if action in {"revision_apply","revision_reject"} and not payload.candidate_id.strip():
+        raise HTTPException(status_code=400,detail="缺少修订候选ID")
+    if action=="history_resume" and not payload.checkpoint_id.strip():
+        raise HTTPException(status_code=400,detail="缺少历史扫描断点ID")
+    if action in {"conflict_resolve","rollback"} and (not payload.knowledge_id.strip() or not payload.fingerprint.strip()):
+        raise HTTPException(status_code=400,detail="缺少选中知识或版本指纹")
+    if action=="conflict_resolve" and not payload.fact_key.strip():
+        raise HTTPException(status_code=400,detail="缺少冲突事实键")
+    if action=="rollback" and not payload.revision_id.strip():
+        raise HTTPException(status_code=400,detail="缺少目标修订ID")
+    client_id=int(client["id"])
+    with _cp.db() as conn:
+        conn.execute("BEGIN IMMEDIATE")
+        shop_key=_feedback_binding(conn,client_id)
+        if not payload.device_id or not conn.execute("""SELECT 1 FROM bot_knowledge_v2_devices WHERE client_id=?
+            AND shop_key=? AND device_id=?""",(client_id,shop_key,payload.device_id)).fetchone():
+            raise HTTPException(status_code=400,detail="请选择本店已注册的Windows设备")
+        active=conn.execute("""SELECT id FROM bot_commands WHERE client_id=? AND command_type='knowledge_v2_operation'
+            AND status IN ('pending','running','cancel_requested') ORDER BY id DESC LIMIT 1""",(client_id,)).fetchone()
+        if active:
+            raise HTTPException(status_code=409,detail={"message":"本店已有知识操作正在处理","command_id":active["id"]})
+        data=payload.model_dump() if hasattr(payload,"model_dump") else payload.dict()
+        data["shop_key"]=shop_key
+        row=conn.execute("""INSERT INTO bot_commands(client_id,command_type,payload_json,status,result_json,error,created_at)
+            VALUES(?, 'knowledge_v2_operation', ?, 'pending', '{}', '', ?)""",
+            (client_id,json.dumps(data,ensure_ascii=False),_cp.iso_now()))
+        return {"command_id":int(row.lastrowid),"status":"pending"}
+
+@router.get("/api/bot-web/knowledge-v2/operations")
+def web_v2_operations(client=Depends(bot_web_console._web_client)):
+    with _cp.db() as conn:
+        rows=conn.execute("""SELECT id,status,payload_json,created_at,completed_at FROM bot_commands WHERE client_id=?
+            AND command_type='knowledge_v2_operation' ORDER BY id DESC LIMIT 30""",(int(client["id"]),)).fetchall()
+    return {"items":[{"command_id":r["id"],"status":r["status"],"action":json.loads(r["payload_json"] or "{}").get("action"),
+        "device_id":json.loads(r["payload_json"] or "{}").get("device_id"),
+        "created_at":r["created_at"],"updated_at":r["completed_at"]} for r in rows]}
+
+@router.get("/api/bot-web/knowledge-v2/operations/{command_id}")
+def web_v2_operation_status(command_id:int,client=Depends(bot_web_console._web_client)):
+    with _cp.db() as conn:
+        row=conn.execute("""SELECT status,result_json,error,payload_json,created_at,completed_at FROM bot_commands
+            WHERE id=? AND client_id=? AND command_type='knowledge_v2_operation'""",(command_id,int(client["id"]))).fetchone()
+    if not row:
+        raise HTTPException(status_code=404,detail="知识操作不存在")
+    return {"command_id":command_id,"status":row["status"],"result":json.loads(row["result_json"] or "{}"),
+        "error":row["error"] or "","action":json.loads(row["payload_json"] or "{}").get("action"),
+        "device_id":json.loads(row["payload_json"] or "{}").get("device_id"),
+        "created_at":row["created_at"],"updated_at":row["completed_at"]}
+
+@router.post("/api/bot-web/knowledge-v2/operations/{command_id}/cancel")
+def web_v2_operation_cancel(command_id:int,client=Depends(bot_web_console._web_client)):
+    with _cp.db() as conn:
+        conn.execute("BEGIN IMMEDIATE")
+        row=conn.execute("""SELECT status,payload_json FROM bot_commands WHERE id=? AND client_id=?
+            AND command_type='knowledge_v2_operation'""",(command_id,int(client["id"]))).fetchone()
+        if not row:
+            raise HTTPException(status_code=404,detail="知识操作不存在")
+        if row["status"]=="pending":
+            status="cancelled"
+        elif row["status"] in ("running","cancel_requested") and json.loads(row["payload_json"]).get("action") in ("history_scan","history_resume","revision_generate"):
+            status="cancel_requested"
+        else:
+            raise HTTPException(status_code=409,detail="操作已结束或不可中断")
+        conn.execute("UPDATE bot_commands SET status=?,completed_at=? WHERE id=? AND client_id=?",
+            (status,_cp.iso_now(),command_id,int(client["id"])))
+    return {"command_id":command_id,"status":status}
+
+@router.post("/api/bot-web/knowledge-v2/operations/{command_id}/abandon")
+def web_v2_operation_abandon(command_id:int,client=Depends(bot_web_console._web_client)):
+    # A lost dispatch/desktop restart is never automatically replayed: a mutation
+    # might have committed. After a long heartbeat gap the operator may abandon
+    # the unknown result and inspect current state before starting a new operation.
+    from datetime import datetime,timezone,timedelta
+    with _cp.db() as conn:
+        conn.execute("BEGIN IMMEDIATE")
+        row=conn.execute("""SELECT status,completed_at FROM bot_commands WHERE id=? AND client_id=?
+            AND command_type='knowledge_v2_operation'""",(command_id,int(client["id"]))).fetchone()
+        if not row or row["status"] not in ("running","cancel_requested"):
+            raise HTTPException(status_code=409,detail="没有可放弃的执行中任务")
+        try:
+            last=datetime.fromisoformat(row["completed_at"])
+            if last.tzinfo is None:
+                last=last.replace(tzinfo=timezone.utc)
+        except (TypeError,ValueError):
+            raise HTTPException(status_code=409,detail="无法确定任务最后心跳")
+        if datetime.now(timezone.utc)-last<timedelta(minutes=30):
+            raise HTTPException(status_code=409,detail="最近30分钟内仍有领取或执行心跳，禁止放弃")
+        conn.execute("UPDATE bot_commands SET status='abandoned',error=?,completed_at=? WHERE id=? AND client_id=?",
+            ("执行结果未知，请检查当前知识或原设备断点",_cp.iso_now(),command_id,int(client["id"])))
+    return {"command_id":command_id,"status":"abandoned"}
 
 @router.post("/api/bot-web/knowledge-v2/smart-import")
 def web_smart_import(payload: KnowledgeV2SmartImportInput, client=Depends(bot_web_console._web_client)):

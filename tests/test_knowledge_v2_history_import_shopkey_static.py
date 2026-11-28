@@ -13,7 +13,8 @@ def test_history_scan_captures_attached_shopkey_and_refuses_nickname_only_write(
     assert "private readonly string _shopKey;" in page
     assert "_shopKey = KnowledgeCenterV2Context.ResolveShopKey(owner, _seller);" in page
     assert "string.IsNullOrWhiteSpace(_seller) || string.IsNullOrWhiteSpace(_shopKey)" in page
-    assert "PromoteHistoryImport(_seller, _shopKey, scan.ImportResult)" in page
+    assert "options.LearnKnowledge = true" in page
+    assert "ScanBuyerMessagesAsync" in page
 
 
 def test_history_promotion_uses_exact_shopkey_and_v2_repository_only():
@@ -55,7 +56,8 @@ def test_history_import_uses_exact_buyer_and_human_message_ids_and_excludes_bot_
     assert "turn.IsBotReply || IsBotMarkedSellerReply(turn.Text)" in build_pairs
     assert "questionIds.Count == buyers.Count" in build_pairs
     assert "answerIds.Count == sellers.Count" in build_pairs
-    assert "MessageKey" in build_pairs
+    assert "NativeEvidenceKey" in build_pairs
+    assert "HasNativeMessageId" in build_pairs
     assert "botAnsweredPendingQuestion && sellers.Count == 0" in build_pairs
     assert "source_evidence_id：" in source
     assert "source_evidence_ids" in ai

@@ -7,6 +7,8 @@ using System.Collections.Concurrent;
 using System.Collections.Generic;
 using System.IO;
 using System.Linq;
+using System.Text;
+using System.Security.Cryptography;
 using System.Threading;
 
 namespace Bot.Knowledge
@@ -499,7 +501,8 @@ namespace Bot.Knowledge
                 var epoch = cursor == null ? string.Empty : cursor.Epoch ?? string.Empty;
                 var acks = new HashSet<string>(state.Db.ReadRecords<KnowledgeV2FeedbackAckRow>(null).Select(x => x.Id), StringComparer.Ordinal);
                 var cutoff = DateTime.Now.AddDays(-180).Ticks;
-                var outgoing = state.Db.ReadRecords<KnowledgeV2FeedbackEventRow>(null)
+                var local = state.Db.ReadRecords<KnowledgeV2FeedbackEventRow>(null);
+                var outgoing = local
                     .Where(x => x != null && x.CreatedAtTicks >= cutoff
                         && !acks.Contains(FeedbackAckKey(scope, epoch, x.Id)))
                     .OrderBy(x => x.CreatedAtTicks).ThenBy(x => x.Id, StringComparer.Ordinal).Take(200)
@@ -508,8 +511,21 @@ namespace Bot.Knowledge
                         ["Id"] = x.Id, ["KnowledgeId"] = x.KnowledgeId,
                         ["EventType"] = x.EventType, ["UtcTicks"] = FeedbackUtcTicks(x)
                     }).ToList();
+                var utcCutoff = DateTime.UtcNow.AddDays(-180).Ticks;
+                var retained = local.Where(x => x != null && FeedbackUtcTicks(x) >= utcCutoff)
+                    .OrderBy(x => x.Id, StringComparer.Ordinal).ToList();
+                var canonical = retained.Select(x => string.Join("\n", new[]
+                {
+                    x.Id, Convert.ToBase64String(Encoding.UTF8.GetBytes(x.KnowledgeId ?? string.Empty)),
+                    x.EventType, FeedbackUtcTicks(x).ToString(System.Globalization.CultureInfo.InvariantCulture)
+                }));
+                string digest;
+                using (var sha = SHA256.Create())
+                    digest = BitConverter.ToString(sha.ComputeHash(Encoding.UTF8.GetBytes(string.Join("\n", canonical))))
+                        .Replace("-", string.Empty).ToLowerInvariant();
                 return new JObject { ["epoch"] = epoch, ["cursor"] = cursor == null ? 0L : cursor.Cursor,
-                    ["events"] = new JArray(outgoing) };
+                    ["events"] = new JArray(outgoing), ["local_event_count"] = retained.Count,
+                    ["local_event_digest"] = digest };
             }
         }
 

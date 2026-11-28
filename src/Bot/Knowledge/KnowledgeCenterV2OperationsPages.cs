@@ -20,6 +20,8 @@ namespace Bot.Knowledge
     {
         private readonly Window _owner;
         private readonly string _seller;
+        private readonly string _shopKey;
+        private string _conflictFingerprint;
         private readonly ObservableCollection<KnowledgeV2Conflict> _conflicts = new ObservableCollection<KnowledgeV2Conflict>();
         private readonly ObservableCollection<KnowledgeV2Record> _records = new ObservableCollection<KnowledgeV2Record>();
         private DataGrid _conflictGrid;
@@ -30,6 +32,7 @@ namespace Bot.Knowledge
         {
             _owner = owner;
             _seller = seller ?? string.Empty;
+            _shopKey = KnowledgeCenterV2Context.ResolveShopKey(owner, _seller);
             Build();
             Loaded += delegate { RefreshView(); };
         }
@@ -38,7 +41,12 @@ namespace Bot.Knowledge
         {
             if (string.IsNullOrWhiteSpace(_seller)) return;
             _status.Text = "正在检查同一 Subject / Predicate 下的事实冲突...";
-            Task.Run(() => KnowledgeEngineV2Service.GetConflicts(_seller))
+            Task.Run(() => InConflictShop(() =>
+            {
+                var records = KnowledgeEngineV2Repository.LoadAll(_seller);
+                return Tuple.Create(KnowledgeEngineV2Repository.ComputeCloudSyncFingerprint(records),
+                    KnowledgeEngineV2Service.GetConflictsForRecords(records));
+            }))
                 .ContinueWith(t => Dispatcher.BeginInvoke(new Action(() =>
                 {
                     _conflicts.Clear();
@@ -48,7 +56,8 @@ namespace Bot.Knowledge
                         _status.Text = "冲突检查失败：" + t.Exception.GetBaseException().Message;
                         return;
                     }
-                    foreach (var item in t.Result ?? new List<KnowledgeV2Conflict>()) _conflicts.Add(item);
+                    _conflictFingerprint = t.Result.Item1;
+                    foreach (var item in t.Result.Item2) _conflicts.Add(item);
                     _status.Text = _conflicts.Count == 0
                         ? "未发现事实冲突。只有相同 Subject + Predicate 的不同答案才会被视为冲突。"
                         : "发现 " + _conflicts.Count + " 组事实冲突；请选择冲突组和要保留的答案。";
@@ -124,58 +133,33 @@ namespace Bot.Knowledge
             if (_records.Count > 0) _recordGrid.SelectedIndex = 0;
         }
 
-        private void KeepSelected()
+        private T InConflictShop<T>(Func<T> action)
         {
-            var conflict = _conflictGrid.SelectedItem as KnowledgeV2Conflict;
-            var selected = _recordGrid.SelectedItem as KnowledgeV2Record;
-            if (conflict == null || selected == null) return;
-            if (MessageBox.Show(_owner,
-                "将保留所选知识为 active，并停用同一事实键下的其他冲突知识。是否继续？",
-                "解决知识冲突", MessageBoxButton.YesNo, MessageBoxImage.Question) != MessageBoxResult.Yes) return;
-            Task.Run(() =>
-            {
-                foreach (var record in conflict.Records)
-                {
-                    record.Enabled = record.Id == selected.Id;
-                    record.Status = record.Id == selected.Id ? "active" : "disabled";
-                    KnowledgeEngineV2Repository.Save(_seller, record);
-                }
-                KnowledgeEngineV2Service.Warm(_seller);
-            }).ContinueWith(t => Dispatcher.BeginInvoke(new Action(() =>
-            {
-                if (t.IsFaulted) MessageBox.Show(_owner, "解决冲突失败：" + t.Exception.GetBaseException().Message);
-                RefreshView();
-            })));
+            var shop = ShopContextLocator.ResolveRuntimeByShopKey(_shopKey);
+            if (shop == null || !shop.HasStableSellerId || shop.ShopKey != _shopKey)
+                throw new InvalidOperationException("无法绑定冲突管理所属店铺。");
+            using (ShopSettingsScope.Enter(shop)) return action();
         }
 
-        private void MarkOthersCandidate()
+        private void KeepSelected() { ResolveSelected(false); }
+        private void MarkOthersCandidate() { ResolveSelected(true); }
+
+        private void ResolveSelected(bool asCandidate)
         {
             var conflict = _conflictGrid.SelectedItem as KnowledgeV2Conflict;
             var selected = _recordGrid.SelectedItem as KnowledgeV2Record;
-            if (conflict == null || selected == null) return;
-            Task.Run(() =>
-            {
-                foreach (var record in conflict.Records)
+            var fingerprint = _conflictFingerprint;
+            if (conflict == null || selected == null || string.IsNullOrEmpty(fingerprint)) return;
+            if (MessageBox.Show(_owner, "保留所选答案并停用其他冲突记录，是否继续？",
+                "解决知识冲突", MessageBoxButton.YesNo, MessageBoxImage.Question) != MessageBoxResult.Yes) return;
+            Task.Run(() => InConflictShop(() =>
+                KnowledgeEngineV2Service.TryResolveConflict(_seller, fingerprint, conflict.FactKey, selected.Id, asCandidate)))
+                .ContinueWith(t => Dispatcher.BeginInvoke(new Action(() =>
                 {
-                    if (record.Id == selected.Id)
-                    {
-                        record.Status = "active";
-                        record.Enabled = true;
-                    }
-                    else
-                    {
-                        record.Status = "candidate";
-                        record.Type = "learning_candidate";
-                        record.Enabled = true;
-                    }
-                    KnowledgeEngineV2Repository.Save(_seller, record);
-                }
-                KnowledgeEngineV2Service.Warm(_seller);
-            }).ContinueWith(t => Dispatcher.BeginInvoke(new Action(() =>
-            {
-                if (t.IsFaulted) MessageBox.Show(_owner, "更新冲突状态失败：" + t.Exception.GetBaseException().Message);
-                RefreshView();
-            })));
+                    if (t.IsFaulted) MessageBox.Show(_owner, "解决冲突失败：" + t.Exception.GetBaseException().Message);
+                    else if (!t.Result) MessageBox.Show(_owner, "知识已经变化，请重新检查冲突。");
+                    RefreshView();
+                })));
         }
 
         private static Button Btn(string text, double width)

@@ -38,8 +38,10 @@ def test_history_scan_uses_real_contact_discovery_and_native_paginated_history_w
     assert 'turns.Where(x => x.Role == "buyer")' in part
     assert "BuyerMessageArchiveService.ObserveForHistoryScan(" in part
     assert "turn.Text, receipt, turn.Time" in part
-    assert "KnowledgeAiService" not in part
-    assert "ImportAsync(" not in part
+    assert "if (options.LearnKnowledge)" in part
+    learning = part.split("if (options.LearnKnowledge)", 1)[1].split("if (successful.Add(buyer))", 1)[0]
+    assert "new KnowledgeAiService()" in learning and "ai.ImportAsync(" in learning
+    assert "KnowledgeAiService" not in part.split("if (options.LearnKnowledge)", 1)[0]
     assert "originalBuyer" in part and "qn.OpenChat(originalBuyer)" in part
     assert "public string MessageKey;" in src
     assert "IncomingMessageSafety.BuildMessageKey(message, text)" in src
