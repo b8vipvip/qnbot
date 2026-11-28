@@ -261,6 +261,20 @@ def _save(client_id, records, updated_by, expected_revision=None, raise_on_confl
                     },
                 )
             return current
+        if updated_by == "web":
+            # Older Web clients omitted deleted rows. Materialize the same durable
+            # tombstone as Windows instead of permitting physical removal.
+            by_id={x["Id"]:x for x in records}
+            for old in current["records"]:
+                incoming=by_id.get(old["Id"])
+                if old.get("Status","").lower()=="deleted" and old.get("Enabled") is False:
+                    if incoming is not None and (incoming.get("Status","").lower()!="deleted" or incoming.get("Enabled") is not False):
+                        raise HTTPException(status_code=409,detail="已删除的知识ID不能复活")
+                    by_id[old["Id"]]=old
+                elif incoming is None:
+                    by_id[old["Id"]]=dict(old,Enabled=False,Status="deleted",UpdatedAt=now)
+            records=_validate_records(list(by_id.values()))
+            encoded=json.dumps(records,ensure_ascii=False,separators=(",",":"),sort_keys=True)
         current_encoded=json.dumps(current["records"],ensure_ascii=False,separators=(",",":"),sort_keys=True)
         if encoded==current_encoded:
             return current

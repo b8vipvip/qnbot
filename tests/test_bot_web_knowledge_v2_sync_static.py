@@ -123,7 +123,7 @@ def test_web_v2_edits_use_compare_and_swap_to_prevent_stale_device_overwrites():
     assert "expected_revision=payload.expected_revision" in web_put
     assert "raise_on_conflict=True" in web_put
     assert "knowledgeV2Revision:0" in js
-    assert "expected_revision:state.knowledgeV2Revision" in js
+    assert "expected_revision:state.knowledgeV2EditRevision" in js
     assert "err.status===409" in js
     assert "await loadKnowledgeV2(false)" in js
     assert 'bot-web-v2.js?v=13' in html
@@ -519,3 +519,20 @@ def test_feedback_two_devices_retry_and_paginate_without_duplicate_counts(tmp_pa
     tail=m.runtime_feedback_sync(m.KnowledgeV2FeedbackInput(epoch=page["epoch"],cursor=page["cursor"]),None,"shop-a")
     assert len(tail["events"])==2 and not tail["has_more"]
     assert m.web_feedback({"id":1})["items"]["a"]["sent"]==201
+
+@pytest.mark.skipif(importlib.util.find_spec("fastapi") is None, reason="server dependencies are not installed")
+def test_web_delete_preserves_tombstone_and_rejects_resurrection(tmp_path):
+    from fastapi import HTTPException
+    module=_load_v2_cas_module(tmp_path)
+    record=_v2_cas_record("answer")
+    module._save(1,[record],"windows",expected_revision=0)
+    result=module.web_put(module.KnowledgeV2WebInput(records=[],expected_revision=1),client={"id":1})
+    assert result["records"][0]["Id"]==record["Id"]
+    assert result["records"][0]["Status"]=="deleted" and result["records"][0]["Enabled"] is False
+    with pytest.raises(HTTPException) as exc:
+        module.web_put(module.KnowledgeV2WebInput(records=[record],expected_revision=2),client={"id":1})
+    assert exc.value.status_code==409
+    js=read(ROOT/"services/api-control-plane/static/bot-web-v2.js")
+    assert "knowledgeV2EditRevision!==state.knowledgeV2Revision" in js
+    assert "expected_revision:state.knowledgeV2EditRevision" in js
+    assert "/api/bot-web/knowledge-v2/feedback" in js
