@@ -389,3 +389,21 @@ def test_cloud_cas_fingerprint_does_not_use_lossy_faq_normalization():
     assert "KnowledgeAiService.ContentHash" not in fingerprint
     assert "NormalizeQuestion" not in fingerprint
     assert "JsonConvert.SerializeObject(projection, Formatting.None)" in fingerprint
+
+
+def test_delete_evidence_normalization_keeps_all_device_ids_and_handles_clean_cloud_pull():
+    service = read("src/Bot/Knowledge/KnowledgeV2CloudSyncService.cs")
+    merge = service.split("private static List<KnowledgeV2Record> MergeCloudAndLocal", 1)[1].split("private static HashSet<string> DeletedEvidenceKeys", 1)[0]
+    assert "DeletedEvidenceKeys(cloudInput.Concat(localInput))" in merge
+    assert "cloudRecords = NormalizeEvidenceDeletes(cloudInput, deletedEvidence)" in merge
+    assert "localRecords = NormalizeEvidenceDeletes(localInput, deletedEvidence)" in merge
+    assert "IsDeleteTombstone(record) ? string.Empty : AutoPublishedEvidenceKey(record)" in merge
+    assert "IsDeleteTombstone(local) ? string.Empty : AutoPublishedEvidenceKey(local)" in merge
+    assert "if (preserveLocalOnly || IsDeleteTombstone(local))" in merge
+    normalize = service.split("private static List<KnowledgeV2Record> NormalizeEvidenceDeletes", 1)[1].split("private static bool IsDeleteTombstone", 1)[0]
+    assert "CloneRecord(record)" in normalize
+    assert "tombstone.Enabled = false" in normalize
+    assert 'tombstone.Status = "deleted"' in normalize
+    assert "tombstone.Id =" not in normalize
+    assert ": NormalizeEvidenceDeletes(records, DeletedEvidenceKeys(records))" in service
+    assert "NormalizeEvidenceDeletes(local, DeletedEvidenceKeys(local))" in service

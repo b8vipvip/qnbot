@@ -216,6 +216,21 @@ namespace Bot.Knowledge
 
                 var local=KnowledgeEngineV2Repository.LoadAll(shop.DisplayName);
                 var localFingerprint=Fingerprint(local);
+                // An acknowledged local snapshot can already contain independently
+                // generated duplicate evidence IDs. Repair those deletes before uploading.
+                var normalizedLocal = NormalizeEvidenceDeletes(local, DeletedEvidenceKeys(local));
+                if (!string.Equals(Fingerprint(normalizedLocal), localFingerprint, StringComparison.Ordinal))
+                {
+                    Backup(shop, local, state.Revision);
+                    if (!KnowledgeEngineV2Repository.TryReplaceAllIfUnchanged(
+                        shop.DisplayName, localFingerprint, normalizedLocal))
+                    {
+                        lock(state.SyncRoot) state.LastStatus = "local_changed_during_delete_reconciliation";
+                        return;
+                    }
+                    local = KnowledgeEngineV2Repository.LoadAll(shop.DisplayName);
+                    localFingerprint = Fingerprint(local);
+                }
                 lock(state.SyncRoot)
                 {
                     state.LastLocalRecordCount=local.Count;
@@ -361,7 +376,7 @@ namespace Bot.Knowledge
                                 : latestLocal.Count>0;
                             var merged=localDirty
                                 ? MergeCloudAndLocal(records,latestLocal,preserveLocalOnly:!hasBaseline)
-                                : records;
+                                : NormalizeEvidenceDeletes(records, DeletedEvidenceKeys(records));
                             var mergedFingerprint=Fingerprint(merged);
 
                             if(!string.Equals(mergedFingerprint,latestFingerprint,StringComparison.Ordinal))
@@ -483,6 +498,15 @@ namespace Bot.Knowledge
             IEnumerable<KnowledgeV2Record> localRecords,
             bool preserveLocalOnly)
         {
+            // Determine the delete set across both snapshots before iterating either.
+            // Keep a tombstone for every affected record ID: the server rejects snapshots
+            // that silently omit an existing cloud ID, even when another ID has the same evidence.
+            var cloudInput = (cloudRecords ?? Enumerable.Empty<KnowledgeV2Record>()).Where(x => x != null).ToList();
+            var localInput = (localRecords ?? Enumerable.Empty<KnowledgeV2Record>()).Where(x => x != null).ToList();
+            var deletedEvidence = DeletedEvidenceKeys(cloudInput.Concat(localInput));
+            cloudRecords = NormalizeEvidenceDeletes(cloudInput, deletedEvidence);
+            localRecords = NormalizeEvidenceDeletes(localInput, deletedEvidence);
+
             var merged = new List<KnowledgeV2Record>();
             var cloudById = new Dictionary<string, KnowledgeV2Record>(StringComparer.Ordinal);
             var recordsByHumanEvidence = new Dictionary<string, KnowledgeV2Record>(StringComparer.Ordinal);
@@ -497,7 +521,8 @@ namespace Bot.Knowledge
             {
                 if (raw == null) continue;
                 var record = CloneRecord(raw);
-                var evidenceId = AutoPublishedEvidenceKey(record);
+                // Never collapse tombstones with different IDs.
+                var evidenceId = IsDeleteTombstone(record) ? string.Empty : AutoPublishedEvidenceKey(record);
                 KnowledgeV2Record existingEvidence;
                 if (evidenceId.Length > 0 && recordsByHumanEvidence.TryGetValue(evidenceId, out existingEvidence))
                 {
@@ -517,7 +542,7 @@ namespace Bot.Knowledge
             foreach (var local in localRecords ?? Enumerable.Empty<KnowledgeV2Record>())
             {
                 if (local == null) continue;
-                var evidenceId = AutoPublishedEvidenceKey(local);
+                var evidenceId = IsDeleteTombstone(local) ? string.Empty : AutoPublishedEvidenceKey(local);
                 var id = (local.Id ?? string.Empty).Trim();
                 KnowledgeV2Record cloud;
                 if (id.Length > 0 && cloudById.TryGetValue(id, out cloud))
@@ -599,7 +624,7 @@ namespace Bot.Knowledge
                     continue;
                 }
 
-                if (preserveLocalOnly)
+                if (preserveLocalOnly || IsDeleteTombstone(local))
                 {
                     var copy = CloneRecord(local);
                     AddUnique(merged, mergedIds, copy);
@@ -611,6 +636,30 @@ namespace Bot.Knowledge
                 }
             }
             return merged;
+        }
+
+        private static HashSet<string> DeletedEvidenceKeys(IEnumerable<KnowledgeV2Record> records)
+        {
+            return new HashSet<string>((records ?? Enumerable.Empty<KnowledgeV2Record>())
+                .Where(IsDeleteTombstone).Select(AutoPublishedEvidenceKey)
+                .Where(x => x.Length > 0), StringComparer.Ordinal);
+        }
+
+        private static List<KnowledgeV2Record> NormalizeEvidenceDeletes(
+            IEnumerable<KnowledgeV2Record> records, HashSet<string> deletedEvidence)
+        {
+            return (records ?? Enumerable.Empty<KnowledgeV2Record>())
+                .Where(x => x != null).Select(record =>
+                {
+                    if (IsDeleteTombstone(record)
+                        || !deletedEvidence.Contains(AutoPublishedEvidenceKey(record)))
+                        return record;
+                    var tombstone = CloneRecord(record);
+                    tombstone.Enabled = false;
+                    tombstone.Status = "deleted";
+                    // Do not invent a timestamp or change the original ID/evidence key.
+                    return tombstone;
+                }).ToList();
         }
 
         private static bool IsDeleteTombstone(KnowledgeV2Record record)
