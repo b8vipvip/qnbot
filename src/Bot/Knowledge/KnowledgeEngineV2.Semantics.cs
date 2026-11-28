@@ -518,9 +518,10 @@ namespace Bot.Knowledge
             if (expected.Length == 0) return null;
             var positive = false;
             var negative = false;
-            foreach (var clause in Regex.Split(source, @"[，,。；;！？!?\r\n]+"))
+            foreach (Match sentence in Regex.Matches(source, @"[^，,。；;！？!?\r\n]+[！？!?]?"))
             {
-                if (Regex.IsMatch(clause, @"如果|假如|假设|是否|能否|有没有|不确定|不知道|想确认|吗$|么$")) continue;
+                var clause = sentence.Value;
+                if (Regex.IsMatch(clause, @"如果|假如|假设|是否|能否|有没有|不确定|不知道|想确认|[？?]$|吗[！!。]?$|么[！!。]?$")) continue;
                 foreach (Match hit in Regex.Matches(clause, Regex.Escape(expected), RegexOptions.IgnoreCase))
                 {
                     var prefix = clause.Substring(0, hit.Index);
