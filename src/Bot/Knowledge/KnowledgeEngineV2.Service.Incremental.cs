@@ -68,6 +68,11 @@ namespace Bot.Knowledge
                     AddRecordToIndexes(next, next.Records[index], index);
 
                 next.BuiltAt = DateTime.Now;
+                // Incremental deletion retains stable ordinal slots for readers.
+                // Periodically compact a new snapshot so years of edits/deletes
+                // cannot retain every historical record object in the live index.
+                if (ShouldCompactSnapshot(next))
+                    next = BuildSnapshot(shopKey, next.Records.Where(IsIndexableRecord).ToList());
                 Snapshots[shopKey] = next;
             }
         }
@@ -107,6 +112,19 @@ namespace Bot.Knowledge
                     .ToList();
                 Snapshots[shop.ShopKey] = BuildSnapshot(shop.ShopKey, enabled);
             }
+        }
+
+        private static bool IsIndexableRecord(KnowledgeV2Record record)
+        {
+            return record != null && record.Enabled
+                && !string.Equals(record.Status, "disabled", StringComparison.OrdinalIgnoreCase)
+                && !string.Equals(record.Status, "deleted", StringComparison.OrdinalIgnoreCase);
+        }
+
+        private static bool ShouldCompactSnapshot(Snapshot snapshot)
+        {
+            var inactive = snapshot.Records.Count(x => !IsIndexableRecord(x));
+            return inactive >= 128 && (inactive >= 1024 || inactive * 4 >= snapshot.Records.Count);
         }
 
         private static Snapshot CloneSnapshot(Snapshot source)

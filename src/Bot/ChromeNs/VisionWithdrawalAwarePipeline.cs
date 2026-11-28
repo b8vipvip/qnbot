@@ -597,6 +597,10 @@ namespace Bot.ChromeNs
                         + latestRelevanceReason);
                     return false;
                 }
+                if (!VisionRequestService.CanSendCurrentAnswer(
+                    burst, result, answer, workflowDecision != null && workflowDecision.RequiresSend,
+                    trustedOcrKnowledge))
+                    return false;
                 var workflowCurrent = workflowDecision == null || !workflowDecision.RequiresSend
                     || ReceptionWorkflowRuntimeService.IsDecisionCurrent(workflowDecision);
                 if (workflowCurrent && conditionalAdviceReserved)

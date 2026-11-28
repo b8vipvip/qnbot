@@ -59,7 +59,7 @@ namespace Bot.ChromeNs
         };
 
         private static readonly Regex ConcreteNumberRegex = new Regex(
-            @"(?<!\d)\d+(?:\.\d+)?\s*(?:元|块|天|小时|分钟|秒|次|台|个|件|年|月|个月|工作日|%|折)(?![\dA-Za-z])",
+            @"(?<![\d.,])[-−]?(?:\d{1,3}(?:,\d{3})+|\d+)(?:\.\d+)?\s*(?:工作日|个月|小时|分钟|元|块|天|秒|次|台|个|件|年|月|%|折)(?![\dA-Za-z])",
             RegexOptions.Compiled | RegexOptions.IgnoreCase);
 
         public static AnswerValidationResult Validate(
@@ -85,6 +85,7 @@ namespace Bot.ChromeNs
             var compactAnswer = Compact(answer);
             var state = BuildState(seller, buyer, question);
             var authoritativeEvidence = BuildAuthoritativeEvidence(state, approvedV2ContextEvidence);
+            var verifiedStatusEvidence = BuildVerifiedStatusEvidence(state);
 
             if (MachinePhrases.Any(x => compactAnswer.Contains(Compact(x))))
             {
@@ -109,7 +110,7 @@ namespace Bot.ChromeNs
             var unsupportedNumbers = ConcreteNumberRegex.Matches(answer)
                 .Cast<Match>()
                 .Select(x => x.Value.Trim())
-                .Where(x => !ContainsEvidence(authoritativeEvidence, x))
+                .Where(x => !ContainsNumericEvidence(authoritativeEvidence, x))
                 .Distinct(StringComparer.OrdinalIgnoreCase)
                 .Take(5)
                 .ToList();
@@ -128,7 +129,7 @@ namespace Bot.ChromeNs
             }
 
             var unsupportedStatus = ConcreteStatusClaims
-                .Where(x => compactAnswer.Contains(Compact(x)) && !ContainsEvidence(authoritativeEvidence, x))
+                .Where(x => compactAnswer.Contains(Compact(x)) && !string.Equals(verifiedStatusEvidence, Compact(x), StringComparison.Ordinal))
                 .Take(4)
                 .ToList();
             if (unsupportedStatus.Count > 0)
@@ -136,10 +137,20 @@ namespace Bot.ChromeNs
                 result.Issues.Add("声称已经核实或完成具体订单/售后状态，但没有可靠依据：" + string.Join("、", unsupportedStatus));
             }
 
+            if (HasUnverifiedProductConclusion(question, answer, approvedV2ContextEvidence))
+                result.Issues.Add("商品支持/不支持结论缺少明确适用的Knowledge V2证据");
+
             if (HasKnowledgeContradiction(answer, approvedV2ContextEvidence))
             {
                 result.Issues.Add("生成答案与高可信知识或事实约束的支持/不支持结论相反");
             }
+
+            var unsupportedRisk = HasHighRiskUnsupportedClaim(answer, authoritativeEvidence);
+            if (unsupportedRisk)
+                result.Issues.Add("回复包含无事实依据的高风险业务承诺");
+            var unauthorizedTransaction = HasTransactionalPromise(answer);
+            if (unauthorizedTransaction)
+                result.Issues.Add("回复承诺代买家执行订单或售后操作，但当前只是客服回答而非已授权的业务执行");
 
             if (result.Issues.Count == 0)
             {
@@ -150,7 +161,7 @@ namespace Bot.ChromeNs
 
             var highRisk = unsupportedAbsolute.Count > 0
                 || unsupportedStatus.Count > 0
-                || HasHighRiskUnsupportedClaim(answer, authoritativeEvidence)
+                || unsupportedRisk || unauthorizedTransaction
                 || HasKnowledgeContradiction(answer, approvedV2ContextEvidence);
             if (highRisk || secondAttempt)
             {
@@ -187,7 +198,11 @@ namespace Bot.ChromeNs
             ConversationStateSnapshot state,
             string approvedV2ContextEvidence)
         {
-            var sb = new StringBuilder(BuildEvidenceText(approvedV2ContextEvidence));
+            // Prompt metadata (questions, aliases, confidence, conditions and product IDs)
+            // is not an assertion of a price or promise. Keep only actual answer lines.
+            var sb = new StringBuilder(StorePromptProfileService.GetStandardPrompt() ?? string.Empty);
+            foreach (Match match in Regex.Matches(approvedV2ContextEvidence ?? string.Empty, @"(?m)^答案：([^\r\n]+)"))
+                sb.Append("\n").Append(match.Groups[1].Value);
             var commerce = state == null ? null : state.CommerceContext;
             if (commerce != null && commerce.HasStructuredOrder)
             {
@@ -206,7 +221,31 @@ namespace Bot.ChromeNs
                 if (!string.Equals(commerce.FulfillmentType, "unknown", StringComparison.OrdinalIgnoreCase))
                     sb.Append("履约类型：").Append(commerce.FulfillmentTypeDisplay).Append("\n");
             }
-            return Compact(sb.ToString());
+            return sb.ToString();
+        }
+
+        private static string BuildVerifiedStatusEvidence(ConversationStateSnapshot state)
+        {
+            var commerce = state == null ? null : state.CommerceContext;
+            // Generic policy/FAQ text and buyer messages cannot prove a live order
+            // action. Only the current structured order status can support a claim.
+            if (commerce == null || !commerce.HasStructuredOrder) return string.Empty;
+            return Compact(commerce.TradeStatus);
+        }
+
+        internal static bool ContainsNumericEvidence(string evidence, string claim)
+        {
+            var expected = ConcreteNumberRegex.Match(claim ?? string.Empty);
+            if (!expected.Success || expected.Length != (claim ?? string.Empty).Length) return false;
+            var token = NormalizeNumericClaim(expected.Value);
+            return ConcreteNumberRegex.Matches(evidence ?? string.Empty).Cast<Match>()
+                .Any(x => string.Equals(NormalizeNumericClaim(x.Value), token, StringComparison.OrdinalIgnoreCase)
+                    && KnowledgeEngineV2Semantics.HasAffirmativeTerm(evidence, x.Value));
+        }
+
+        private static string NormalizeNumericClaim(string value)
+        {
+            return Regex.Replace(value ?? string.Empty, @"[\s,]+", string.Empty).Replace('−', '-');
         }
 
         private static ConversationStateSnapshot BuildState(string seller, string buyer, string question)
@@ -274,29 +313,115 @@ namespace Bot.ChromeNs
                 || a == "稍等一下";
         }
 
+        internal static bool HasUnverifiedProductConclusion(string question, string answer, string evidence)
+        {
+            var requested = KnowledgeEngineV2Semantics.ExtractEntities(question)
+                .Where(KnowledgeEngineV2Semantics.IsProductEntity).ToList();
+            var mentioned = KnowledgeEngineV2Semantics.ExtractEntities(answer)
+                .Where(KnowledgeEngineV2Semantics.IsProductEntity).ToList();
+            if (requested.Count == 0 && mentioned.Count == 0) return false;
+            // An unrelated approved answer is not evidence for a capability
+            // assertion. Each claimed product and direction must be covered by
+            // the same approved evidence block, not a pooled list of keywords.
+            var blocks = Regex.Matches(evidence ?? string.Empty,
+                @"(?ms)^V2知识\d+：[^\r\n]*\r?\n(?<body>.*?)(?=^V2知识\d+：|\z)")
+                .Cast<Match>().Select(x =>
+                {
+                    var body = x.Groups["body"].Value;
+                    var approvedAnswer = Regex.Match(body, @"(?m)^答案：([^\r\n]+)").Groups[1].Value;
+                    var scope = Regex.Match(body, @"(?m)^商品ID：([^\r\n]*)").Groups[1].Value
+                        .Split(new[] { '；', ';', '、', ',', '，' }, StringSplitOptions.RemoveEmptyEntries)
+                        .Select(id => id.Trim())
+                        .Select(id => KnowledgeEngineV2Semantics.IsProductEntity(id) ? id : "product:" + id)
+                        .ToList();
+                    return new { Products = scope, Directions = ProductAssertionPolarities(approvedAnswer).Distinct().ToList() };
+                }).ToList();
+            foreach (var clause in Regex.Split(answer ?? string.Empty, @"[，,。；;！？!?\r\n]+"))
+            {
+                var directions = ProductAssertionPolarities(clause).Distinct().ToList();
+                if (directions.Count == 0) continue;
+                var scope = KnowledgeEngineV2Semantics.ExtractEntities(clause)
+                    .Where(KnowledgeEngineV2Semantics.IsProductEntity).ToList();
+                if (scope.Count == 0) scope = requested.Count > 0 ? requested : mentioned;
+                if (directions.Count != 1 || scope.Count == 0
+                    || !scope.All(id => blocks.Any(block =>
+                        block.Products.Contains(id, StringComparer.OrdinalIgnoreCase)
+                        && block.Directions.Count == 1 && block.Directions[0] == directions[0])))
+                    return true;
+            }
+            return false;
+        }
+
+        private static IEnumerable<int> ProductAssertionPolarities(string answer)
+        {
+            // Split before removing punctuation: uncertainty about one product
+            // must not authorize an unsupported statement about another.
+            foreach (var raw in Regex.Split(answer ?? string.Empty, @"[，,。；;！？!?\r\n]+"))
+            {
+                var clause = Compact(raw);
+                if (clause.Length == 0) continue;
+                if (Regex.IsMatch(clause, @"^(请问|麻烦确认|需要确认|需要核实|请提供|请补充|暂不确定|目前无法确认|无法确认|不能确认|不确定是否|暂时无法确认)")
+                    && !Regex.IsMatch(clause, @"但|不过|然而|并且|同时"))
+                    continue;
+                // Uncertainty which follows an explicitly named product.
+                if (Regex.IsMatch(clause, @"(无法确认|不能确认|暂不确定|不确定是否).{0,12}(支持|兼容|能用|可用)")
+                    && !Regex.IsMatch(clause, @"但|不过|然而|并且|同时"))
+                    continue;
+                foreach (Match m in Regex.Matches(clause,
+                    @"(?<negative>不支持|不兼容|不能使用|不可以使用|不可以用|不能用|不可用|不通用|无法使用)|(?<positive>支持|兼容|能用|可用|通用|可以使用|能够使用|可以用)"))
+                    yield return m.Groups["negative"].Success ? -1 : 1;
+            }
+        }
+
+        internal static bool AllowsUnresolvedKnowledgeReply(KnowledgeV2Decision decision, string answer)
+        {
+            if (decision == null || (!decision.HasConflict
+                && (decision.Query == null || !decision.Query.ProductEvidenceConflict)))
+                return true;
+            // Unresolved evidence only authorizes a clarification/handoff, not
+            // a new business conclusion. Never convert conflicting facts to a yes/no.
+            var text = Compact(answer);
+            return !ProductAssertionPolarities(answer).Any()
+                && !ConcreteNumberRegex.IsMatch(answer ?? string.Empty)
+                && !ConcreteStatusClaims.Any(x => text.Contains(Compact(x)))
+                && !HasTransactionalPromise(answer)
+                && Regex.IsMatch(text, @"请问|请提供|请补充|需要确认|需要核实|无法确认|不能确认|人工|进一步核查|具体哪款");
+        }
+
+        internal static bool HasTransactionalPromise(string answer)
+        {
+            // Static shop FAQ or an OCR screenshot cannot authorize a new
+            // irreversible transaction. Actual execution has a separate ledger.
+            return Regex.IsMatch(Compact(answer),
+                @"(?:我|我们|这边|客服)(?:会|将|马上|立即|现在|可以|给您|帮您|为您){1,4}(?:退款|退货|赔偿|补偿|发货|充值|解封)|(?:给您|帮您|为您)(?:直接|马上|立即|自动)?(?:退款|赔偿|补偿|解封)");
+        }
+
         private static bool HasKnowledgeContradiction(
             string answer,
             string approvedV2ContextEvidence)
         {
-            // V2 context is already restricted to approved, normal-risk records and ordered
-            // by relevance. Use the top selected answer as the factual polarity boundary.
-            var v2Answer = Regex.Match(
-                approvedV2ContextEvidence ?? string.Empty,
-                @"(?m)^答案：([^\r\n]+)");
-            if (!v2Answer.Success) return false;
-            var expectedV2 = DetectPolarity(v2Answer.Groups[1].Value);
-            var actualAnswer = DetectPolarity(answer);
-            return expectedV2 != 0 && actualAnswer != 0 && expectedV2 != actualAnswer;
+            // Only compare explicit capability assertions. For a unanimous
+            // approved answer set, any contrary clause is a contradiction,
+            // even if another clause of the generated answer agrees.
+            var expected = Regex.Matches(approvedV2ContextEvidence ?? string.Empty, @"(?m)^答案：([^\r\n]+)")
+                .Cast<Match>().SelectMany(x => ProductAssertionPolarities(x.Groups[1].Value))
+                .Distinct().ToList();
+            if (expected.Count != 1) return false;
+            return ProductAssertionPolarities(answer).Any(x => x != expected[0]);
         }
 
         private static int DetectPolarity(string value)
         {
             var compact = Compact(value);
-            var negative = CountAny(compact, "不支持", "不能", "不可以", "无法", "不通用", "不可用", "不行", "没有");
-            var positive = CountAny(compact, "支持", "可以", "能用", "能够", "可用", "通用", "没问题");
-            if (negative > positive) return -1;
-            if (positive > negative) return 1;
-            return 0;
+            // Match negative alternatives first, consuming the entire phrase so
+            // "不支持" cannot also count as positive "支持". Mixed claims have
+            // no single polarity (e.g. A supports it but B does not).
+            var matches = Regex.Matches(compact,
+                @"(?<negative>不支持|不能用|不能够|不能|不可以|无法|不通用|不可用|不行|没有)|(?<positive>支持|可以|能用|能够|可用|通用|没问题)");
+            var negative = matches.Cast<Match>().Any(x => x.Groups["negative"].Success);
+            var positive = matches.Cast<Match>().Any(x => x.Groups["positive"].Success);
+            if (negative == positive) return 0;
+            return negative ? -1 : 1;
         }
 
         private static bool HasHighRiskUnsupportedClaim(string answer, string authoritativeEvidence)
@@ -306,7 +431,7 @@ namespace Bot.ChromeNs
             {
                 var compactTerm = Compact(term);
                 if (!compactAnswer.Contains(compactTerm)) continue;
-                if (authoritativeEvidence.Contains(compactTerm)) continue;
+                if (ContainsEvidence(authoritativeEvidence, term)) continue;
                 if (Regex.IsMatch(compactAnswer,
                     @"(可以|会|将|已经|已|一定|保证|同意|为您|给您).{0,8}" + Regex.Escape(compactTerm)
                     + @"|" + Regex.Escape(compactTerm) + @".{0,8}(成功|完成|到账|通过|可以)"))
@@ -337,7 +462,7 @@ namespace Bot.ChromeNs
         private static bool ContainsEvidence(string compactEvidence, string value)
         {
             var compactValue = Compact(value);
-            return compactValue.Length > 0 && compactEvidence.Contains(compactValue);
+            return compactValue.Length > 0 && Compact(compactEvidence).Contains(compactValue);
         }
 
         private static bool ContainsAny(string value, params string[] terms)

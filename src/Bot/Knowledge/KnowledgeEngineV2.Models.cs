@@ -245,6 +245,7 @@ namespace Bot.Knowledge
         public string Reason { get; set; }
         public string Answer { get; set; }
         public KnowledgeV2Query Query { get; set; }
+        internal string SnapshotGeneration { get; set; }
         public List<KnowledgeV2Match> Matches { get; set; }
         // The selected match can differ from the score-ranked display list.
         public KnowledgeV2Match SelectedMatch { get; set; }
@@ -275,6 +276,8 @@ namespace Bot.Knowledge
         public string FactKey { get; set; }
         public string Subject { get; set; }
         public string Predicate { get; set; }
+        public bool RequiresScopeReview { get; set; }
+        public string ResolutionMode { get { return RequiresScopeReview ? "需调整适用范围" : "同范围冲突"; } }
         public List<KnowledgeV2Record> Records { get; set; }
 
         public KnowledgeV2Conflict()
@@ -313,6 +316,7 @@ namespace Bot.Knowledge
         public string Intent { get; set; }
         public List<string> Entities { get; set; }
         public DateTime UpdatedAt { get; set; }
+        internal bool ProductEvidenceConflict { get; set; }
 
         public KnowledgeV2WorkingMemory()
         {

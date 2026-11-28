@@ -1591,10 +1591,16 @@ namespace Bot.ChromeNs
                 burst.BuyerNick,
                 burst.CombinedQuestion,
                 result.Answer,
-                CancellationToken.None,
+                lease.CancellationToken,
                 result.IsKnowledgeV2DirectAnswer,
                 result.ApprovedV2KnowledgeEvidence);
             var answer = deduplication.Answer;
+            if (string.IsNullOrWhiteSpace(answer) || answer.StartsWith("错误：", StringComparison.Ordinal))
+            {
+                lease.MarkFailed("vision_pre_send_validation_failed");
+                ResponseProgressTracker.Fail(burst.SellerNick, burst.BuyerNick, "视觉答案校验失败", burst.ShopKey);
+                return;
+            }
             if (!await lease.ConfirmStableAsync(220))
             {
                 Log.Info("发送前发现买家补充了新消息，旧视觉答案未展示也未发送。buyer=" + burst.BuyerNick);
@@ -1714,9 +1720,12 @@ namespace Bot.ChromeNs
                 var shouldSend = ParallelReplyRelevanceGate.ShouldSend(
                     burst.SellerNick, burst.BuyerNick, burst.CombinedQuestion, detectedAt,
                     out latestReason, false, burst.ShopKey);
-                if (shouldSend && conditionalAdviceReserved)
+                if (!shouldSend || !VisionRequestService.CanSendCurrentAnswer(
+                    burst, result, answer, false, result.IsKnowledgeV2DirectAnswer))
+                    return false;
+                if (conditionalAdviceReserved)
                     conditionalAdviceSendMayHaveStarted = true;
-                return shouldSend;
+                return true;
             };
             bool sendOk;
             try

@@ -53,6 +53,7 @@ namespace Bot.ChromeNs
     internal sealed class VisualImageKnowledgeMatch
     {
         public string KnowledgeId { get; set; }
+        public string EvidenceFingerprint { get; set; }
         public string Description { get; set; }
         public string OcrText { get; set; }
         public string HitInfo { get; set; }
@@ -935,6 +936,7 @@ namespace Bot.ChromeNs
             match = new VisualImageKnowledgeMatch
             {
                 KnowledgeId = best.EntityId,
+                EvidenceFingerprint = EvidenceFingerprint(best),
                 Description = description,
                 OcrText = referenceOcr,
                 HitInfo = hitInfo,
@@ -950,6 +952,34 @@ namespace Bot.ChromeNs
                 + ", matchedHitInfoCount=" + (string.IsNullOrWhiteSpace(bestMatchedHitInfo) ? 0 : bestMatchedHitInfo.Split(new[] { '；' }, StringSplitOptions.RemoveEmptyEntries).Length)
                 + ", score=" + bestScore.ToString("0.00", System.Globalization.CultureInfo.InvariantCulture));
             return true;
+        }
+
+        private static string EvidenceFingerprint(VisualImageKnowledgeEntry entry)
+        {
+            using (var sha = SHA256.Create())
+            {
+                var json = new JObject
+                {
+                    ["id"] = entry.EntityId, ["shop"] = entry.ShopKey, ["seller"] = entry.Seller,
+                    ["sha"] = entry.ImageSha256, ["ocr"] = entry.OcrText, ["hit"] = entry.HitInfo,
+                    ["description"] = entry.Description, ["enabled"] = entry.Enabled
+                }.ToString(Newtonsoft.Json.Formatting.None);
+                return BitConverter.ToString(sha.ComputeHash(Encoding.UTF8.GetBytes(json))).Replace("-", "").ToLowerInvariant();
+            }
+        }
+
+        internal static bool IsMatchCurrent(string shopKey, string seller, string id, string fingerprint)
+        {
+            if (string.IsNullOrWhiteSpace(id) || string.IsNullOrWhiteSpace(fingerprint)) return false;
+            var shop = ResolveScope(shopKey, seller);
+            EnsureSchema();
+            lock (Sync)
+            {
+                var current = Select("where ShopKey = ? and Seller = ? and EntityId = ?", shop.ShopKey, shop.SellerNick, id)
+                    .SingleOrDefault();
+                return current != null && current.Enabled
+                    && string.Equals(EvidenceFingerprint(current), fingerprint, StringComparison.Ordinal);
+            }
         }
 
         private sealed class HitInfoRuleSet

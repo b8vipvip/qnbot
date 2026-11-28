@@ -3,6 +3,7 @@ using Bot.ShopScope;
 using BotLib;
 using BotLib.Db.Sqlite;
 using Newtonsoft.Json;
+using Newtonsoft.Json.Linq;
 using System;
 using System.Collections.Concurrent;
 using System.Collections.Generic;
@@ -108,7 +109,7 @@ namespace Bot.Knowledge
 
         // A knowledge editor may remain open across a learning or cloud-sync update.
         // Use the exact record fingerprint, not a wall-clock timestamp, to reject stale writes.
-        internal static bool TrySaveEditorRecord(string seller, KnowledgeV2Record record, string expectedFingerprint, string revisionSource = null)
+        internal static bool TrySaveEditorRecord(string seller, KnowledgeV2Record record, string expectedFingerprint, string revisionSource = null, string operationReceipt = null)
         {
             if (record == null || string.IsNullOrWhiteSpace(record.Id)) return false;
             var shop = ResolveShopRequired(seller);
@@ -131,7 +132,7 @@ namespace Bot.Knowledge
                 }
                 if (!string.IsNullOrEmpty(revisionSource) && row != null)
                 {
-                    state.Db.SaveRecordsInTransaction(new List<object>
+                    var writes = new List<object>
                     {
                         ToRow(record),
                         new KnowledgeV2ManualEditRevisionRow
@@ -141,9 +142,16 @@ namespace Bot.Knowledge
                             PreviousJson = JsonConvert.SerializeObject(FromRow(row)),
                             CurrentJson = JsonConvert.SerializeObject(record), CreatedAtTicks = DateTime.Now.Ticks
                         }
-                    });
+                    };
+                    var receipt = RemoteMutationReceipt(operationReceipt, "revision_apply");
+                    if (receipt != null) writes.Add(receipt);
+                    state.Db.SaveRecordsInTransaction(writes);
                 }
-                else state.Db.SaveOneRecord(ToRow(record));
+                else
+                {
+                    if (!string.IsNullOrEmpty(operationReceipt)) return false;
+                    state.Db.SaveOneRecord(ToRow(record));
+                }
             }
             KnowledgeEngineV2Service.ApplyRecordUpdate(seller, record);
             return true;
@@ -1400,6 +1408,114 @@ namespace Bot.Knowledge
             return true;
         }
 
+        private static string RevisionSyncCheckpointKey(string scope)
+        {
+            using (var sha = SHA256.Create())
+                return "revision_sync:" + BitConverter.ToString(sha.ComputeHash(Encoding.UTF8.GetBytes(scope)))
+                    .Replace("-", string.Empty).ToLowerInvariant();
+        }
+
+        internal static JObject BuildRevisionSyncRequest(string seller, string scope)
+        {
+            var state = GetState(ResolveShopRequired(seller));
+            EnsureSchemaInitialized(state);
+            lock (state.Sync)
+                return BuildRevisionSyncRequestCore(state.Db, scope);
+        }
+
+        private static JObject BuildRevisionSyncRequestCore(SQLiteHelper db, string scope)
+        {
+                var key = RevisionSyncCheckpointKey(scope);
+                var meta = db.ReadOneRecord<KnowledgeV2MetaRow>(x => x.Key == key);
+                var checkpoint = meta == null ? new JObject() : JObject.Parse(meta.Value);
+                var epoch = (string)checkpoint["epoch"] ?? string.Empty;
+                // Acknowledge immutable IDs durably rather than repeatedly walking the
+                // whole history. Random GUID ordering cannot hide a newly inserted row.
+                var ackPrefix = key + ":ack:";
+                var rows = db.Select(typeof(KnowledgeV2ManualEditRevisionRow),
+                    "where not exists (select 1 from KnowledgeV2MetaRow m where m.Key = ? || KnowledgeV2ManualEditRevisionRow.Id and m.Value = ?) order by Id limit 20",
+                    ackPrefix, epoch).OfType<KnowledgeV2ManualEditRevisionRow>().ToList();
+                var all = rows.Count == 0
+                    ? db.ReadTable<KnowledgeV2ManualEditRevisionRow>().Where(x => x != null).ToList()
+                    : null;
+                return new JObject
+                {
+                    ["epoch"] = (string)checkpoint["epoch"] ?? string.Empty,
+                    ["cursor"] = checkpoint.Value<long?>("cursor") ?? 0L,
+                    ["local_revision_count"] = all == null ? JValue.CreateNull() : new JValue(all.Count),
+                    ["local_revision_digest"] = all == null ? string.Empty : RevisionHistoryDigest(all),
+                    ["rows"] = JArray.FromObject(rows)
+                };
+        }
+
+        private static string RevisionHistoryDigest(IEnumerable<KnowledgeV2ManualEditRevisionRow> rows)
+        {
+            Func<string, string> encode = value => Convert.ToBase64String(Encoding.UTF8.GetBytes(value ?? string.Empty));
+            using (var sha = SHA256.Create())
+            {
+                var canonical = string.Join("\n", rows.OrderBy(x => x.Id, StringComparer.Ordinal).Select(x =>
+                    string.Join("\n", x.Id, encode(x.KnowledgeId), encode(x.MessageRecordId), encode(x.Action),
+                        encode(x.PreviousJson), encode(x.CurrentJson),
+                        x.CreatedAtTicks.ToString(System.Globalization.CultureInfo.InvariantCulture))));
+                return BitConverter.ToString(sha.ComputeHash(Encoding.UTF8.GetBytes(canonical))).Replace("-", "").ToLowerInvariant();
+            }
+        }
+
+        internal static bool ApplyRevisionSyncResponse(string seller, string scope, JObject request, JObject response)
+        {
+            var state = GetState(ResolveShopRequired(seller));
+            EnsureSchemaInitialized(state);
+            lock (state.Sync)
+                return ApplyRevisionSyncResponseCore(state.Db, scope, request, response);
+        }
+
+        private static bool ApplyRevisionSyncResponseCore(SQLiteHelper db, string scope, JObject request, JObject response)
+        {
+            var epoch = (string)response["epoch"];
+            var cursor = response.Value<long?>("cursor");
+            var incoming = response["rows"] as JArray;
+            var ack = response["ack_ids"] as JArray;
+            var uploaded = request["rows"] as JArray;
+            if (string.IsNullOrWhiteSpace(epoch) || !cursor.HasValue || cursor.Value < 0
+                || incoming == null || incoming.Count > 20 || ack == null || uploaded == null
+                || ((string)request["epoch"] == epoch && cursor.Value < (request.Value<long?>("cursor") ?? 0L))
+                || !new HashSet<string>(ack.Values<string>(), StringComparer.Ordinal)
+                    .SetEquals(uploaded.Select(x => (string)x["Id"])))
+                throw new InvalidDataException("修订同步响应或确认凭证无效");
+            {
+                var key = RevisionSyncCheckpointKey(scope);
+                var writes = new List<object>();
+                var confirmedIds = new HashSet<string>(ack.Values<string>(), StringComparer.Ordinal);
+                var receivedIds = new HashSet<string>(StringComparer.Ordinal);
+                foreach (var token in incoming)
+                {
+                    var row = token.ToObject<KnowledgeV2ManualEditRevisionRow>();
+                    if (row == null || string.IsNullOrWhiteSpace(row.Id)
+                        || string.IsNullOrWhiteSpace(row.KnowledgeId)
+                        || row.CreatedAtTicks <= 0 || row.CreatedAtTicks > DateTime.MaxValue.Ticks)
+                        throw new InvalidDataException("远端修订记录无效");
+                    if (!receivedIds.Add(row.Id))
+                        throw new InvalidDataException("远端修订ID重复");
+                    var prior = db.ReadOneRecord<KnowledgeV2ManualEditRevisionRow>(x => x.Id == row.Id);
+                    if (prior != null && !JToken.DeepEquals(JObject.FromObject(prior), JObject.FromObject(row)))
+                        throw new InvalidDataException("同一修订ID内容冲突");
+                    if (prior == null) writes.Add(row);
+                    confirmedIds.Add(row.Id);
+                }
+                // Never replay historical snapshots onto the active corpus. Current
+                // record sync and rollback CAS independently verify current content.
+                foreach (var id in confirmedIds)
+                    writes.Add(new KnowledgeV2MetaRow { Key = key + ":ack:" + id, Value = epoch });
+                writes.Add(new KnowledgeV2MetaRow
+                {
+                    Key = RevisionSyncCheckpointKey(scope),
+                    Value = new JObject { ["epoch"] = epoch, ["cursor"] = cursor.Value }.ToString(Formatting.None)
+                });
+                db.SaveRecordsInTransaction(writes);
+            }
+            return response.Value<bool?>("has_more") == true || uploaded.Count > 0 || incoming.Count > 0;
+        }
+
         internal static Dictionary<string, long> GetCommittedRevisionCandidateReceipts(string seller)
         {
             var state = GetState(ResolveShopRequired(seller));
@@ -1448,8 +1564,28 @@ namespace Bot.Knowledge
             }
         }
 
+        private static KnowledgeV2MetaRow RemoteMutationReceipt(string key, string action)
+        {
+            if (string.IsNullOrWhiteSpace(key)) return null;
+            if (!Regex.IsMatch(key, @"^[0-9a-f]{64}$")) throw new InvalidOperationException("远程操作凭证无效");
+            return new KnowledgeV2MetaRow { Key = "remote_mutation:" + key, Value = action };
+        }
+
+        internal static bool HasRemoteMutationReceipt(string seller, string key, string action)
+        {
+            var receipt = RemoteMutationReceipt(key, action);
+            if (receipt == null) return false;
+            var state = GetState(ResolveShopRequired(seller));
+            EnsureSchemaInitialized(state);
+            lock (state.Sync)
+            {
+                var found = state.Db.ReadOneRecord<KnowledgeV2MetaRow>(x => x.Key == receipt.Key);
+                return found != null && found.Value == action;
+            }
+        }
+
         public static bool TryRollbackLastBotCorrection(string seller, string knowledgeId, out string result,
-            string expectedRevisionId = null, string expectedFingerprint = null)
+            string expectedRevisionId = null, string expectedFingerprint = null, string operationReceipt = null)
         {
             result = string.Empty;
             knowledgeId = (knowledgeId ?? string.Empty).Trim();
@@ -1496,7 +1632,10 @@ namespace Bot.Knowledge
                     CurrentJson = JsonConvert.SerializeObject(restored),
                     CreatedAtTicks = DateTime.Now.Ticks
                 };
-                state.Db.SaveRecordsInTransaction(new List<object> { ToRow(restored), rollback });
+                var writes = new List<object> { ToRow(restored), rollback };
+                var receipt = RemoteMutationReceipt(operationReceipt, "rollback");
+                if (receipt != null) writes.Add(receipt);
+                state.Db.SaveRecordsInTransaction(writes);
             }
             KnowledgeEngineV2Service.ApplyRecordUpdate(seller, restored);
             string auditError;
@@ -1713,7 +1852,7 @@ namespace Bot.Knowledge
 
         internal static bool TryReplaceAllIfUnchanged(
             string seller,string expectedFingerprint,IEnumerable<KnowledgeV2Record> records,
-            PortableImportRecovery recovery = null)
+            PortableImportRecovery recovery = null, string operationReceipt = null)
         {
             var shop=ResolveShopRequired(seller);
             var state=GetState(shop);
@@ -1750,6 +1889,8 @@ namespace Bot.Knowledge
                     Key = "schema_version",
                     Value = KnowledgeEngineV2Constants.SchemaVersion.ToString()
                 });
+                var receipt = RemoteMutationReceipt(operationReceipt, "conflict_resolve");
+                if (receipt != null) replacementRows.Add(receipt);
                 // The compare-and-swap check and replacement remain under the repository
                 // lock; the actual DELETE + INSERT + metadata write are now one SQLite
                 // transaction, so a process crash cannot leave a partially cleared corpus.
@@ -1962,10 +2103,10 @@ namespace Bot.Knowledge
             record.ShortAnswer = (record.ShortAnswer ?? string.Empty).Trim();
             record.Entities = NormalizeList(record.Entities, 24);
             record.Aliases = NormalizeList(record.Aliases, 48);
-            record.Conditions = NormalizeList(record.Conditions, 20);
-            record.Exclusions = NormalizeList(record.Exclusions, 20);
-            record.RequiredContext = NormalizeList(record.RequiredContext, 20);
-            record.ProductIds = NormalizeList(record.ProductIds, 20);
+            record.Conditions = NormalizeList(record.Conditions, int.MaxValue);
+            record.Exclusions = NormalizeList(record.Exclusions, int.MaxValue);
+            record.RequiredContext = NormalizeList(record.RequiredContext, int.MaxValue);
+            record.ProductIds = NormalizeList(record.ProductIds, int.MaxValue);
             record.Authority = Clamp(record.Authority);
             record.Confidence = Clamp(record.Confidence);
             if (record.CreatedAt == DateTime.MinValue) record.CreatedAt = DateTime.Now;

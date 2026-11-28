@@ -1186,10 +1186,7 @@ namespace Bot.ChromeNs
                         {
                             // We have proof of dispatch but not of its outcome.
                             // Never re-execute a possibly committed mutation.
-                            result = Result(id, false, "客户端重启中断任务，执行结果未知；请查看原设备断点或知识修订状态后重试。", new JObject());
-                            result["claim"] = claim;
-                            result["journal_scope"] = scope;
-                            result["phase"] = "interrupted";
+                            result = RecoverInterruptedKnowledgeOperation(state, id, result, scope, claim);
                             WriteKnowledgeJournal(path, scope, result);
                         }
                         state.PendingCommandResults[id] = result;
@@ -1200,6 +1197,100 @@ namespace Bot.ChromeNs
                     Log.ErrorWithMaxCount("知识操作结果恢复失败：" + ex.GetType().Name, 10);
                 }
             }
+        }
+
+        private static JObject RecoverInterruptedKnowledgeOperation(
+            ShopWebState state, long id, JObject receipt, string scope, string claim)
+        {
+            var recovered = new JObject();
+            var completed = false;
+            var action = (string)receipt["action"];
+            var checkpointId = (string)receipt["checkpoint_id"];
+            var runId = (string)receipt["run_id"];
+            if ((action == "history_scan" || action == "history_resume")
+                && !string.IsNullOrWhiteSpace(checkpointId) && !string.IsNullOrWhiteSpace(runId))
+            {
+                try
+                {
+                    var shop = state.Shop;
+                    if (shop != null && shop.HasStableSellerId)
+                    {
+                        using (ShopSettingsScope.Enter(shop))
+                        {
+                            var checkpoint = BuyerHistoryScanCheckpointStore.ReadBoundRun(
+                                shop.SellerNick, checkpointId, runId);
+                            if (checkpoint != null)
+                            {
+                                // The checkpoint is encrypted, shop-bound and owned by
+                                // this exact run. Never use a different "latest" scan.
+                                completed = checkpoint.State == "completed"
+                                    && checkpoint.Contacts.Count > 1
+                                    && checkpoint.Completed.Count == checkpoint.Contacts.Count;
+                                recovered = new JObject
+                                {
+                                    ["checkpoint_id"] = checkpoint.Id,
+                                    ["run_id"] = checkpoint.LastRunId,
+                                    ["checkpoint_state"] = checkpoint.State,
+                                    ["contacts"] = checkpoint.Completed.Count,
+                                    ["total_contacts"] = checkpoint.Contacts.Count,
+                                    ["archived_messages"] = checkpoint.ArchivedMessages,
+                                    ["observed_turns"] = checkpoint.ObservedTurns,
+                                    ["analyzed_pairs"] = checkpoint.AnalyzedHumanPairs,
+                                    ["model_referenced_pairs"] = checkpoint.ModelReferencedPairs,
+                                    ["supplemented_pairs"] = checkpoint.SupplementedPairs,
+                                    ["non_reusable_pairs"] = checkpoint.NonReusablePairs,
+                                    ["published"] = checkpoint.PublishedKnowledge,
+                                    ["candidates"] = checkpoint.CandidateKnowledge,
+                                    ["duplicate_skipped"] = checkpoint.DuplicateKnowledge,
+                                    ["learn_knowledge"] = checkpoint.LearnKnowledge,
+                                    ["recovered_from_checkpoint"] = true,
+                                    ["coverage_verified"] = false,
+                                    ["coverage_warning"] = "恢复已发现联系人断点，不代表已证明全店历史消息覆盖。"
+                                };
+                            }
+                        }
+                    }
+                }
+                catch (Exception ex)
+                {
+                    Log.ErrorWithMaxCount("知识操作断点证据复核失败：" + ex.GetType().Name, 10);
+                }
+            }
+            if (!completed && (action == "rollback" || action == "conflict_resolve"
+                || action == "revision_apply" || action == "revision_reject"))
+            {
+                try
+                {
+                    var shop = state.Shop;
+                    if (shop != null && shop.HasStableSellerId)
+                    using (ShopSettingsScope.Enter(shop))
+                    {
+                        completed = action == "rollback" || action == "conflict_resolve"
+                            ? KnowledgeEngineV2Repository.HasRemoteMutationReceipt(
+                                shop.SellerNick, RemoteMutationKey(scope, id, claim, action), action)
+                            : KnowledgeEngineV2RevisionService.HasCommittedCandidateOutcome(
+                                shop.SellerNick, (string)receipt["candidate_id"], action, (string)receipt["reason"],
+                                RemoteMutationKey(scope, id, claim, action));
+                        if (completed)
+                            recovered = new JObject { ["applied"] = true, ["recovered_from_committed_receipt"] = true };
+                    }
+                }
+                catch (Exception ex)
+                {
+                    Log.ErrorWithMaxCount("知识操作事务凭证复核失败：" + ex.GetType().Name, 10);
+                }
+            }
+            var result = Result(id, completed, completed ? string.Empty
+                : "客户端重启中断任务；仅恢复已核实的原任务断点，不自动重复执行知识修订或回滚。", recovered);
+            result["claim"] = claim;
+            result["journal_scope"] = scope;
+            result["phase"] = completed ? "completed" : "interrupted";
+            return result;
+        }
+
+        private static string RemoteMutationKey(string scope, long id, string claim, string action)
+        {
+            return Hash(scope + "\n" + id + "\n" + claim + "\n" + action);
         }
 
         private static void StartKnowledgeOperation(ShopWebState state, long id, JObject payload, string journalScope)
@@ -1223,6 +1314,9 @@ namespace Bot.ChromeNs
                 receipt["phase"] = "started";
                 receipt["claim"] = claim;
                 receipt["journal_scope"] = journalScope;
+                receipt["action"] = (string)payload["action"];
+                receipt["candidate_id"] = (string)payload["candidate_id"];
+                receipt["reason"] = (string)payload["reason"];
                 WriteKnowledgeJournal(path, journalScope, receipt);
             }
             catch
@@ -1242,7 +1336,7 @@ namespace Bot.ChromeNs
                         || string.IsNullOrEmpty(KnowledgeDeviceId.Value) || (string)payload["device_id"] != KnowledgeDeviceId.Value)
                         throw new InvalidOperationException("远程知识操作店铺身份不匹配。");
                     using (ShopSettingsScope.Enter(state.Shop))
-                        result = Result(id, true, string.Empty, await ExecuteKnowledgeOperationAsync(state, payload, job));
+                        result = Result(id, true, string.Empty, await ExecuteKnowledgeOperationAsync(state, payload, job, id));
                 }
                 catch (OperationCanceledException)
                 {
@@ -1274,7 +1368,7 @@ namespace Bot.ChromeNs
             });
         }
 
-        private static async Task<JObject> ExecuteKnowledgeOperationAsync(ShopWebState state, JObject payload, KnowledgeOperation job)
+        private static async Task<JObject> ExecuteKnowledgeOperationAsync(ShopWebState state, JObject payload, KnowledgeOperation job, long commandId)
         {
             var seller = state.Shop.DisplayName;
             var action = (string)payload["action"];
@@ -1305,6 +1399,15 @@ namespace Bot.ChromeNs
                         scanOptions.EndTime = checkpoint.EndTime;
                         scanOptions.ResumeCheckpointId = checkpoint.Id;
                     }
+                    scanOptions.OnCheckpointBound = (checkpointId, runId) =>
+                    {
+                        // Persist the association before business mutations. A
+                        // failed binding must abort instead of losing recovery proof.
+                        var receipt = ReadKnowledgeJournal(job.JournalPath, job.JournalScope);
+                        receipt["checkpoint_id"] = checkpointId;
+                        receipt["run_id"] = runId;
+                        WriteKnowledgeJournal(job.JournalPath, job.JournalScope, receipt);
+                    };
                     var scan = await new ChatHistoryScanService().ScanBuyerMessagesAsync(seller, scanOptions,
                         p =>
                         {
@@ -1332,19 +1435,22 @@ namespace Bot.ChromeNs
                 case "revision_apply":
                 case "revision_reject":
                     string revisionError;
+                    var revisionReceipt = RemoteMutationKey(job.JournalScope, commandId, job.Claim, action);
                     bool ok = action == "revision_apply"
-                        ? KnowledgeEngineV2RevisionService.ApplyCandidate(seller, (string)payload["candidate_id"], out revisionError)
-                        : KnowledgeEngineV2RevisionService.RejectCandidate(seller, (string)payload["candidate_id"], (string)payload["reason"], out revisionError);
+                        ? KnowledgeEngineV2RevisionService.ApplyCandidate(seller, (string)payload["candidate_id"], out revisionError, revisionReceipt)
+                        : KnowledgeEngineV2RevisionService.RejectCandidate(seller, (string)payload["candidate_id"], (string)payload["reason"], out revisionError, revisionReceipt);
                     if (!ok) throw new InvalidOperationException(revisionError);
                     return new JObject { ["applied"] = true };
                 case "conflict_list":
                     var records = KnowledgeEngineV2Repository.LoadAll(seller);
                     return new JObject { ["fingerprint"] = KnowledgeEngineV2Repository.ComputeCloudSyncFingerprint(records),
                         ["items"] = JArray.FromObject(KnowledgeEngineV2Service.GetConflictsForRecords(records).Take(100)
-                            .Select(x => new { x.FactKey, x.Subject, x.Predicate, Records = x.Records.Select(y => new { y.Id, y.Title, y.Answer }) })) };
+                            .Select(x => new { x.FactKey, x.Subject, x.Predicate, x.RequiresScopeReview, x.ResolutionMode,
+                                Records = x.Records.Select(y => new { y.Id, y.Title, y.Answer, y.ProductIds, y.Conditions, y.RequiredContext, y.Exclusions }) })) };
                 case "conflict_resolve":
                     if (!KnowledgeEngineV2Service.TryResolveConflict(seller, (string)payload["fingerprint"],
-                        (string)payload["fact_key"], (string)payload["knowledge_id"], (string)payload["reason"] == "candidate"))
+                        (string)payload["fact_key"], (string)payload["knowledge_id"], (string)payload["reason"] == "candidate",
+                        RemoteMutationKey(job.JournalScope, commandId, job.Claim, action)))
                         throw new InvalidOperationException("知识或冲突已变化，请刷新后重试。");
                     return new JObject { ["applied"] = true };
                 case "rollback_list":
@@ -1352,7 +1458,8 @@ namespace Bot.ChromeNs
                 case "rollback":
                     string rollbackError;
                     if (!KnowledgeEngineV2Repository.TryRollbackLastBotCorrection(seller, (string)payload["knowledge_id"], out rollbackError,
-                        (string)payload["revision_id"], (string)payload["fingerprint"]))
+                        (string)payload["revision_id"], (string)payload["fingerprint"],
+                        RemoteMutationKey(job.JournalScope, commandId, job.Claim, action)))
                         throw new InvalidOperationException(rollbackError);
                     return new JObject { ["message"] = rollbackError };
                 default: throw new InvalidOperationException("不支持的知识操作。");

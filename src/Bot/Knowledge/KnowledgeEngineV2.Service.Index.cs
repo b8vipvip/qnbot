@@ -110,8 +110,17 @@ namespace Bot.Knowledge
                 // Never prune exact aliases before applicability and conflict checks.
                 // A broad predicate/intent bucket can otherwise displace a reviewed FAQ.
                 var exactIds = exact ?? new HashSet<int>();
+                // Filter scope-inapplicable candidates before consuming the
+                // bounded ranking budget. Otherwise thousands of same-intent but
+                // wrong-product or excluded records can hide the only valid match.
                 var ordered = result.Where(i => !exactIds.Contains(i))
-                    .OrderByDescending(i => PreliminaryScore(snapshot.Records[i], query))
+                    .Where(i =>
+                    {
+                        string ignored;
+                        return KnowledgeEngineV2Semantics.IsApplicable(snapshot.Records[i], query, out ignored);
+                    })
+                    .OrderByDescending(i => KnowledgeV2AuthorityPolicy.IsProductionApproved(snapshot.Records[i]))
+                    .ThenByDescending(i => PreliminaryScore(snapshot.Records[i], query))
                     .ThenBy(i => snapshot.Records[i].Id, StringComparer.Ordinal)
                     .Take(Math.Max(0, 96 - exactIds.Count));
                 var selected = new HashSet<int>(exactIds);
@@ -181,6 +190,35 @@ namespace Bot.Knowledge
             return IsMeaningfulConflictPair(best.Record, second.Record);
         }
 
+        private static bool HasApplicableScopedConflict(KnowledgeV2Match best, KnowledgeV2Match other, KnowledgeV2Query query)
+        {
+            if (best == null || other == null || best.Record == null || other.Record == null
+                || query == null || best.Score < 0.78 || other.Score < 0.74
+                || !KnowledgeEngineV2Semantics.ProductScopesOverlap(best.Record, other.Record))
+                return false;
+            var left = best.Record;
+            var right = other.Record;
+            if ((left.ProductIds == null || left.ProductIds.Count == 0)
+                && (right.ProductIds == null || right.ProductIds.Count == 0)
+                && (left.Conditions == null || left.Conditions.Count == 0)
+                && (right.Conditions == null || right.Conditions.Count == 0)
+                && (left.RequiredContext == null || left.RequiredContext.Count == 0)
+                && (right.RequiredContext == null || right.RequiredContext.Count == 0)
+                && (left.Exclusions == null || left.Exclusions.Count == 0)
+                && (right.Exclusions == null || right.Exclusions.Count == 0))
+                return false;
+            // Both candidates have already passed the same query applicability
+            // gate. Different condition signatures do not resolve overlapping
+            // business claims by themselves.
+            if (IsMeaningfulConflictPair(left, right)) return true;
+            if (best.PredicateScore < 0.99 || other.PredicateScore < 0.99
+                || best.IntentScore < 0.75 || other.IntentScore < 0.75
+                || KnowledgeEngineV2Semantics.TextSimilarity(left.Title, right.Title) < 0.86
+                || !SameAnswerNumbers(left.Title, right.Title))
+                return false;
+            return !AnswerFactsCompatible(left.Answer, right.Answer);
+        }
+
         private static bool HasAnswerDisagreement(List<KnowledgeV2Record> records)
         {
             records = records ?? new List<KnowledgeV2Record>();
@@ -203,7 +241,8 @@ namespace Bot.Knowledge
         /// </summary>
         private static bool IsMeaningfulConflictPair(KnowledgeV2Record left, KnowledgeV2Record right)
         {
-            if (left == null || right == null) return false;
+            if (left == null || right == null
+                || !KnowledgeEngineV2Semantics.ProductScopesOverlap(left, right)) return false;
             var exactQuestion = (left.Aliases ?? new List<string>()).Concat(new[] { left.Title })
                 .Any(a => (right.Aliases ?? new List<string>()).Concat(new[] { right.Title })
                     .Any(b => ExactQuestionMatches(a, b)));
@@ -328,7 +367,8 @@ namespace Bot.Knowledge
                 {
                     Seller = memory.Seller, Buyer = memory.Buyer, Subject = memory.Subject,
                     Predicate = memory.Predicate, Intent = memory.Intent, UpdatedAt = memory.UpdatedAt,
-                    Entities = (memory.Entities ?? new List<string>()).ToList()
+                    Entities = (memory.Entities ?? new List<string>()).ToList(),
+                    ProductEvidenceConflict = memory.ProductEvidenceConflict
                 };
             }
         }
@@ -352,15 +392,17 @@ namespace Bot.Knowledge
                     current.Subject = query.Subject ?? string.Empty;
                     current.Predicate = query.Predicate ?? "general";
                     current.Intent = query.Intent ?? "general";
-                    current.Entities = (query.Entities ?? new List<string>()).Take(8).ToList();
+                    current.Entities = (query.Entities ?? new List<string>()).OrderByDescending(KnowledgeEngineV2Semantics.IsProductEntity).Take(10).ToList();
                 }
                 else
                 {
                     if (!string.IsNullOrWhiteSpace(query.Subject)) current.Subject = query.Subject;
                     if (query.Predicate != "general") current.Predicate = query.Predicate;
                     if (query.Intent != "general") current.Intent = query.Intent;
-                    if (query.Entities != null && query.Entities.Count > 0) current.Entities = query.Entities.Take(8).ToList();
+                    if (query.Entities != null && query.Entities.Count > 0)
+                        current.Entities = query.Entities.OrderByDescending(KnowledgeEngineV2Semantics.IsProductEntity).Take(10).ToList();
                 }
+                current.ProductEvidenceConflict = query.ProductEvidenceConflict;
                 current.UpdatedAt = DateTime.Now;
             }
             SweepExpiredWorkingMemoryIfDue();

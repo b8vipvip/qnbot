@@ -45,6 +45,6 @@ def test_working_memory_resets_on_standalone_or_expired_turn_and_never_shares_em
     public = read("src/Bot/Knowledge/KnowledgeEngineV2.Service.Public.cs")
     assert "if (!query.ContextDependent || current.UpdatedAt < DateTime.Now.AddMinutes(-45))" in index
     assert 'current.Predicate = query.Predicate ?? "general"' in index
-    assert "current.Entities = (query.Entities ?? new List<string>()).Take(8).ToList()" in index
+    assert "current.Entities = (query.Entities ?? new List<string>()).OrderByDescending(KnowledgeEngineV2Semantics.IsProductEntity).Take(10).ToList()" in index
     assert "if (string.IsNullOrWhiteSpace(buyer)) return null;" in index
     assert "if (!sandbox && message.Length > 0)" in public

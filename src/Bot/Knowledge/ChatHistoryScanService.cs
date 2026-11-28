@@ -26,6 +26,9 @@ namespace Bot.Knowledge
         public int MaxContacts { get; set; }
         // Supplied only when user explicitly elects to continue a stored job.
         public string ResumeCheckpointId { get; set; }
+        // Remote callers can bind the durable command receipt to the exact
+        // checkpoint/run before any contact is read or learned.
+        internal Action<string, string> OnCheckpointBound { get; set; }
         public bool LearnKnowledge { get; set; }
 
         public ChatHistoryScanOptions()
@@ -236,6 +239,8 @@ namespace Bot.Knowledge
                 checkpoint.State = "running";
                 checkpoint.LastRunId = evidence.Record.RunId;
                 BuyerHistoryScanCheckpointStore.Save(seller, checkpoint);
+                if (options.OnCheckpointBound != null)
+                    options.OnCheckpointBound(checkpoint.Id, evidence.Record.RunId);
                 Log.Info("[BuyerQuestions] history_scan_started run=" + evidence.Record.RunId
                     + ";checkpoint=" + checkpoint.Id
                     + ";maxContacts=" + options.MaxContacts);
@@ -392,7 +397,10 @@ namespace Bot.Knowledge
                                 ? "scan-turn:" + turns.IndexOf(x) : x.MessageKey;
                             string botEcho;
                             matchedBotReplies.TryGetValue(key, out botEcho);
-                            return Tuple.Create(x.Text, x.Time, x.MessageKey, botEcho ?? string.Empty);
+                            var evidenceKey = string.IsNullOrWhiteSpace(x.MessageKey)
+                                ? "history:" + buyer + "|" + x.Time.Ticks + "|" + x.Text
+                                : x.MessageKey;
+                            return Tuple.Create(x.Text, x.Time, evidenceKey, botEcho ?? string.Empty);
                         }));
                         foreach (var turn in buyerTurns)
                         {
@@ -517,6 +525,10 @@ namespace Bot.Knowledge
                                 throw;
                             }
                             read = checkpoint.ArchivedMessages;
+                            if (options.LearnKnowledge)
+                                evidence.RecordCommittedLearning(buyer, turns.Count, pairCount, referenced, supplemented, nonReusable,
+                                    buyerTurns.Select(x => string.IsNullOrWhiteSpace(x.MessageKey)
+                                        ? "history:" + buyer + "|" + x.Time.Ticks + "|" + x.Text : x.MessageKey));
                         }
                         evidence.Contact(buyer, true, count, "history_read");
                         Log.Info("[BuyerQuestions] history_scan_contact_complete run="

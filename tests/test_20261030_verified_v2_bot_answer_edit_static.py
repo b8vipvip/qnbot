@@ -77,7 +77,10 @@ def test_same_shop_rollback_rejects_stale_revision_and_refreshes_snapshot():
     assert "EditorRecordFingerprint(before) != EditorRecordFingerprint(applied)" in rollback
     assert "expectedRevisionId" in rollback
     assert 'Action = "rollback"' in rollback
-    assert "SaveRecordsInTransaction(new List<object> { ToRow(restored), rollback });" in rollback
+    assert "var writes = new List<object> { ToRow(restored), rollback };" in rollback
+    assert "RemoteMutationReceipt(operationReceipt, \"rollback\")" in rollback
+    assert "writes.Add(receipt)" in rollback
+    assert "SaveRecordsInTransaction(writes);" in rollback
     assert "KnowledgeEngineV2Service.ApplyRecordUpdate(seller, restored)" in rollback
     assert 'Btn("回滚Bot人工纠错", 138)' in page
     assert "TryRollbackLastBotCorrection(_seller, id, out reason)" in page

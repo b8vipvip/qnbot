@@ -166,6 +166,18 @@ namespace Bot.Knowledge
             return null;
         }
 
+        internal static BuyerHistoryScanCheckpoint ReadBoundRun(string seller, string checkpointId, string runId)
+        {
+            if (string.IsNullOrWhiteSpace(runId)) return null;
+            lock (Sync)
+            {
+                var path = FileName(seller, checkpointId);
+                if (!File.Exists(path)) return null;
+                var value = Decode(seller, path);
+                return string.Equals(value.LastRunId, runId, StringComparison.Ordinal) ? value : null;
+            }
+        }
+
         internal static BuyerHistoryScanCheckpoint Load(string seller, string id,
             ChatHistoryScanOptions options)
         {

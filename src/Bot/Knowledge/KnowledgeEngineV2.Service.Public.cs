@@ -15,6 +15,7 @@ namespace Bot.Knowledge
         {
             public string ShopKey;
             public DateTime BuiltAt;
+            public readonly string Generation = Guid.NewGuid().ToString("N");
             public List<KnowledgeV2Record> Records;
             public Dictionary<string, HashSet<int>> Exact;
             public Dictionary<string, HashSet<int>> Intent;
@@ -41,6 +42,15 @@ namespace Bot.Knowledge
 
         public static bool IsEnabled(string seller) { return GetSettings(seller).Enabled; }
         public static string GetMode(string seller) { return GetSettings(seller).Mode; }
+
+        internal static bool IsDecisionSnapshotCurrent(string seller, KnowledgeV2Decision decision)
+        {
+            if (decision == null || string.IsNullOrWhiteSpace(decision.SnapshotGeneration)) return false;
+            var shop = ResolveShop(seller);
+            Snapshot current;
+            return shop != null && Snapshots.TryGetValue(shop.ShopKey, out current)
+                && current != null && string.Equals(current.Generation, decision.SnapshotGeneration, StringComparison.Ordinal);
+        }
 
         public static bool IsSnapshotReady(string seller)
         {
@@ -227,6 +237,8 @@ namespace Bot.Knowledge
                 evidenceEntities = actualProducts.Concat(evidenceEntities.Where(x => !x.StartsWith("product:", StringComparison.OrdinalIgnoreCase)))
                     .Distinct(StringComparer.OrdinalIgnoreCase).ToList();
                 var evidenceHasProductId = actualProducts.Count > 0;
+                if (actualProducts.Count > 10)
+                    query.ProductEvidenceConflict = true;
                 var buyerProducts = KnowledgeEngineV2Semantics.ExtractEntities(message)
                     .Where(x => x.StartsWith("product:", StringComparison.OrdinalIgnoreCase)).ToList();
                 if (buyerMessageHasProductId && evidenceHasProductId &&
@@ -308,6 +320,7 @@ namespace Bot.Knowledge
             }
 
             var snapshot = GetSnapshot(seller);
+            decision.SnapshotGeneration = snapshot.Generation;
             var recallSw = Stopwatch.StartNew();
             var candidates = Recall(snapshot, query);
             decision.CandidateCount = candidates.Count;
@@ -355,7 +368,8 @@ namespace Bot.Knowledge
             // An explicit human correction of this exact standalone question wins over
             // older generic answers; unrelated queries still use conflict rejection.
             decision.HasConflict = manualExactConflict || (manualExact == null
-                && allProductionMatches.Any(x => !ReferenceEquals(x, best) && HasConflict(best, x)));
+                && allProductionMatches.Any(x => !ReferenceEquals(x, best) && HasConflict(best, x)))
+                || allProductionMatches.Any(x => !ReferenceEquals(x, best) && HasApplicableScopedConflict(best, x, query));
             var margin = second == null ? best.Score : best.Score - second.Score;
             var threshold = settings.DirectThreshold;
             var minConfidence = settings.MinConfidence;
@@ -585,20 +599,58 @@ namespace Bot.Knowledge
 
         internal static List<KnowledgeV2Conflict> GetConflictsForRecords(IEnumerable<KnowledgeV2Record> records)
         {
-            return records.Where(KnowledgeV2AuthorityPolicy.IsProductionApproved)
-                .GroupBy(KnowledgeEngineV2Semantics.FactKey)
+            var approved = records.Where(KnowledgeV2AuthorityPolicy.IsProductionApproved).ToList();
+            var conflicts = approved.GroupBy(KnowledgeEngineV2Semantics.FactKey)
                 .Where(g => !string.IsNullOrWhiteSpace(g.Key) && g.Count() > 1)
                 .Select(g => new KnowledgeV2Conflict { FactKey = g.Key, Subject = g.First().Subject, Predicate = g.First().Predicate,
                     Records = g.Where(x => g.Any(y => !ReferenceEquals(x, y) && IsMeaningfulConflictPair(x, y))).ToList() })
                 .Where(x => HasAnswerDisagreement(x.Records)).ToList();
+
+            // Different applicability signatures can conflict for a subset of
+            // products/conditions. Surface these for scope editing, not the
+            // destructive "keep one, disable the rest" workflow.
+            var seen = new HashSet<string>(StringComparer.Ordinal);
+            foreach (var group in approved.Where(x => !string.IsNullOrWhiteSpace(x.Title))
+                .GroupBy(x => KnowledgeEngineV2Semantics.Compact(x.Title) + "|" + string.Join(",", NumericTokens(x.Title))))
+            {
+                var items = group.OrderBy(x => x.Id, StringComparer.Ordinal).ToList();
+                if (items.Count < 2) continue;
+                var factKeys = items.ToDictionary(x => x.Id, KnowledgeEngineV2Semantics.FactKey, StringComparer.Ordinal);
+                if (factKeys.Values.Distinct(StringComparer.Ordinal).Count() < 2) continue;
+                var answerGroups = items.GroupBy(x => KnowledgeEngineV2Semantics.Compact(x.Answer)
+                    + "|" + string.Join(",", NumericTokens(x.Answer))).ToList();
+                if (answerGroups.Count < 2) continue;
+                foreach (var leftGroup in answerGroups)
+                foreach (var rightGroup in answerGroups.SkipWhile(x => !ReferenceEquals(x, leftGroup)).Skip(1))
+                {
+                    if (AnswerFactsCompatible(leftGroup.First().Answer, rightGroup.First().Answer)) continue;
+                    foreach (var left in leftGroup)
+                    foreach (var right in rightGroup)
+                    {
+                        if (factKeys[left.Id] == factKeys[right.Id]
+                            || !KnowledgeEngineV2Semantics.ProductScopesOverlap(left, right)) continue;
+                        var ids = new[] { left.Id, right.Id }.OrderBy(x => x, StringComparer.Ordinal);
+                        var key = "scope-review:" + string.Join("|", ids);
+                        if (!seen.Add(key)) continue;
+                        conflicts.Add(new KnowledgeV2Conflict { FactKey = key, Subject = left.Subject,
+                            Predicate = left.Predicate, RequiresScopeReview = true,
+                            Records = new List<KnowledgeV2Record> { left, right } });
+                        // Bound advisory output; runtime applicability still checks
+                        // all recalled eligible records independently.
+                        if (seen.Count >= 200) return conflicts;
+                    }
+                }
+            }
+            return conflicts;
         }
 
-        internal static bool TryResolveConflict(string seller, string expectedFingerprint, string factKey, string selectedId, bool asCandidate)
+        internal static bool TryResolveConflict(string seller, string expectedFingerprint, string factKey, string selectedId, bool asCandidate, string operationReceipt = null)
         {
             var records = KnowledgeEngineV2Repository.LoadAll(seller);
             if (string.IsNullOrWhiteSpace(expectedFingerprint) ||
                 KnowledgeEngineV2Repository.ComputeCloudSyncFingerprint(records) != expectedFingerprint) return false;
             var conflict = GetConflictsForRecords(records).SingleOrDefault(x => x.FactKey == factKey);
+            if (conflict != null && conflict.RequiresScopeReview) return false;
             var selected = conflict == null ? null : conflict.Records.FirstOrDefault(x => x.Id == selectedId);
             if (selected == null) return false;
             var conflicting = conflict.Records.Where(x => x.Id != selectedId && IsMeaningfulConflictPair(selected, x)).ToList();
@@ -613,7 +665,7 @@ namespace Bot.Knowledge
                 record.UpdatedAt = DateTime.Now;
             }
             // One CAS transaction for the entire group; never apply a partial resolution.
-            return KnowledgeEngineV2Repository.TryReplaceAllIfUnchanged(seller, expectedFingerprint, records);
+            return KnowledgeEngineV2Repository.TryReplaceAllIfUnchanged(seller, expectedFingerprint, records, null, operationReceipt);
         }
 
         public static KnowledgeV2Stats GetStats(string seller)

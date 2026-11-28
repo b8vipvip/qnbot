@@ -15,6 +15,13 @@ namespace Bot.ChromeNs
     {
         public bool Handled { get; private set; }
         public string ContextPromptAddon { get; private set; }
+        public KnowledgeV2Decision ContextDecision { get; private set; }
+
+        internal KnowledgeV2RuntimeResult WithContextDecision(KnowledgeV2Decision decision)
+        {
+            ContextDecision = decision;
+            return this;
+        }
         // Only a V2 decision that already passed the direct-answer and typed
         // evidence gates may be used if the configured AI upstream later fails.
         public KnowledgeV2Decision OfflineFallbackDecision { get; private set; }
@@ -239,9 +246,10 @@ namespace Bot.ChromeNs
                     + ", reason=" + commerceAuthority.Reason);
                 // Order-dependent questions still need applicable V2 facts for AI.
                 // No ordinary local terminal reply is permitted in this branch.
+                KnowledgeV2Decision contextualDecision = null;
                 try
                 {
-                    var contextualDecision = KnowledgeEngineV2Service.ResolveWithCommerceContext(
+                    contextualDecision = KnowledgeEngineV2Service.ResolveWithCommerceContext(
                         burst.SellerNick, burst.BuyerNick, retrievalQuestion, commerceAuthority.CommerceContext);
                     if (contextualDecision != null)
                     {
@@ -258,7 +266,7 @@ namespace Bot.ChromeNs
                 }
                 if (string.IsNullOrWhiteSpace(commercePrompt))
                     return KnowledgeV2RuntimeResult.Continue();
-                return KnowledgeV2RuntimeResult.Continue(commercePrompt);
+                return KnowledgeV2RuntimeResult.Continue(commercePrompt).WithContextDecision(contextualDecision);
             }
 
             // Do not skip retrieval on the first buyer turn after startup. Resolve()
@@ -367,7 +375,7 @@ namespace Bot.ChromeNs
                     + ", candidates=" + (decision == null ? 0 : decision.CandidateCount)
                     + ", contextAvailable=" + !string.IsNullOrWhiteSpace(contextPromptAddon)
                     + ", reason=" + (decision == null ? "无决策" : decision.Reason));
-                return KnowledgeV2RuntimeResult.Continue(contextPromptAddon);
+                return KnowledgeV2RuntimeResult.Continue(contextPromptAddon).WithContextDecision(decision);
             }
 
             // AI-first must still use the V2 retrieval result as grounded context,
@@ -382,7 +390,7 @@ namespace Bot.ChromeNs
                 Log.Info("Knowledge Engine V2 AI优先模式：保留已批准知识作为上下文，不截断AI生成: buyer="
                     + burst.BuyerNick + ", candidates=" + decision.CandidateCount
                     + ", totalMs=" + decision.TotalMs);
-                return KnowledgeV2RuntimeResult.Continue(aiFirstContext, decision);
+                return KnowledgeV2RuntimeResult.Continue(aiFirstContext, decision).WithContextDecision(decision);
             }
 
             var detectedAt = burst.Items.Min(x => x.ReceivedAt);
@@ -777,23 +785,8 @@ namespace Bot.ChromeNs
                 || KnowledgeEngineV2Semantics.IsHighRisk(decision.Query.Original))
                 return string.Empty;
 
-            var matches = (decision.Matches ?? new System.Collections.Generic.List<KnowledgeV2Match>())
-                .Where(match => match != null && match.Record != null
-                    && Bot.Knowledge.KnowledgeV2AuthorityPolicy.IsProductionApproved(match.Record)
-                    && KnowledgeEngineV2Service.IsEligibleContextMatch(match, decision.Query)
-                    && match.Score >= 0.52
-                    && match.ConfidenceScore >= 0.68
-                    && (match.AliasScore >= 0.42
-                        || (match.PredicateScore >= 0.99
-                            && match.IntentScore >= 0.75
-                            && match.EntityScore >= 0.66)))
-                .OrderByDescending(match => match.Score)
-                .ThenByDescending(match => match.ConfidenceScore)
-                .Take(3)
-                .ToList();
+            var matches = GetContextMatches(decision);
             if (matches.Count == 0) return string.Empty;
-            // A weaker match omitted from the direct selection can still conflict
-            // with another context match. Do not hand contradictory facts to AI.
             if (KnowledgeEngineV2Service.HasContextConflict(matches)) return string.Empty;
 
             var sb = new StringBuilder();
@@ -829,6 +822,62 @@ namespace Bot.ChromeNs
             return sb.ToString();
         }
 
+        private static System.Collections.Generic.List<KnowledgeV2Match> GetContextMatches(KnowledgeV2Decision decision)
+        {
+            var matches = (decision.Matches ?? new System.Collections.Generic.List<KnowledgeV2Match>())
+                .Where(match => match != null && match.Record != null
+                    && Bot.Knowledge.KnowledgeV2AuthorityPolicy.IsProductionApproved(match.Record)
+                    && KnowledgeEngineV2Service.IsEligibleContextMatch(match, decision.Query)
+                    && match.Score >= 0.52
+                    && match.ConfidenceScore >= 0.68
+                    && (match.AliasScore >= 0.42
+                        || (match.PredicateScore >= 0.99
+                            && match.IntentScore >= 0.75
+                            && match.EntityScore >= 0.66)))
+                .OrderByDescending(match => match.Score)
+                .ThenByDescending(match => match.ConfidenceScore)
+                .Take(3)
+                .ToList();
+            return matches;
+        }
+
+        internal static bool IsContextKnowledgeCurrent(string seller, string shopKey, KnowledgeV2RuntimeResult result)
+        {
+            if (result != null && result.ContextDecision != null
+                && !string.IsNullOrWhiteSpace(result.ContextDecision.SnapshotGeneration)
+                && !KnowledgeEngineV2Service.IsDecisionSnapshotCurrent(seller, result.ContextDecision))
+                return false;
+            if (result == null || string.IsNullOrEmpty(result.ContextPromptAddon)
+                || result.ContextPromptAddon.IndexOf("【Knowledge Center V2已批准知识：仅作为上下文证据】", StringComparison.Ordinal) < 0)
+                return true;
+            var shop = ShopSettingsScope.Current;
+            if (shop == null || !shop.HasStableSellerId
+                || !string.Equals(shop.ShopKey, shopKey, StringComparison.Ordinal)
+                || !string.Equals(shop.SellerNick, seller, StringComparison.Ordinal)
+                || result.ContextDecision == null || result.ContextDecision.Query == null
+                || !KnowledgeEngineV2Service.IsDecisionSnapshotCurrent(seller, result.ContextDecision)
+                || !KnowledgeEngineV2Service.IsEnabled(seller))
+                return false;
+            var matches = GetContextMatches(result.ContextDecision);
+            if (matches.Count == 0 || KnowledgeEngineV2Service.HasContextConflict(matches)) return false;
+            foreach (var match in matches)
+            {
+                var record = match.Record;
+                var committed = KnowledgeEngineV2Repository.LoadCommittedRecord(seller, record.Id);
+                if (committed == null || !committed.Enabled
+                    || string.Equals(committed.Status, "deleted", StringComparison.OrdinalIgnoreCase)
+                    || string.Equals(committed.Status, "disabled", StringComparison.OrdinalIgnoreCase))
+                    return false;
+                committed = KnowledgeV2AuthorityPolicy.NormalizeForRead(committed);
+                if (!KnowledgeV2AuthorityPolicy.IsProductionApproved(committed)
+                    || ShopReceptionPolicy.IsQuarantined(seller, committed.Id, committed.Title, committed.Answer)
+                    || !string.Equals(KnowledgeEngineV2Repository.EditorRecordFingerprint(record),
+                        KnowledgeEngineV2Repository.EditorRecordFingerprint(committed), StringComparison.Ordinal))
+                    return false;
+            }
+            return true;
+        }
+
         private static string SafeContext(string value, int max)
         {
             value = (value ?? string.Empty).Replace("\r", " ").Replace("\n", " ").Trim();
@@ -845,6 +894,8 @@ namespace Bot.ChromeNs
                 || !string.Equals(shop.ShopKey, shopKey, StringComparison.Ordinal)
                 || !string.Equals(shop.SellerNick, seller, StringComparison.Ordinal)
                 || decision == null || !decision.CanDirectReply
+                || (!string.IsNullOrWhiteSpace(decision.SnapshotGeneration)
+                    && !KnowledgeEngineV2Service.IsDecisionSnapshotCurrent(seller, decision))
                 || !KnowledgeV2AuthorityPolicy.IsProductionApproved(record)
                 || string.IsNullOrWhiteSpace(record.Id)
                 || !string.Equals((record.Answer ?? string.Empty).Trim(), decision.Answer, StringComparison.Ordinal))
