@@ -16,11 +16,14 @@ namespace Bot.Knowledge
         {
             var shop = ResolveShopRequired(seller);
             Snapshot existing;
-            if (Snapshots.TryGetValue(shop.ShopKey, out existing) && existing != null) return existing;
+            if (Snapshots.TryGetValue(shop.ShopKey, out existing) && existing != null
+                    && existing.CorpusVersion == KnowledgeEngineV2Repository.GetCorpusVersion(seller)) return existing;
             lock (BuildLocks.GetOrAdd(shop.ShopKey, _ => new object()))
             {
-                if (Snapshots.TryGetValue(shop.ShopKey, out existing) && existing != null) return existing;
-                var records = KnowledgeEngineV2Repository.LoadAll(seller)
+                if (Snapshots.TryGetValue(shop.ShopKey, out existing) && existing != null
+                    && existing.CorpusVersion == KnowledgeEngineV2Repository.GetCorpusVersion(seller)) return existing;
+                long version;
+                var records = KnowledgeEngineV2Repository.LoadSnapshotCorpus(seller, out version)
                     .Where(x => x != null)
                     .Select(KnowledgeV2AuthorityPolicy.NormalizeForRead)
                     .Where(x => x != null && x.Enabled
@@ -28,6 +31,7 @@ namespace Bot.Knowledge
                         && !string.Equals(x.Status, "deleted", StringComparison.OrdinalIgnoreCase))
                     .ToList();
                 var snapshot = BuildSnapshot(shop.ShopKey, records);
+                snapshot.CorpusVersion = version;
                 Snapshots[shop.ShopKey] = snapshot;
                 BotLib.Log.Info("Knowledge Engine V2内存索引已构建: shop=" + shop.ShopKey
                     + ", records=" + records.Count + ", builtAt=" + snapshot.BuiltAt.ToString("HH:mm:ss.fff"));
