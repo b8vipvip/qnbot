@@ -53,3 +53,57 @@ def test_remote_scan_binds_exact_checkpoint_before_contact_work_and_recovers_no_
     assert 'receipt["run_id"] = runId;' in sync
     store = read("src/Bot/Knowledge/BuyerHistoryScanCheckpointStore.cs")
     assert "string.Equals(value.LastRunId, runId, StringComparison.Ordinal)" in store
+
+
+def test_both_vision_senders_use_current_shop_facts_and_preserve_context_decision():
+    vision = read("src/Bot/ChromeNs/VisionRequestService.cs")
+    guard = vision[vision.index("internal static bool CanSendCurrentAnswer"):vision.index("private static void ApplyImageKnowledgeContext")]
+    assert "ShopSettingsScope.Enter(shop, false)" in guard
+    assert "ShopReceptionPolicy.BlockOutgoing(" in guard
+    assert "IsMatchCurrent(" in guard
+    assert "IsSelectedKnowledgeCurrent(" in guard
+    assert "IsContextKnowledgeCurrent(" in guard
+    assert "AllowsUnresolvedKnowledgeReply(" in guard
+    assert "PreSendAnswerValidator.Validate(" in guard
+    assert "result.Answer = learned.Answer" not in vision
+    assert "result.ContextKnowledgeDecision = localDecision.ContextKnowledgeDecision" in vision
+    ocr = read("src/Bot/ChromeNs/OcrFirstKnowledgeDecisionService.cs")
+    assert "ContextKnowledgeDecision = decision" in ocr
+    assert "MatchedImageKnowledgeFingerprint = imageKnowledgeMatch" in ocr
+    for path, anchor in [
+        ("src/Bot/ChromeNs/QN.cs", "Func<bool> visionPreSendGuard = () =>"),
+        ("src/Bot/ChromeNs/VisionWithdrawalAwarePipeline.cs", "Func<bool> preSendGuard = () =>"),
+    ]:
+        pipeline = read(path)
+        start = pipeline.index(anchor)
+        end = pipeline.index("bool sendOk;", start)
+        assert "VisionRequestService.CanSendCurrentAnswer(" in pipeline[start:end]
+
+
+def test_remote_mutations_have_durable_receipts_and_recovery_does_not_reexecute():
+    repo = read("src/Bot/Knowledge/KnowledgeEngineV2.Repository.cs")
+    rollback = repo[repo.index("public static bool TryRollbackLastBotCorrection"):repo.index("internal static bool TryDeleteEditorRecords")]
+    assert 'RemoteMutationReceipt(operationReceipt, "rollback")' in rollback
+    assert "writes.Add(receipt)" in rollback
+    assert "SaveRecordsInTransaction(writes)" in rollback
+    cas = repo[repo.index("internal static bool TryReplaceAllIfUnchanged"):repo.index("internal static int ResumePortableImport")]
+    assert 'RemoteMutationReceipt(operationReceipt, "conflict_resolve")' in cas
+    assert "replacementRows.Add(receipt)" in cas
+    assert "ReplaceRecordsInTransaction(" in cas
+    sync = read("src/Bot/ChromeNs/BotWebConsoleSyncService.cs")
+    recovery = sync[sync.index("private static JObject RecoverInterruptedKnowledgeOperation"):sync.index("private static void StartKnowledgeOperation")]
+    assert "HasRemoteMutationReceipt(" in recovery
+    assert "HasCommittedCandidateOutcome(" in recovery
+    assert "ExecuteKnowledgeOperationAsync" not in recovery
+
+
+def test_revision_sync_merges_only_immutable_history_and_checkpoint_atomically():
+    repo = read("src/Bot/Knowledge/KnowledgeEngineV2.Repository.cs")
+    apply = repo[repo.index("internal static bool ApplyRevisionSyncResponse"):repo.index("internal static Dictionary<string, long> GetCommittedRevisionCandidateReceipts")]
+    assert "JToken.DeepEquals" in apply
+    assert "RevisionSyncCheckpointKey(scope)" in apply
+    assert "SaveRecordsInTransaction(writes)" in apply
+    assert "ToRow(" not in apply
+    assert "ReplaceRecordsInTransaction(" not in apply
+    cloud = read("src/Bot/Knowledge/KnowledgeV2CloudSyncService.cs")
+    assert '"/api/runtime/v1/bot-web/knowledge-v2-revision-sync"' in cloud
