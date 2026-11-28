@@ -7,28 +7,30 @@ def read(path):
 
 
 def test_policy_switch_is_shop_scoped_and_neutral_when_disabled():
-    source = read("src/Bot/ChromeNs/KnowledgePolicyProfileService.cs")
-    assert 'EnabledSettingsKey = "knowledge.policy_reliability_enabled"' in source
-    assert 'ShopScopedSettingsStore' in source
-    assert 'public static bool IsEnabled(ShopContext shop = null)' in source
-    assert 'Reason = "知识策略与可靠度已关闭' in source
-    assert 'AllowDirect = true' in source
+    assert not (ROOT / "src/Bot/ChromeNs/KnowledgePolicyProfileService.cs").exists()
+    source = read("src/Bot/Knowledge/KnowledgeEngineV2.Service.Public.cs")
+    index = read("src/Bot/Knowledge/KnowledgeEngineV2.Service.Index.cs")
+    assert "SettingsLocks.GetOrAdd(shop.ShopKey" in source
+    assert "KnowledgeEngineV2Constants.ModeProduction" in source
+    assert "DirectOrderIdentityResolver.IdentityEquals(shop.SellerNick, seller)" in index
+    assert "ShopReceptionPolicy.IsQuarantined" in index
 
 
 def test_policy_window_has_explicit_switch_and_full_import_export():
-    source = read("src/Bot/Knowledge/KnowledgePolicyProfileUi.cs")
-    assert 'Content = "启用知识策略与可靠度"' in source
-    assert 'Content = "导入全部"' in source
-    assert 'Content = "导出全部"' in source
-    assert 'ImportKnowledgePolicies(this)' in source
-    assert 'ExportKnowledgePolicies(this)' in source
+    source = read("src/Bot/Knowledge/KnowledgeCenterV2OperationsPages.cs")
+    assert "运行状态：始终启用（不可关闭）" in source
+    assert "导入V2完整包" in source and "导出V2完整包" in source
+    assert "合并V2知识包" in source and "追加V2知识包" in source
+    assert "TryReplaceAllIfUnchanged" in source
 
 
 def test_policy_full_export_contains_reliability_stats():
-    source = read("src/Bot/Knowledge/RulePolicyImportExportUi.cs")
-    for field in ["directSelectedCount", "contextualSelectedCount", "acceptedCount", "sellerCorrectionCount", "sellerWithdrawCount", "lastEvidenceType"]:
-        assert field in source
-    assert 'KnowledgePolicyProfileService.ImportCompleteProfile' in source
+    source = read("src/Bot/Knowledge/KnowledgeCenterV2OperationsPages.cs")
+    model = read("src/Bot/Knowledge/KnowledgeEngineV2.Models.cs")
+    for field in ("UseCount", "AcceptedCount", "CorrectionCount", "WithdrawCount"):
+        assert field in model
+    assert "FeedbackEvents = KnowledgeEngineV2FeedbackService.ExportEvents(_seller)" in source
+    assert "KnowledgeEngineV2FeedbackService.MergeBackupEvents" in source
 
 
 def test_knowledge_center_has_complete_package_import_export():

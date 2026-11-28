@@ -28,38 +28,35 @@ def test_store_rule_import_backs_up_before_overwrite():
 
 
 def test_knowledge_policy_export_contains_complete_config_and_learning_stats():
-    source = read(SOURCE)
-    start = source.index("private static JObject BuildPolicyExportObject")
-    end = source.index("private static string BackupKnowledgePolicies", start)
-    block = source[start:end]
-    assert '"qnbot.knowledge-policies"' in source
-    assert '"answerMode"' in block
-    assert '"confidence"' in block
-    assert "DirectSelectedCount" in block
-    assert "ContextualSelectedCount" in block
-    assert "AcceptedCount" in block
-    assert "SellerCorrectionCount" in block
-    assert "SellerWithdrawCount" in block
-    assert '"enabled"' in block
+    source = read(ROOT / "src/Bot/Knowledge/KnowledgeCenterV2OperationsPages.cs")
+    model = read(ROOT / "src/Bot/Knowledge/KnowledgeEngineV2.Models.cs")
+    assert "KnowledgeV2PortablePackage" in source
+    assert "Records = records" in source
+    assert "Settings = KnowledgeEngineV2Service.GetSettingsView(_seller)" in source
+    assert "FeedbackEvents = KnowledgeEngineV2FeedbackService.ExportEvents(_seller)" in source
+    for field in ("Conditions", "Exclusions", "RequiredContext", "UseCount", "AcceptedCount", "CorrectionCount", "WithdrawCount"):
+        assert field in model
 
 
 def test_knowledge_policy_import_merges_and_restores_learning_stats():
-    source = read(SOURCE)
-    assert "FindKnowledgeForImport" in source
-    assert "KnowledgePolicyProfileService.ImportCompleteProfile(entry, imported)" in source
-    assert "不会删除现有策略" in source
-    assert "完整恢复配置和可靠度学习统计" in source
-    assert "var backup = BackupKnowledgePolicies(window)" in source
+    source = read(ROOT / "src/Bot/Knowledge/KnowledgeCenterV2OperationsPages.cs")
+    feedback = read(ROOT / "src/Bot/Knowledge/KnowledgeEngineV2FeedbackService.cs")
+    assert "KnowledgeV2CloudSyncService.MergeCloudAndLocal" in source
+    assert "CreateAutomaticBackup(before)" in source
+    assert "KnowledgeEngineV2FeedbackService.MergeBackupEvents" in source
+    assert "ids.Add(x.Id)" in feedback
+    assert "state.Db.SaveRecordsInTransaction(additions)" in feedback
 
 
 def test_import_validates_schema_and_version_and_reports_counts():
     source = read(SOURCE)
+    v2 = read(ROOT / "src/Bot/Knowledge/KnowledgeCenterV2OperationsPages.cs")
     assert "ValidateSchema(root, StoreSchema)" in source
-    assert "ValidateSchema(root, PolicySchema)" in source
     assert "不支持的导入文件版本" in source
-    assert '"\\n成功更新：" + updated' in source
-    assert '"\\n未找到对应知识：" + skipped' in source
-    assert '"\\n无效记录：" + invalid' in source
+    assert "version.Type != JTokenType.Integer" in v2
+    assert "ParseValidatedPackage" in v2
+    assert "!ids.Add(((string)id).Trim())" in v2
+    assert "replacement.Count" in v2 and "restoredFeedback" in v2
 
 
 def test_ui_extension_is_compiled_for_bot_and_wpf_temp_projects():

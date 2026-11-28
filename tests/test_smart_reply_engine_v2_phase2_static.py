@@ -16,22 +16,17 @@ def test_embedding_gateway_is_installed_and_packaged():
 
 
 def test_optional_embedding_setting_and_cache_exist():
-    assert 'txtControlPlaneEmbeddingModel' in read("src/Bot/Options/CtlRobotOptions.xaml")
-    assert 'ControlPlaneEmbeddingModel' in read("src/Bot/Options/CtlRobotOptions.ControlPlane.cs")
-    assert 'embeddingModel' in read("src/Bot/Options/CtlRobotOptions.ControlPlane.Portability.cs")
-    service = read("src/Bot/ChromeNs/SemanticEmbeddingService.cs")
-    assert 'knowledge-embeddings.json' in service
-    assert 'RequestTimeoutMilliseconds = 2200' in service
-    assert 'WarmupBatchSize = 24' in service
-    assert 'Cosine' in service
-    assert 'SemanticEmbeddingService.cs' in read("src/Directory.Build.targets")
+    assert not (ROOT / "src/Bot/ChromeNs/SemanticEmbeddingService.cs").exists()
+    assert "SemanticEmbeddingService.cs" not in read("src/Directory.Build.targets")
+    assert "runtime_embedding_guard.install(control_plane)" in read("services/api-control-plane/bootstrap.py")
 
 
 def test_semantics_only_assist_retrieval_not_direct_fixed_reply():
     router = read("src/Bot/ChromeNs/SmartReplyRouterService.cs")
-    assert 'SemanticScore' in router
-    assert 'SemanticEmbeddingService.TryScore' in router
-    assert 'existing.FinalScore * 0.72 + existing.SemanticScore * 0.28' in router
-    assert 'scored.Score * 0.78' in router
-    assert 'best.RetrievalScore >= 0.88' in router
-    assert 'best.ExactQuestionMatch && best.RetrievalScore >= 0.95' in router
+    public = read("src/Bot/Knowledge/KnowledgeEngineV2.Service.Public.cs")
+    assert "SemanticRetrievalApplied = false" in router
+    assert "Route = SmartReplyRouteKind.AiGeneral" in router
+    assert "&& standaloneSafe" in public and "&& !highRisk" in public
+    assert "best.Score >= threshold" in public and "best.ConfidenceScore >= minConfidence" in public
+    assert "IsStrongAutoPublishedHumanEvidenceSimilarMatch" in public
+

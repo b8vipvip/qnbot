@@ -8,35 +8,27 @@ def read(path: str) -> str:
 
 
 def test_embedding_http_path_is_true_async_with_linked_wall_clock_deadline():
-    code = read("src/Bot/ChromeNs/SemanticEmbeddingService.cs")
-    assert "RequestTimeoutMilliseconds = 2200" in code
-    assert "TryScoreAsync(" in code
-    assert "RequestEmbeddingsAsync(" in code
-    assert "CancellationTokenSource.CreateLinkedTokenSource(cancellationToken)" in code
-    assert "linked.CancelAfter(RequestTimeoutMilliseconds)" in code
-    assert "await Http.SendAsync(" in code
-    assert "HttpCompletionOption.ResponseContentRead" in code
-
-    request_region = code.split("private static async Task<List<float[]>> RequestEmbeddingsAsync", 1)[1]
-    request_region = request_region.split("private static IEnumerable<DocumentDescriptor>", 1)[0]
-    assert ".GetAwaiter().GetResult()" not in request_region
+    assert not (ROOT / "src/Bot/ChromeNs/SemanticEmbeddingService.cs").exists()
+    router = read("src/Bot/ChromeNs/SmartReplyRouterService.cs")
+    assert "SemanticEmbeddingService" not in router
+    assert "SemanticRetrievalApplied = false" in router
+    assert "Task.FromResult(plan)" in router
 
 
 def test_foreground_router_awaits_embedding_and_propagates_total_budget_token():
     router = read("src/Bot/ChromeNs/SmartReplyRouterService.cs")
-    assert "public static async Task<SmartReplyPlan> BuildPlanAsync(" in router
+    assert "public static Task<SmartReplyPlan> BuildPlanAsync(" in router
     assert "CancellationToken cancellationToken" in router
-    assert "await SemanticEmbeddingService.TryScoreAsync(" in router
-
+    assert router.count("cancellationToken.ThrowIfCancellationRequested();") >= 4
     pipeline = read("src/Bot/ChromeNs/BuyerStreamingReplyPipeline.cs")
-    get_answer = pipeline.split("public static async Task<string> GetAnswerAsync", 1)[1]
-    get_answer = get_answer.split("private static async Task<string> StreamMessagesAsync", 1)[0]
-    assert "await SmartReplyRouterService.BuildPlanAsync(seller, buyer, question, token)" in get_answer
-    assert "var plan = SmartReplyRouterService.BuildPlan(seller, buyer, question);" not in get_answer
+    assert "await SmartReplyRouterService.BuildPlanAsync(seller, buyer, question, token)" in pipeline
+    assert "generationCts.CancelAfter(TimeSpan.FromSeconds(TotalAiBudgetSeconds))" in pipeline
 
 
 def test_embedding_subdeadline_fails_open_but_outer_budget_cancellation_propagates():
-    code = read("src/Bot/ChromeNs/SemanticEmbeddingService.cs")
-    assert "if (cancellationToken.IsCancellationRequested) throw;" in code
-    assert "已自动降级到本地混合检索" in code
-    assert "Task.Run(async () =>" in code
+    router = read("src/Bot/ChromeNs/SmartReplyRouterService.cs")
+    build = router.split("public static Task<SmartReplyPlan> BuildPlanAsync(", 1)[1].split("public static bool CanUseOfflineKnowledgeFallback", 1)[0]
+    assert build.index("cancellationToken.ThrowIfCancellationRequested();") < build.index("ConversationContextStore.GetRecentTurns")
+    assert build.rindex("cancellationToken.ThrowIfCancellationRequested();") < build.index("return Task.FromResult(plan)")
+    assert "SemanticEmbeddingService" not in build
+

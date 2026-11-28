@@ -55,15 +55,19 @@ def test_duplicate_service_regenerates_and_rejects_same_result():
     assert "MyOpenAI.CallStructuredChat" in text
     assert "SameAnswer(previousAnswer, regenerated)" in text
     assert "BuildSafeFallback" in text
-    assert "本地知识库重答" in text
+    assert "AI重答（Knowledge V2上下文约束）" in text
+    assert "PreSendAnswerValidator.Validate" in text
 
 
 def test_contextual_matching_can_use_last_delivered_answer_without_remote_echo():
-    text = read("src/Bot/ChromeNs/KnowledgeContextualReplyService.cs")
-    assert "ReplyDeduplicationService.TryGetLastDelivered" in text
-    assert "local-delivered-answer" in text
-    assert "previousWasKnowledgeAnswer" in text
-    assert "standaloneQuestion" in text
+    assert not (ROOT / "src/Bot/ChromeNs/KnowledgeContextualReplyService.cs").exists()
+    dedup = read("src/Bot/ChromeNs/ReplyDeduplicationService.cs")
+    runtime = read("src/Bot/ChromeNs/KnowledgeEngineV2RuntimeBridge.cs")
+    pipeline = read("src/Bot/ChromeNs/BuyerStreamingReplyPipeline.cs")
+    assert "ReplyDeduplicationService.RememberDelivered(" in runtime
+    assert "ReplyDeduplicationService.RememberDelivered(" in pipeline
+    assert "TryGetLastDelivered(seller, buyer, out previousAnswer, out previousAt)" in dedup
+    assert "SameAnswer(previousAnswer, result.Answer)" in dedup
 
 
 def test_new_services_are_included_in_windows_and_wpf_temp_builds():
