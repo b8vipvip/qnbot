@@ -1418,15 +1418,30 @@ namespace Bot.Knowledge
                 var meta = state.Db.ReadOneRecord<KnowledgeV2MetaRow>(x => x.Key == key);
                 var checkpoint = meta == null ? new JObject() : JObject.Parse(meta.Value);
                 var last = (string)checkpoint["upload_after"] ?? string.Empty;
-                var rows = state.Db.ReadRecords<KnowledgeV2ManualEditRevisionRow>(null)
-                    .Where(x => x != null && string.CompareOrdinal(x.Id, last) > 0)
-                    .OrderBy(x => x.Id, StringComparer.Ordinal).Take(20).ToList();
+                var all = state.Db.ReadRecords<KnowledgeV2ManualEditRevisionRow>(null)
+                    .Where(x => x != null).OrderBy(x => x.Id, StringComparer.Ordinal).ToList();
+                var rows = all.Where(x => string.CompareOrdinal(x.Id, last) > 0).Take(20).ToList();
                 return new JObject
                 {
                     ["epoch"] = (string)checkpoint["epoch"] ?? string.Empty,
                     ["cursor"] = checkpoint.Value<long?>("cursor") ?? 0L,
+                    ["local_revision_count"] = all.Count,
+                    ["local_revision_digest"] = RevisionHistoryDigest(all),
                     ["rows"] = JArray.FromObject(rows)
                 };
+            }
+        }
+
+        private static string RevisionHistoryDigest(IEnumerable<KnowledgeV2ManualEditRevisionRow> rows)
+        {
+            Func<string, string> encode = value => Convert.ToBase64String(Encoding.UTF8.GetBytes(value ?? string.Empty));
+            using (var sha = SHA256.Create())
+            {
+                var canonical = string.Join("\n", rows.OrderBy(x => x.Id, StringComparer.Ordinal).Select(x =>
+                    string.Join("\n", x.Id, encode(x.KnowledgeId), encode(x.MessageRecordId), encode(x.Action),
+                        encode(x.PreviousJson), encode(x.CurrentJson),
+                        x.CreatedAtTicks.ToString(System.Globalization.CultureInfo.InvariantCulture))));
+                return BitConverter.ToString(sha.ComputeHash(Encoding.UTF8.GetBytes(canonical))).Replace("-", "").ToLowerInvariant();
             }
         }
 
