@@ -49,5 +49,6 @@ $args4 = [object[]]@($record, $query, '')
 Assert-Equal ($applicable.Invoke($null, $args4)) $true 'valid required context'
 $many = (1..11 | ForEach-Object { '商品ID:' + (10000000 + $_) }) -join ' '
 $overflow = $parse.Invoke($null, [object[]]@($many, $null))
-Assert-Equal $overflow.ProductEvidenceConflict $true 'product evidence overflow'
+$conflictProperty = $queryType.GetProperty('ProductEvidenceConflict', [Reflection.BindingFlags]'Instance,Public,NonPublic')
+Assert-Equal ($conflictProperty.GetValue($overflow, $null)) $true 'product evidence overflow'
 Write-Host 'Knowledge V2 compiled fact and scope regression cases passed.'
