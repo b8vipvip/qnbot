@@ -344,6 +344,21 @@ namespace Bot.ChromeNs
             }
         }
 
+        internal static bool AllowsUnresolvedKnowledgeReply(KnowledgeV2Decision decision, string answer)
+        {
+            if (decision == null || (!decision.HasConflict
+                && (decision.Query == null || !decision.Query.ProductEvidenceConflict)))
+                return true;
+            // Unresolved evidence only authorizes a clarification/handoff, not
+            // a new business conclusion. Never convert conflicting facts to a yes/no.
+            var text = Compact(answer);
+            return !ProductAssertionPolarities(answer).Any()
+                && !ConcreteNumberRegex.IsMatch(answer ?? string.Empty)
+                && !ConcreteStatusClaims.Any(x => text.Contains(Compact(x)))
+                && !HasTransactionalPromise(answer)
+                && Regex.IsMatch(text, @"请问|请提供|请补充|需要确认|需要核实|无法确认|不能确认|人工|进一步核查|具体哪款");
+        }
+
         internal static bool HasTransactionalPromise(string answer)
         {
             // Static shop FAQ or an OCR screenshot cannot authorize a new
