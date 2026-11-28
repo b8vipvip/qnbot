@@ -59,8 +59,8 @@ namespace Bot.Knowledge
                     _conflictFingerprint = t.Result.Item1;
                     foreach (var item in t.Result.Item2) _conflicts.Add(item);
                     _status.Text = _conflicts.Count == 0
-                        ? "未发现事实冲突。只有相同 Subject + Predicate 的不同答案才会被视为冲突。"
-                        : "发现 " + _conflicts.Count + " 组事实冲突；请选择冲突组和要保留的答案。";
+                        ? "未发现同范围冲突或同问法的跨范围疑似冲突。"
+                        : "发现 " + _conflicts.Count + " 组冲突；同范围可选择保留答案，跨范围需编辑适用条件，不允许一键停用。";
                 })));
         }
 
@@ -100,6 +100,7 @@ namespace Bot.Knowledge
             };
             _conflictGrid.Columns.Add(new DataGridTextColumn { Header = "Subject", Binding = new Binding("Subject"), Width = 160 });
             _conflictGrid.Columns.Add(new DataGridTextColumn { Header = "Predicate", Binding = new Binding("Predicate"), Width = 150 });
+            _conflictGrid.Columns.Add(new DataGridTextColumn { Header = "处理方式", Binding = new Binding("ResolutionMode"), Width = 140 });
             _conflictGrid.Columns.Add(new DataGridTextColumn { Header = "事实键", Binding = new Binding("FactKey"), Width = new DataGridLength(1, DataGridLengthUnitType.Star) });
             _conflictGrid.SelectionChanged += delegate { LoadConflictRecords(); };
             main.Children.Add(_conflictGrid);
@@ -150,6 +151,11 @@ namespace Bot.Knowledge
             var selected = _recordGrid.SelectedItem as KnowledgeV2Record;
             var fingerprint = _conflictFingerprint;
             if (conflict == null || selected == null || string.IsNullOrEmpty(fingerprint)) return;
+            if (conflict.RequiresScopeReview)
+            {
+                MessageBox.Show(_owner, "两条知识的商品或条件范围不同，请在知识列表中修正适用条件，避免停用其他有效场景。");
+                return;
+            }
             if (MessageBox.Show(_owner, "保留所选答案，只停用与它直接矛盾的知识记录，是否继续？",
                 "解决知识冲突", MessageBoxButton.YesNo, MessageBoxImage.Question) != MessageBoxResult.Yes) return;
             Task.Run(() => InConflictShop(() =>
