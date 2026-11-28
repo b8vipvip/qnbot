@@ -569,6 +569,12 @@ namespace Bot.ChromeNs
                     }
                     if (requiresFinalFactValidation)
                     {
+                        if (!KnowledgeEngineV2RuntimeBridge.IsContextKnowledgeCurrent(
+                            burst.SellerNick, burst.ShopKey, knowledgeV2Result))
+                        {
+                            Log.Info("AI上下文使用的Knowledge V2记录已变更，阻止发送旧答案");
+                            return false;
+                        }
                         string safeText, outputReason;
                         if (!BuyerReplyOutputGuard.TryNormalizeForBuyer(answer, out safeText, out outputReason))
                             return false;
