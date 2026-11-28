@@ -82,3 +82,11 @@ def test_portable_import_journal_commits_with_knowledge_and_replays_before_sync(
     assert restore.index("MergeBackupEvents") < restore.index("TryRestorePortableSettings") < restore.index("Value = string.Empty")
     assert "知识已提交，反馈/设置恢复尚未完成" in page
     assert "KnowledgeEngineV2Repository.ResumePortableImport(shop.DisplayName)" in cloud
+
+def test_portable_import_intent_is_written_in_cas_method_not_unconditional_replace():
+    repo = read("src/Bot/Knowledge/KnowledgeEngineV2.Repository.cs")
+    plain = repo.split("public static void ReplaceAll(",1)[1].split("internal static string ComputeCloudSyncFingerprint",1)[0]
+    cas = repo.split("internal static bool TryReplaceAllIfUnchanged(",1)[1].split("internal static int ResumePortableImport",1)[0]
+    assert "if (recovery != null)" not in plain
+    assert cas.index("currentFingerprint,expectedFingerprint") < cas.index("JsonConvert.SerializeObject(recovery") < cas.index("state.Db.ReplaceRecordsInTransaction")
+    assert "PendingPortableImportKey" in cas

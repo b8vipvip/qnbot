@@ -1535,16 +1535,6 @@ namespace Bot.Knowledge
                 if (pending != null && !string.IsNullOrWhiteSpace(pending.Value))
                     throw new InvalidOperationException("有尚未恢复完成的知识包操作，禁止再次覆盖知识。");
                 var replacementRows = normalized.Select(x => (object)ToRow(x)).ToList();
-                if (recovery != null)
-                {
-                    if (!string.Equals(recovery.ShopKey, shop.ShopKey, StringComparison.Ordinal))
-                        throw new InvalidOperationException("导入恢复记录店铺身份不匹配。");
-                    replacementRows.Add(new KnowledgeV2MetaRow
-                    {
-                        Key = PendingPortableImportKey,
-                        Value = JsonConvert.SerializeObject(recovery, Formatting.None)
-                    });
-                }
                 replacementRows.Add(new KnowledgeV2MetaRow
                 {
                     Key = "schema_version",
@@ -1640,7 +1630,20 @@ namespace Bot.Knowledge
                 if(!string.Equals(currentFingerprint,expectedFingerprint??string.Empty,StringComparison.Ordinal))
                     return false;
 
+                var pending = state.Db.ReadOneRecord<KnowledgeV2MetaRow>(x => x.Key == PendingPortableImportKey);
+                if (pending != null && !string.IsNullOrWhiteSpace(pending.Value))
+                    throw new InvalidOperationException("有尚未恢复完成的知识包操作，禁止再次覆盖知识。");
                 var replacementRows = normalized.Select(x => (object)ToRow(x)).ToList();
+                if (recovery != null)
+                {
+                    if (!string.Equals(recovery.ShopKey, shop.ShopKey, StringComparison.Ordinal))
+                        throw new InvalidOperationException("导入恢复记录店铺身份不匹配。");
+                    replacementRows.Add(new KnowledgeV2MetaRow
+                    {
+                        Key = PendingPortableImportKey,
+                        Value = JsonConvert.SerializeObject(recovery, Formatting.None)
+                    });
+                }
                 replacementRows.Add(new KnowledgeV2MetaRow
                 {
                     Key = "schema_version",
