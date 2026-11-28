@@ -89,6 +89,8 @@ namespace Bot.Knowledge
         public int ObservedTurns { get; set; }
         public int AnalyzedHumanPairs { get; set; }
         public int ModelReferencedPairs { get; set; }
+        public int SupplementedPairs { get; set; }
+        public int NonReusablePairs { get; set; }
         public int PublishedKnowledge { get; set; }
         public int CandidateKnowledge { get; set; }
         public int DuplicateKnowledge { get; set; }
@@ -413,6 +415,8 @@ namespace Bot.Knowledge
                         }
                         var pairCount = 0;
                         var referenced = 0;
+                        var supplemented = 0;
+                        var nonReusable = 0;
                         var promoted = new KnowledgeV2HistoryPromotionResult();
                         if (options.LearnKnowledge)
                         {
@@ -434,9 +438,47 @@ namespace Bot.Knowledge
                                 requireOriginalSession();
                                 if (analysis == null) throw new InvalidOperationException("历史AI分析没有返回结果");
                                 analysis.SourceEvidenceByToken = sourceEvidence;
-                                referenced = (analysis.AddedItems ?? new List<KnowledgeV2Record>())
-                                    .SelectMany(x => x.ImportEvidenceTokens ?? new List<string>())
-                                    .Where(sourceEvidence.ContainsKey).Distinct(StringComparer.Ordinal).Count();
+                                var analyzed = analysis.AnalyzedItems ?? analysis.AddedItems ?? new List<KnowledgeV2Record>();
+                                var covered = KnowledgeV2HistoryImportService.GetExactlyReferencedTokens(analyzed, sourceEvidence);
+                                var missing = sourceEvidence.Where(x => !covered.Contains(x.Key)
+                                    && KnowledgeV2HistoryImportService.IsReusableOmittedPair(x.Value)).ToList();
+                                if (missing.Count > 0)
+                                {
+                                    Report(progress, "补学未覆盖的历史真人问答", ordinal, names.Count, string.Empty,
+                                        read + count, checkpoint.AnalyzedHumanPairs + pairCount, transcript.Length);
+                                    var retryText = new StringBuilder("只补充下列未覆盖的历史真人问答。必须保持原问题及原答案，返回实际证据令牌；不安全或不适用的问答不得编造。\n");
+                                    foreach (var pair in missing)
+                                        retryText.AppendLine("【历史会话问答】\n买家问题：" + pair.Value.QuestionText
+                                            + "\n真人客服回答：" + pair.Value.AnswerText + "\nsource_evidence_id：" + pair.Key + "\n");
+                                    var retry = await ai.ImportAsync(new ClipboardKnowledgeData { Text = retryText.ToString() },
+                                        BotFeatureStore.GetSmartImportTimeoutSeconds(), token,
+                                        () => token.IsCancellationRequested ? SmartImportCancelSource.UserCancel : SmartImportCancelSource.None,
+                                        phaseText => Report(progress, phaseText, ordinal, names.Count, string.Empty,
+                                            read + count, checkpoint.AnalyzedHumanPairs + pairCount, retryText.Length));
+                                    token.ThrowIfCancellationRequested();
+                                    requireOriginalSession();
+                                    if (retry == null) throw new InvalidOperationException("历史补学没有返回结果");
+                                    analyzed.AddRange(retry.AnalyzedItems ?? retry.AddedItems ?? new List<KnowledgeV2Record>());
+                                    covered = KnowledgeV2HistoryImportService.GetExactlyReferencedTokens(analyzed, sourceEvidence);
+                                }
+                                referenced = covered.Count;
+                                // Preserve safe exact omitted pairs as disabled candidates
+                                // if the second AI pass still omits them. This is not
+                                // model confirmation or proof of reusable production facts.
+                                foreach (var pair in sourceEvidence.Where(x => !covered.Contains(x.Key)))
+                                {
+                                    if (!KnowledgeV2HistoryImportService.IsReusableOmittedPair(pair.Value))
+                                    { nonReusable++; continue; }
+                                    analyzed.Add(new KnowledgeV2Record
+                                    {
+                                        Title = pair.Value.QuestionText, Answer = pair.Value.AnswerText,
+                                        Type = "learning_candidate", Status = "candidate", Enabled = false,
+                                        Authority = 0.69, Confidence = 0.69,
+                                        ImportEvidenceTokens = new List<string> { pair.Key }
+                                    });
+                                    supplemented++;
+                                }
+                                analysis.AddedItems = analyzed;
                                 promoted = KnowledgeV2HistoryImportService.PromoteHistoryImport(seller, shopKey, analysis);
                             }
                         }
@@ -451,6 +493,8 @@ namespace Bot.Knowledge
                             checkpoint.ObservedTurns += turns.Count;
                             checkpoint.AnalyzedHumanPairs += pairCount;
                             checkpoint.ModelReferencedPairs += referenced;
+                            checkpoint.SupplementedPairs += supplemented;
+                            checkpoint.NonReusablePairs += nonReusable;
                             checkpoint.PublishedKnowledge += promoted.Published;
                             checkpoint.CandidateKnowledge += promoted.Candidates;
                             checkpoint.DuplicateKnowledge += promoted.DuplicateSkipped;
@@ -464,6 +508,8 @@ namespace Bot.Knowledge
                                 checkpoint.ObservedTurns -= turns.Count;
                                 checkpoint.AnalyzedHumanPairs -= pairCount;
                                 checkpoint.ModelReferencedPairs -= referenced;
+                                checkpoint.SupplementedPairs -= supplemented;
+                                checkpoint.NonReusablePairs -= nonReusable;
                                 checkpoint.PublishedKnowledge -= promoted.Published;
                                 checkpoint.CandidateKnowledge -= promoted.Candidates;
                                 checkpoint.DuplicateKnowledge -= promoted.DuplicateSkipped;
@@ -569,6 +615,8 @@ namespace Bot.Knowledge
                     PairCount = checkpoint.AnalyzedHumanPairs,
                     AnalyzedHumanPairs = checkpoint.AnalyzedHumanPairs,
                     ModelReferencedPairs = checkpoint.ModelReferencedPairs,
+                    SupplementedPairs = checkpoint.SupplementedPairs,
+                    NonReusablePairs = checkpoint.NonReusablePairs,
                     PublishedKnowledge = checkpoint.PublishedKnowledge,
                     CandidateKnowledge = checkpoint.CandidateKnowledge,
                     DuplicateKnowledge = checkpoint.DuplicateKnowledge,

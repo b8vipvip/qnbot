@@ -1164,7 +1164,8 @@ namespace Bot.ChromeNs
                         ["failed"] = scan.FailedContacts, ["observed_turns"] = scan.ObservedTurns,
                         ["previously_completed_contacts"] = scan.PreviouslyCompletedContacts,
                         ["learn_knowledge"] = scanOptions.LearnKnowledge, ["analyzed_pairs"] = scan.AnalyzedHumanPairs,
-                        ["model_referenced_pairs"] = scan.ModelReferencedPairs, ["published"] = scan.PublishedKnowledge,
+                        ["model_referenced_pairs"] = scan.ModelReferencedPairs, ["supplemented_pairs"] = scan.SupplementedPairs,
+                        ["non_reusable_pairs"] = scan.NonReusablePairs, ["published"] = scan.PublishedKnowledge,
                         ["candidates"] = scan.CandidateKnowledge, ["duplicate_skipped"] = scan.DuplicateKnowledge,
                         ["coverage_verified"] = scan.ContactCoverageVerified,
                         ["coverage_warning"] = scan.CoverageWarning };

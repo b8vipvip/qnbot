@@ -95,3 +95,19 @@ def test_historical_evidence_does_not_store_fallback_message_keys():
     assert "buyers.Where(x => x.HasNativeMessageId).Select(x => (x.NativeEvidenceKey" in scan
     assert "sellers.Where(x => x.HasNativeMessageId).Select(x => (x.NativeEvidenceKey" in scan
     assert "previousSellerMessageId = (turn.NativeEvidenceKey" in scan
+
+def test_history_learning_retries_missing_exact_source_coverage_and_preserves_safe_omissions():
+    scan=read("src/Bot/Knowledge/ChatHistoryScanService.cs")
+    importer=read("src/Bot/Knowledge/KnowledgeV2HistoryImportService.cs")
+    ai=read("src/Bot/Knowledge/KnowledgeAiService.cs")
+    assert "GetExactlyReferencedTokens(analyzed, sourceEvidence)" in scan
+    assert "var retry = await ai.ImportAsync" in scan
+    assert "IsReusableOmittedPair(pair.Value)" in scan
+    assert 'Status = "candidate", Enabled = false' in scan
+    assert "checkpoint.SupplementedPairs += supplemented" in scan
+    assert "checkpoint.SupplementedPairs -= supplemented" in scan
+    assert "MatchesSourceText(record.Title, pair.QuestionText)" in importer
+    assert "MatchesSourceText(record.Answer, pair.AnswerText)" in importer
+    assert "IsSafeHistoryImportForAutoPublish(pair.QuestionText, pair.AnswerText)" in importer
+    assert "total.AnalyzedItems.AddRange(parsed.Items)" in ai
+    assert "confidence = 0;" in ai and "authority = 0;" in ai
