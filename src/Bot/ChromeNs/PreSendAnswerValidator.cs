@@ -59,7 +59,7 @@ namespace Bot.ChromeNs
         };
 
         private static readonly Regex ConcreteNumberRegex = new Regex(
-            @"(?<![\d.])\d+(?:\.\d+)?\s*(?:工作日|个月|小时|分钟|元|块|天|秒|次|台|个|件|年|月|%|折)(?![\dA-Za-z])",
+            @"(?<![\d.,])[-−]?(?:\d{1,3}(?:,\d{3})+|\d+)(?:\.\d+)?\s*(?:工作日|个月|小时|分钟|元|块|天|秒|次|台|个|件|年|月|%|折)(?![\dA-Za-z])",
             RegexOptions.Compiled | RegexOptions.IgnoreCase);
 
         public static AnswerValidationResult Validate(
@@ -129,7 +129,7 @@ namespace Bot.ChromeNs
             }
 
             var unsupportedStatus = ConcreteStatusClaims
-                .Where(x => compactAnswer.Contains(Compact(x)) && !ContainsEvidence(verifiedStatusEvidence, x))
+                .Where(x => compactAnswer.Contains(Compact(x)) && !string.Equals(verifiedStatusEvidence, Compact(x), StringComparison.Ordinal))
                 .Take(4)
                 .ToList();
             if (unsupportedStatus.Count > 0)
@@ -227,9 +227,15 @@ namespace Bot.ChromeNs
         {
             var expected = ConcreteNumberRegex.Match(claim ?? string.Empty);
             if (!expected.Success || expected.Length != (claim ?? string.Empty).Length) return false;
-            var token = Regex.Replace(expected.Value, @"\s+", string.Empty);
+            var token = NormalizeNumericClaim(expected.Value);
             return ConcreteNumberRegex.Matches(evidence ?? string.Empty).Cast<Match>()
-                .Any(x => string.Equals(Regex.Replace(x.Value, @"\s+", string.Empty), token, StringComparison.OrdinalIgnoreCase));
+                .Any(x => string.Equals(NormalizeNumericClaim(x.Value), token, StringComparison.OrdinalIgnoreCase)
+                    && KnowledgeEngineV2Semantics.HasAffirmativeTerm(evidence, x.Value));
+        }
+
+        private static string NormalizeNumericClaim(string value)
+        {
+            return Regex.Replace(value ?? string.Empty, @"[\s,]+", string.Empty).Replace('−', '-');
         }
 
         private static ConversationStateSnapshot BuildState(string seller, string buyer, string question)
