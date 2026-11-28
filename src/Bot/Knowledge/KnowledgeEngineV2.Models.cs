@@ -314,6 +314,7 @@ namespace Bot.Knowledge
         public string Intent { get; set; }
         public List<string> Entities { get; set; }
         public DateTime UpdatedAt { get; set; }
+        internal bool ProductEvidenceConflict { get; set; }
 
         public KnowledgeV2WorkingMemory()
         {
