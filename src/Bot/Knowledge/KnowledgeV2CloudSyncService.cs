@@ -59,6 +59,7 @@ namespace Bot.Knowledge
         private const string SettingsScope = "knowledge-v2-cloud";
         private const string RevisionKey = "KnowledgeV2CloudRevision";
         private const string FingerprintKey = "KnowledgeV2CloudFingerprint";
+        private const string BaselineKey = "KnowledgeV2CloudRecordBaseline";
 
         private sealed class State
         {
@@ -66,6 +67,7 @@ namespace Bot.Knowledge
             public int Syncing;
             public int Revision;
             public string Fingerprint = string.Empty;
+            public Dictionary<string,string> RecordBaseline = new Dictionary<string,string>(StringComparer.Ordinal);
             public string ShopRef = string.Empty;
             public DateTime? LastAttemptUtc;
             public DateTime? LastSuccessUtc;
@@ -237,6 +239,10 @@ namespace Bot.Knowledge
 
                 var local=KnowledgeEngineV2Repository.LoadAll(shop.DisplayName);
                 var localFingerprint=Fingerprint(local);
+                // Upgrade an older aggregate-only checkpoint only when the local
+                // snapshot is provably identical to the acknowledged server state.
+                if (state.RecordBaseline.Count == 0 && localFingerprint == state.Fingerprint)
+                    state.RecordBaseline = RecordBaseline(local);
                 // An acknowledged local snapshot can already contain independently
                 // generated duplicate evidence IDs. Repair those deletes before uploading.
                 var normalizedLocal = NormalizeEvidenceDeletes(local, DeletedEvidenceKeys(local));
@@ -313,7 +319,7 @@ namespace Bot.Knowledge
                             // conflict candidates. Never retry the unsafe snapshot as an overwrite.
                             var latestLocal = KnowledgeEngineV2Repository.LoadAll(shop.DisplayName);
                             var latestFingerprint = Fingerprint(latestLocal);
-                            var merged = MergeCloudAndLocal(records, latestLocal, preserveLocalOnly: true);
+                            var merged = MergeCloudAndLocal(records, latestLocal, preserveLocalOnly: true, baseline: state.RecordBaseline);
                             var mergedFingerprint = Fingerprint(merged);
                             if(!string.Equals(mergedFingerprint, latestFingerprint, StringComparison.Ordinal))
                             {
@@ -336,7 +342,7 @@ namespace Bot.Knowledge
                                     + ", backup=" + Path.GetFileName(backup));
                             }
 
-                            PersistState(shop, state, cloudRevision, cloudFingerprint);
+                            PersistState(shop, state, cloudRevision, cloudFingerprint, records);
                             var recoveredLocal = KnowledgeEngineV2Repository.LoadAll(shop.DisplayName);
                             var recoveredFingerprint = Fingerprint(recoveredLocal);
                             lock(state.SyncRoot)
@@ -396,7 +402,7 @@ namespace Bot.Knowledge
                                 ? !string.Equals(latestFingerprint,state.Fingerprint,StringComparison.Ordinal)
                                 : latestLocal.Count>0;
                             var merged=localDirty
-                                ? MergeCloudAndLocal(records,latestLocal,preserveLocalOnly:true)
+                                ? MergeCloudAndLocal(records,latestLocal,preserveLocalOnly:true,baseline:state.RecordBaseline)
                                 : MergeCloudAndLocal(records, Enumerable.Empty<KnowledgeV2Record>(), preserveLocalOnly:true);
                             var mergedFingerprint=Fingerprint(merged);
 
@@ -422,7 +428,7 @@ namespace Bot.Knowledge
                             // Persist the cloud snapshot as the next comparison baseline.
                             // If local-only/conflicting records were retained, the next poll
                             // sends the merged set at this revision instead of discarding it.
-                            PersistState(shop,state,cloudRevision,cloudFingerprint);
+                            PersistState(shop,state,cloudRevision,cloudFingerprint,records);
                             var finalLocal=KnowledgeEngineV2Repository.LoadAll(shop.DisplayName);
                             var finalLocalFingerprint=Fingerprint(finalLocal);
                             lock(state.SyncRoot)
@@ -442,7 +448,7 @@ namespace Bot.Knowledge
                         // server did not return. Preserve the old checkpoint on mismatch.
                         if(!snapshotAcknowledged)
                             throw new InvalidOperationException("Knowledge V2 同版本云端内容与请求快照不一致，已保留检查点等待重试。");
-                        PersistState(shop,state,cloudRevision,localFingerprint);
+                        PersistState(shop,state,cloudRevision,localFingerprint,local);
                         var afterRequestLocal=KnowledgeEngineV2Repository.LoadAll(shop.DisplayName);
                         var afterRequestFingerprint=Fingerprint(afterRequestLocal);
                         lock(state.SyncRoot)
@@ -505,10 +511,28 @@ namespace Bot.Knowledge
                     revision=0;
                 string fingerprint;
                 store.TryGetString(FingerprintKey,out fingerprint);
+                string baselineJson;
+                store.TryGetString(BaselineKey,out baselineJson);
+                var baseline = new Dictionary<string,string>(StringComparer.Ordinal);
+                if (!string.IsNullOrWhiteSpace(baselineJson))
+                {
+                    try
+                    {
+                        var stored = JObject.Parse(baselineJson);
+                        if ((string)stored["fingerprint"] == fingerprint && (int?)stored["revision"] == revision)
+                            baseline = (stored["records"]?.ToObject<Dictionary<string,string>>() ?? baseline);
+                    }
+                    catch (JsonException)
+                    {
+                        // Missing/invalid baseline must never authorize an overwrite.
+                        baseline.Clear();
+                    }
+                }
                 return new State
                 {
                     Revision=Math.Max(0,revision),
                     Fingerprint=fingerprint??string.Empty,
+                    RecordBaseline=baseline,
                     ShopRef=MyWebSocketServer.RuntimeAcceptanceDiagnosticRef("shop",shop.ShopKey),
                     LastCloudFingerprintPrefix=FingerprintPrefix(fingerprint??string.Empty),
                     LastStatus="loaded"
@@ -516,24 +540,31 @@ namespace Bot.Knowledge
             }
         }
 
-        private static void PersistState(ShopContext shop,State state,int targetRevision,string targetFingerprint)
+        private static void PersistState(ShopContext shop,State state,int targetRevision,string targetFingerprint,
+            IEnumerable<KnowledgeV2Record> baselineRecords = null)
         {
             if(state==null) throw new ArgumentNullException(nameof(state));
             var revision=Math.Max(0,targetRevision).ToString();
             var fingerprint=targetFingerprint??string.Empty;
+            var baseline=RecordBaseline(baselineRecords);
+            var baselineJson=new JObject { ["revision"]=Math.Max(0,targetRevision), ["fingerprint"]=fingerprint,
+                ["records"]=JObject.FromObject(baseline) }.ToString(Formatting.None);
             using(ShopSettingsScope.Enter(shop))
             {
                 var store=new ShopScopedSettingsStore(shop,Paths);
                 store.MergeValues(new Dictionary<string,string>(StringComparer.Ordinal)
                 {
                     { RevisionKey, revision },
-                    { FingerprintKey, fingerprint }
+                    { FingerprintKey, fingerprint },
+                    { BaselineKey, baselineJson }
                 }, true);
-                string storedRevision,storedFingerprint;
+                string storedRevision,storedFingerprint,storedBaseline;
                 if(!store.TryGetString(RevisionKey,out storedRevision)
                     || !store.TryGetString(FingerprintKey,out storedFingerprint)
                     || !string.Equals(storedRevision,revision,StringComparison.Ordinal)
-                    || !string.Equals(storedFingerprint,fingerprint,StringComparison.Ordinal))
+                    || !string.Equals(storedFingerprint,fingerprint,StringComparison.Ordinal)
+                    || !store.TryGetString(BaselineKey,out storedBaseline)
+                    || !string.Equals(storedBaseline,baselineJson,StringComparison.Ordinal))
                     throw new InvalidOperationException("Knowledge V2 云同步 revision/hash 持久化失败；已保留上次成功检查点。");
             }
 
@@ -544,13 +575,30 @@ namespace Bot.Knowledge
             {
                 state.Revision=Math.Max(0,targetRevision);
                 state.Fingerprint=targetFingerprint??string.Empty;
+                state.RecordBaseline=baseline;
             }
+        }
+
+        private static string RecordContentFingerprint(KnowledgeV2Record source)
+        {
+            var identity=CloneRecord(source);
+            identity.UseCount=identity.AcceptedCount=identity.CorrectionCount=identity.WithdrawCount=0;
+            identity.CreatedAt=identity.UpdatedAt=identity.LastVerifiedAt=DateTime.MinValue;
+            return Fingerprint(new[]{identity});
+        }
+
+        private static Dictionary<string,string> RecordBaseline(IEnumerable<KnowledgeV2Record> records)
+        {
+            return (records??Enumerable.Empty<KnowledgeV2Record>()).Where(x=>x!=null&&!string.IsNullOrWhiteSpace(x.Id))
+                .GroupBy(x=>x.Id,StringComparer.Ordinal)
+                .ToDictionary(g=>g.Key,g=>RecordContentFingerprint(g.First()),StringComparer.Ordinal);
         }
 
         internal static List<KnowledgeV2Record> MergeCloudAndLocal(
             IEnumerable<KnowledgeV2Record> cloudRecords,
             IEnumerable<KnowledgeV2Record> localRecords,
-            bool preserveLocalOnly)
+            bool preserveLocalOnly,
+            IDictionary<string,string> baseline = null)
         {
             // Determine the delete set across both snapshots before iterating either.
             // Keep a tombstone for every affected record ID: the server rejects snapshots
@@ -638,6 +686,34 @@ namespace Bot.Knowledge
                         MergeRecordMetadata(cloud, local);
                         continue;
                     }
+                    string prior;
+                    if (baseline != null && baseline.TryGetValue(id, out prior))
+                    {
+                        var localUnchanged=string.Equals(RecordContentFingerprint(local),prior,StringComparison.Ordinal);
+                        var cloudUnchanged=string.Equals(RecordContentFingerprint(cloud),prior,StringComparison.Ordinal);
+                        if (localUnchanged && !cloudUnchanged)
+                        {
+                            // Independent cloud edit: retain the cloud record, no false
+                            // conflict candidate for the old local revision.
+                            continue;
+                        }
+                        if (cloudUnchanged && !localUnchanged)
+                        {
+                            // Independent local edit: preserve its original stable ID,
+                            // even when other records changed remotely at the same time.
+                            var replacement=CloneRecord(local);
+                            var index=merged.IndexOf(cloud);
+                            if (index>=0) merged[index]=replacement;
+                            cloudById[id]=replacement;
+                            var oldEvidence=AutoPublishedEvidenceKey(cloud);
+                            KnowledgeV2Record mapped;
+                            if (oldEvidence.Length>0 && recordsByHumanEvidence.TryGetValue(oldEvidence,out mapped)
+                                && ReferenceEquals(mapped,cloud)) recordsByHumanEvidence.Remove(oldEvidence);
+                            var newEvidence=AutoPublishedEvidenceKey(replacement);
+                            if (newEvidence.Length>0) recordsByHumanEvidence[newEvidence]=replacement;
+                            continue;
+                        }
+                    }
                     AddCandidate(merged, mergedIds, local, id);
                     continue;
                 }
@@ -675,13 +751,20 @@ namespace Bot.Knowledge
                         // The cloud tombstone wins across independently generated IDs too.
                         AddCandidate(merged, mergedIds, local, local.Id);
                     }
-                    else if (SameRecordContent(evidenceRecord, local))
-                    {
-                        MergeRecordMetadata(evidenceRecord, local);
-                    }
                     else
                     {
-                        AddCandidate(merged, mergedIds, local, local.Id);
+                        if (SameRecordContent(evidenceRecord, local))
+                            MergeRecordMetadata(evidenceRecord, local);
+                        // This independently generated ID may already be referenced
+                        // by feedback, revisions or another device. Retain it as an
+                        // explicitly disabled candidate rather than dropping its identity.
+                        var duplicate=CloneRecord(local);
+                        duplicate.SourceType="cloud_sync_conflict_candidate";
+                        duplicate.SourceId=local.Id;
+                        duplicate.Enabled=false;
+                        duplicate.Status="candidate";
+                        duplicate.Type="learning_candidate";
+                        AddUnique(merged,mergedIds,duplicate);
                     }
                     continue;
                 }

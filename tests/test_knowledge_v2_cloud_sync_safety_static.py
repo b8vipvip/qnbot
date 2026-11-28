@@ -11,7 +11,7 @@ def test_v2_cloud_replay_backs_up_before_any_shop_scoped_replace():
     service = read("src/Bot/Knowledge/KnowledgeV2CloudSyncService.cs")
     apply = service[
         service.index("if(!string.Equals(mergedFingerprint,latestFingerprint"):
-        service.index("PersistState(shop,state,cloudRevision,cloudFingerprint);", service.index("if(!string.Equals(mergedFingerprint,latestFingerprint"))
+        service.index("PersistState(shop,state,cloudRevision,cloudFingerprint,records);", service.index("if(!string.Equals(mergedFingerprint,latestFingerprint"))
     ]
 
     assert "Backup(shop,latestLocal,cloudRevision)" in apply
@@ -31,7 +31,7 @@ def test_v2_cloud_conflicts_preserve_local_facts_as_disabled_review_candidates()
         service.index("private static void AddUnique")
     ]
 
-    assert "MergeCloudAndLocal(records,latestLocal,preserveLocalOnly:true)" in service
+    assert "MergeCloudAndLocal(records,latestLocal,preserveLocalOnly:true,baseline:state.RecordBaseline)" in service
     assert "cloud_sync_conflict_candidate" in candidate
     assert 'candidate.Enabled=false;' in candidate
     assert 'candidate.Status="candidate";' in candidate
@@ -71,7 +71,7 @@ def test_v2_cloud_sync_uses_same_canonical_fingerprint_for_persistence_and_compa
     assert "{ FingerprintKey, fingerprint }" in persist
     assert "store.SetString(" not in persist
     assert "private static State LoadState(ShopContext shop)" in service
-    assert "private static void PersistState(ShopContext shop,State state,int targetRevision,string targetFingerprint)" in service
+    assert "private static void PersistState(ShopContext shop,State state,int targetRevision,string targetFingerprint," in service
     assert "JsonConvert.SerializeObject(projection, Formatting.None)" in repository
     assert "sha.ComputeHash(Encoding.UTF8.GetBytes(json))" in repository
 
@@ -96,8 +96,8 @@ def test_v2_cloud_sync_checkpoint_advances_only_after_persisted_values_are_verif
     assert "{ RevisionKey, revision }" in persist
     assert "{ FingerprintKey, fingerprint }" in persist
     assert "store.SetString(" not in persist
-    assert 'PersistState(shop,state,cloudRevision,cloudFingerprint);' in sync
-    assert 'PersistState(shop,state,cloudRevision,localFingerprint);' in sync
+    assert 'PersistState(shop,state,cloudRevision,cloudFingerprint,records);' in sync
+    assert 'PersistState(shop,state,cloudRevision,localFingerprint,local);' in sync
     assert "state.Revision=cloudRevision;" not in sync
     assert "state.Fingerprint=Fingerprint(records);" not in sync
 
@@ -314,7 +314,7 @@ def test_own_upload_ack_preserves_edits_and_deletes_made_during_http_request():
     assert sync.index("if(cloudRevision>state.Revision && !snapshotAcknowledged)") < sync.index("MergeCloudAndLocal(records,latestLocal")
     ack = sync[sync.index("// Same-revision responses"):]
     assert "if(!snapshotAcknowledged)" in ack
-    assert ack.index("throw new InvalidOperationException") < ack.index("PersistState(shop,state,cloudRevision,localFingerprint)")
+    assert ack.index("throw new InvalidOperationException") < ack.index("PersistState(shop,state,cloudRevision,localFingerprint,local)")
     assert "KnowledgeEngineV2Repository.LoadAll(shop.DisplayName)" in ack
     assert "afterRequestFingerprint,localFingerprint" in ack
     assert "TryReplaceAllIfUnchanged" not in ack
@@ -435,3 +435,18 @@ def test_cloud_replay_preserves_unknown_timestamps_without_fabricating_verificat
     assert "if (verifiedAt != DateTime.MinValue)" not in clone
     normalize = repo.split("private static void NormalizeForSave(",1)[1].split("private static List<string> NormalizeList(",1)[0]
     assert "record.LastVerifiedAt = record.UpdatedAt" not in normalize
+
+def test_cloud_three_way_merge_keeps_independent_same_id_edits_and_persists_record_baseline():
+    service = read("src/Bot/Knowledge/KnowledgeV2CloudSyncService.cs")
+    assert "{ BaselineKey, baselineJson }" in service
+    assert "store.TryGetString(BaselineKey,out storedBaseline)" in service
+    assert 'stored["fingerprint"] == fingerprint' in service
+    assert "state.RecordBaseline=baseline;" in service
+    assert "state.RecordBaseline.Count == 0 && localFingerprint == state.Fingerprint" in service
+    merge = service.split("internal static List<KnowledgeV2Record> MergeCloudAndLocal",1)[1].split("private static HashSet<string> DeletedEvidenceKeys",1)[0]
+    assert "if (localUnchanged && !cloudUnchanged)" in merge
+    assert "if (cloudUnchanged && !localUnchanged)" in merge
+    assert "merged[index]=replacement" in merge
+    assert merge.index("if (cloudDeleted && !localDeleted)") < merge.index("if (cloudUnchanged && !localUnchanged)")
+    assert "duplicate.SourceId=local.Id;" in merge
+    assert "AddUnique(merged,mergedIds,duplicate)" in merge

@@ -44,7 +44,7 @@ def test_knowledge_policy_import_merges_and_restores_learning_stats():
     assert "KnowledgeV2CloudSyncService.MergeCloudAndLocal" in source
     assert "CreateAutomaticBackup(before)" in source
     assert "KnowledgeEngineV2Repository.ResumePortableImport" in source
-    assert "ids.Add(x.Id)" in feedback
+    assert "existing.TryGetValue(row.Id, out old)" in feedback
     assert "state.Db.SaveRecordsInTransaction(additions)" in feedback
 
 

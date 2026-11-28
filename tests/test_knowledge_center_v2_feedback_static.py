@@ -136,7 +136,7 @@ def test_feedback_restore_is_shop_bound_idempotent_and_invalidates_cache():
     source = read("src/Bot/Knowledge/KnowledgeEngineV2FeedbackService.cs")
     restore = source.split("internal static int MergeBackupEvents",1)[1].split("private static bool RemovePending",1)[0]
     assert "shop.ShopKey, sourceShopKey" in restore
-    assert "ids.Add(x.Id)" in restore
+    assert "existing.TryGetValue(row.Id, out old)" in restore
     assert "state.Db.SaveRecordsInTransaction(additions)" in restore
     assert "AggregateCaches.TryRemove(shop.ShopKey" in restore
     assert "messageTime >= pending.SentAt" in source
