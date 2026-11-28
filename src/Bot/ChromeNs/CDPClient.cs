@@ -499,9 +499,19 @@ namespace Bot.ChromeNs
                 _requestWaiters.Enqueue(requestCompletion);
                 try
                 {
-                    Action send = () => _webSocketSession.Send(JsonConvert.SerializeObject(new { method = "execute", expression = cmd }));
+                    var socket = _webSocketSession;
+                    bool issued = false;
+                    Action send = () =>
+                    {
+                        // Session invalidation or reassignment can occur while
+                        // waiting on the corpus fence. Do not use a mutable route.
+                        if (dispatchFence != null && (socket == null || !ReferenceEquals(socket, _webSocketSession)
+                            || IsInvalidated || IsShopIdentityRetired || !HasCurrentShopAuthority())) return;
+                        socket.Send(JsonConvert.SerializeObject(new { method = "execute", expression = cmd }));
+                        issued = true;
+                    };
                     if (dispatchFence == null) send();
-                    else if (!dispatchFence(send))
+                    else if (!dispatchFence(send) || !issued)
                     {
                         TaskCompletionSource<string> rejected;
                         _requestWaiters.TryDequeue(out rejected);
