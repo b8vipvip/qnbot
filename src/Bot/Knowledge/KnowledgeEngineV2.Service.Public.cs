@@ -490,8 +490,11 @@ namespace Bot.Knowledge
         {
             var shop = ResolveShop(seller);
             if (shop == null) return;
-            Snapshot ignored;
-            Snapshots.TryRemove(shop.ShopKey, out ignored);
+            lock (BuildLocks.GetOrAdd(shop.ShopKey, _ => new object()))
+            {
+                Snapshot ignored;
+                Snapshots.TryRemove(shop.ShopKey, out ignored);
+            }
         }
 
         public static void Warm(string seller) { GetSnapshot(seller); }
