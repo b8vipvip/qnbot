@@ -3,6 +3,7 @@ using Bot.ShopScope;
 using BotLib;
 using BotLib.Db.Sqlite;
 using Newtonsoft.Json;
+using Newtonsoft.Json.Linq;
 using System;
 using System.Collections.Concurrent;
 using System.Collections.Generic;
@@ -1398,6 +1399,86 @@ namespace Bot.Knowledge
                 "success", out auditError);
             result = "已根据完整聊天中的真人纠正自动更新Knowledge V2，并保存可回滚历史。";
             return true;
+        }
+
+        private static string RevisionSyncCheckpointKey(string scope)
+        {
+            using (var sha = SHA256.Create())
+                return "revision_sync:" + BitConverter.ToString(sha.ComputeHash(Encoding.UTF8.GetBytes(scope)))
+                    .Replace("-", string.Empty).ToLowerInvariant();
+        }
+
+        internal static JObject BuildRevisionSyncRequest(string seller, string scope)
+        {
+            var state = GetState(ResolveShopRequired(seller));
+            EnsureSchemaInitialized(state);
+            var key = RevisionSyncCheckpointKey(scope);
+            lock (state.Sync)
+            {
+                var meta = state.Db.ReadOneRecord<KnowledgeV2MetaRow>(x => x.Key == key);
+                var checkpoint = meta == null ? new JObject() : JObject.Parse(meta.Value);
+                var last = (string)checkpoint["upload_after"] ?? string.Empty;
+                var rows = state.Db.ReadRecords<KnowledgeV2ManualEditRevisionRow>(null)
+                    .Where(x => x != null && string.CompareOrdinal(x.Id, last) > 0)
+                    .OrderBy(x => x.Id, StringComparer.Ordinal).Take(20).ToList();
+                return new JObject
+                {
+                    ["epoch"] = (string)checkpoint["epoch"] ?? string.Empty,
+                    ["cursor"] = checkpoint.Value<long?>("cursor") ?? 0L,
+                    ["rows"] = JArray.FromObject(rows)
+                };
+            }
+        }
+
+        internal static bool ApplyRevisionSyncResponse(string seller, string scope, JObject request, JObject response)
+        {
+            var state = GetState(ResolveShopRequired(seller));
+            EnsureSchemaInitialized(state);
+            var epoch = (string)response["epoch"];
+            var cursor = response.Value<long?>("cursor");
+            var incoming = response["rows"] as JArray;
+            var ack = response["ack_ids"] as JArray;
+            var uploaded = request["rows"] as JArray;
+            if (string.IsNullOrWhiteSpace(epoch) || !cursor.HasValue || cursor.Value < 0
+                || incoming == null || incoming.Count > 20 || ack == null || uploaded == null
+                || ((string)request["epoch"] == epoch && cursor.Value < (request.Value<long?>("cursor") ?? 0L))
+                || !new HashSet<string>(ack.Values<string>(), StringComparer.Ordinal)
+                    .SetEquals(uploaded.Select(x => (string)x["Id"])))
+                throw new InvalidDataException("修订同步响应或确认凭证无效");
+            lock (state.Sync)
+            {
+                var existing = state.Db.ReadRecords<KnowledgeV2ManualEditRevisionRow>(null)
+                    .ToDictionary(x => x.Id, StringComparer.Ordinal);
+                var writes = new List<object>();
+                foreach (var token in incoming)
+                {
+                    var row = token.ToObject<KnowledgeV2ManualEditRevisionRow>();
+                    if (row == null || string.IsNullOrWhiteSpace(row.Id)
+                        || string.IsNullOrWhiteSpace(row.KnowledgeId)
+                        || row.CreatedAtTicks <= 0 || row.CreatedAtTicks > DateTime.MaxValue.Ticks)
+                        throw new InvalidDataException("远端修订记录无效");
+                    KnowledgeV2ManualEditRevisionRow prior;
+                    if (existing.TryGetValue(row.Id, out prior))
+                    {
+                        if (!JToken.DeepEquals(JObject.FromObject(prior), JObject.FromObject(row)))
+                            throw new InvalidDataException("同一修订ID内容冲突");
+                        continue;
+                    }
+                    existing.Add(row.Id, row);
+                    writes.Add(row);
+                }
+                // Never replay historical snapshots onto the active corpus. Current
+                // record sync and rollback CAS independently verify current content.
+                var after = uploaded.Count == 0 || (string)request["epoch"] != epoch
+                    ? string.Empty : (string)uploaded.Last["Id"];
+                writes.Add(new KnowledgeV2MetaRow
+                {
+                    Key = RevisionSyncCheckpointKey(scope),
+                    Value = new JObject { ["epoch"] = epoch, ["cursor"] = cursor.Value, ["upload_after"] = after }.ToString(Formatting.None)
+                });
+                state.Db.SaveRecordsInTransaction(writes);
+            }
+            return response.Value<bool?>("has_more") == true || uploaded.Count == 20;
         }
 
         internal static Dictionary<string, long> GetCommittedRevisionCandidateReceipts(string seller)
