@@ -279,7 +279,7 @@ def test_new_adds_chain_corpus_fingerprint_before_existing_corrections():
     ]
 
     assert "ref expectedCurrentFingerprint, out newKnowledgeSkipped, out newKnowledgeRetryNeeded" in finalize
-    assert "session, corpusAnalysis, expectedCurrentFingerprint, out corpusSkipped" in finalize
+    assert "session, corpusAnalysis, turns, cards, expectedCurrentFingerprint, out corpusSkipped" in finalize
     assert finalize.index("ApplyVerifiedCorpusNewKnowledge(") < finalize.index("ApplyVerifiedCorpusCorrections(")
     assert "expectedCurrentFingerprint = nextFingerprint;" in service
     assert "expectedCurrentFingerprint = string.Empty;" in service

@@ -1097,3 +1097,18 @@ def test_pending_learning_waits_for_authoritative_qn_session_even_when_shop_prof
     assert "report.CompletedAtTicks = 0;" in gate
     assert "continue;" in gate
     assert "StartPendingRecoveryTimer();" in service
+
+def test_auto_correction_revalidates_real_human_text_and_corpus_for_each_write():
+    service = read("src/Bot/ChromeNs/ConversationSessionLearningService.cs")
+    repo = read("src/Bot/Knowledge/KnowledgeEngineV2.Repository.cs")
+    apply = service.split("private static int ApplyVerifiedCorpusCorrections(", 1)[1].split("private static bool CanAutoApplyVerifiedCorpusCorrection(", 1)[0]
+    assert "HasVerifiedCorrectionTranscript(candidate, turns, cards)" in apply
+    assert "FindUniqueTurnByMessageId(turns, id)" in apply
+    assert "IsBotTurn(x, cards)" in apply
+    assert "candidate.OldAnswer, StringComparison.Ordinal" in apply
+    assert "bundle.Any(x => !evidence.Contains(x))" in apply
+    assert "string.Equals(actual, candidate.Answer, StringComparison.Ordinal)" in apply
+    assert "expectedCurrentFingerprint = nextFingerprint;" in apply
+    write = repo.split("public static bool TryApplyVerifiedSessionCorrection(", 1)[1].split("public static bool TryRollbackLastBotCorrection", 1)[0]
+    assert write.index("lock (state.Sync)") < write.index("ComputeRepositoryCorpusFingerprint(current)") < write.index("state.Db.SaveRecordsInTransaction")
+    assert "updatedCorpusFingerprint, expectedCorpusFingerprint" in write

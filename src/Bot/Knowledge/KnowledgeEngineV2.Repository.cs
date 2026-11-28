@@ -1246,9 +1246,12 @@ namespace Bot.Knowledge
             string correctedAnswer,
             IEnumerable<string> evidenceMessageIds,
             double confidence,
+            string expectedCorpusFingerprint,
+            out string updatedCorpusFingerprint,
             out string result)
         {
             result = string.Empty;
+            updatedCorpusFingerprint = expectedCorpusFingerprint ?? string.Empty;
             knowledgeId = (knowledgeId ?? string.Empty).Trim();
             expectedQuestion = (expectedQuestion ?? string.Empty).Trim();
             observedAnswer = (observedAnswer ?? string.Empty).Trim();
@@ -1282,6 +1285,14 @@ namespace Bot.Knowledge
             KnowledgeV2Record before = null;
             lock (state.Sync)
             {
+                var current = state.Db.ReadRecords<KnowledgeV2RecordRow>(null).Select(FromRow).Where(x => x != null).ToList();
+                updatedCorpusFingerprint = ComputeRepositoryCorpusFingerprint(current);
+                if (string.IsNullOrWhiteSpace(expectedCorpusFingerprint)
+                    || !string.Equals(updatedCorpusFingerprint, expectedCorpusFingerprint, StringComparison.Ordinal))
+                {
+                    result = "自动修订期间全库版本变化，拒绝覆盖。";
+                    return false;
+                }
                 var row = state.Db.ReadOneRecord<KnowledgeV2RecordRow>(x => x.Id == knowledgeId);
                 if (row == null)
                 {
@@ -1357,6 +1368,8 @@ namespace Bot.Knowledge
                     CreatedAtTicks = DateTime.Now.Ticks
                 };
                 state.Db.SaveRecordsInTransaction(new List<object> { ToRow(corrected), revision });
+                updatedCorpusFingerprint = ComputeRepositoryCorpusFingerprint(
+                    state.Db.ReadRecords<KnowledgeV2RecordRow>(null).Select(FromRow).Where(x => x != null));
             }
             KnowledgeEngineV2Service.ApplyRecordUpdate(seller, corrected);
             string auditError;
