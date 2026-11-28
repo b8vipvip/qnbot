@@ -59,7 +59,8 @@ namespace Bot.Knowledge
             var shop = ResolveShop(seller);
             if (shop == null) return false;
             Snapshot snapshot;
-            return Snapshots.TryGetValue(shop.ShopKey, out snapshot) && snapshot != null;
+            return Snapshots.TryGetValue(shop.ShopKey, out snapshot) && snapshot != null
+                && snapshot.CorpusVersion == KnowledgeEngineV2Repository.GetCorpusVersion(seller);
         }
 
         public static KnowledgeV2Settings GetSettingsView(string seller)
@@ -326,6 +327,7 @@ namespace Bot.Knowledge
             var recallSw = Stopwatch.StartNew();
             var candidates = Recall(snapshot, query);
             decision.CandidateCount = candidates.Count;
+            decision.HasConflict = query.RecallBudgetAmbiguous;
             decision.RecallMs = recallSw.ElapsedMilliseconds;
 
             var rankSw = Stopwatch.StartNew();
@@ -369,7 +371,7 @@ namespace Bot.Knowledge
                 && !object.ReferenceEquals(x, best));
             // An explicit human correction of this exact standalone question wins over
             // older generic answers; unrelated queries still use conflict rejection.
-            decision.HasConflict = manualExactConflict || (manualExact == null
+            decision.HasConflict = decision.HasConflict || manualExactConflict || (manualExact == null
                 && allProductionMatches.Any(x => !ReferenceEquals(x, best) && HasConflict(best, x)))
                 || allProductionMatches.Any(x => !ReferenceEquals(x, best) && HasApplicableScopedConflict(best, x, query));
             var margin = second == null ? best.Score : best.Score - second.Score;
