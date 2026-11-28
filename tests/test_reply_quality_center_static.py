@@ -92,8 +92,10 @@ def test_validator_and_reviewed_knowledge_feed_quality_metrics():
     assert "ReplyQualityMetricsService.RecordRepair(true)" in dedup
     assert "ReplyQualityMetricsService.RecordDuplicateRewrite()" in dedup
     assert "ReplyQualityMetricsService.RecordHumanEvidence(evidenceType)" in review
-    assert '"human_confirmed"' in review
-    assert '"conversation_synthesis"' in review
+    assert '"manual_reply"' in review
+    assert '"manual_correction"' in review
+    assert '"operator_reviewed"' in review
+    assert "TrySaveReviewedDirectAnswer(" in review
 
 
 def test_quality_center_is_built_initialized_and_flushed():

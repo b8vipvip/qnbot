@@ -47,14 +47,14 @@ def test_dedup_pipeline_validates_before_real_send_and_repairs_once():
 
 def test_trusted_exact_local_knowledge_does_not_trigger_extra_ai_call():
     code = read("src/Bot/ChromeNs/ReplyDeduplicationService.cs")
-    compact = " ".join(code.split())
-    assert "exactTrustedKnowledge" in code
-    guard = code.index("if (!exactTrustedKnowledge")
+    guard = code.index("if (preserveTrustedAnswer)")
     validate = code.index("PreSendAnswerValidator.Validate(", guard)
     assert guard < validate
-    assert "knowledge != null && SameAnswer(knowledge.Answer, candidateAnswer)" in compact
-    # Emergency 50% AI-failure fallback is intentionally less trusted and must still validate.
-    assert "&& !aiFailureFallbackApplied" in compact
+    assert 'Source = "权威知识V2"' in code[guard:validate]
+    assert "return new ReplyDeduplicationResult" in code[guard:validate]
+    pipeline = read("src/Bot/ChromeNs/BuyerStreamingReplyPipeline.cs")
+    assert "IsV2OfflineFallbackCurrent(" in pipeline
+    assert "answer, lease.CancellationToken, false," in pipeline
 
 
 def test_build_targets_include_validator():

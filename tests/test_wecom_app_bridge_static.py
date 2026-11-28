@@ -25,9 +25,11 @@ def test_handoff_reply_is_sent_to_exact_shop_seller_and_buyer_then_learned():
     locate = source.index("FindQn(shop, seller)")
     scope = source.index("ShopSettingsScope.Enter(shop)", locate)
     send = source.index("SendTextWithRetryAsync(buyer, reply", scope)
-    learn = source.index("KnowledgeLearningService.QueueLearn", send)
+    learn = source.index("KnowledgeLearningService.RegisterAnswerSource", send)
     complete = source.index("CompleteAsync(shop", learn)
     assert locate < scope < send < learn < complete
+    assert "if (!success)" in source[send:learn]
+    assert "KnowledgeLearningService.QueueLearn" not in source
     assert '"人工回复-企业微信应用"' in source
     assert "ReplyDeduplicationService.RememberDelivered" in source
     assert "ShopIdentityResolver.Resolve(qn.Seller).ShopKey" in source

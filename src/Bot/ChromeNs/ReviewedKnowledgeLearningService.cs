@@ -60,21 +60,10 @@ namespace Bot.ChromeNs
                 if (!saved)
                     return Failure(string.IsNullOrWhiteSpace(result) ? "Knowledge V2 拒绝了本次直答写入。" : result);
 
-                var record = KnowledgeEngineV2Repository.LoadAll(shop.SellerNick)
-                    .FirstOrDefault(x => x != null && string.Equals(x.Id, savedId, StringComparison.Ordinal));
-                if (record != null)
-                {
-                    var aliases = (record.Aliases ?? new List<string>())
-                        .Concat((keywords ?? string.Empty).Split(new[] { ',', '，', ';', '；', '\n', '\r' }, StringSplitOptions.RemoveEmptyEntries))
-                        .Select(x => (x ?? string.Empty).Trim())
-                        .Where(x => x.Length >= 2 && x.Length <= 80)
-                        .Distinct(StringComparer.OrdinalIgnoreCase)
-                        .Take(40)
-                        .ToList();
-                    record.Aliases = aliases;
-                    KnowledgeEngineV2Repository.Save(shop.SellerNick, record);
-                }
-
+                // The repository already commits the reviewed question and answer
+                // together with its rollback snapshot. Do not perform a second
+                // blind Save or convert arbitrary extracted keywords into exact aliases.
+                // Verified additional aliases can be edited through the V2 editor.
                 ReplyQualityMetricsService.RecordHumanEvidence(evidenceType);
                 return new KnowledgeLearningResult
                 {

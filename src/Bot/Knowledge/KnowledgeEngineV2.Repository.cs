@@ -254,6 +254,8 @@ namespace Bot.Knowledge
                     return false;
                 }
                 var old = record.Answer ?? string.Empty;
+                var expectedFingerprint = exact.Count == 1
+                    ? EditorRecordFingerprint(record) : string.Empty;
                 var previousJson = exact.Count == 1
                     ? JsonConvert.SerializeObject(record)
                     : string.Empty;
@@ -299,11 +301,18 @@ namespace Bot.Knowledge
                         var currentRow = state.Db.ReadOneRecord<KnowledgeV2RecordRow>(x => x.Id == record.Id);
                         var currentRecord = currentRow == null ? null : FromRow(currentRow);
                         if (currentRecord == null
+                            || !string.Equals(EditorRecordFingerprint(currentRecord), expectedFingerprint, StringComparison.Ordinal)
                             || !string.Equals((currentRecord.Answer ?? string.Empty).Trim(), old, StringComparison.Ordinal)
                             || !currentRecord.Enabled
                             || !string.Equals(currentRecord.Status, "active", StringComparison.OrdinalIgnoreCase))
                         {
                             result = "知识已被其他操作修改或停用；自动学习拒绝覆盖，请基于最新版本重新处理。";
+                            return false;
+                        }
+                        if (state.Db.ReadRecords<KnowledgeV2RecordRow>(null).Select(FromRow)
+                            .Any(x => matchingQuestion(x) && !string.Equals(x.Id, record.Id, StringComparison.Ordinal)))
+                        {
+                            result = "保存期间出现同题知识冲突；请重新处理。";
                             return false;
                         }
                     }

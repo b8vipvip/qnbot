@@ -15,9 +15,11 @@ def test_streaming_reply_strips_internal_timeline_prefix_before_ui_send_and_lear
     dedupe = source.index("ReplyDeduplicationService.EnsureDistinct(")
     answer_ready = source.index("ResponseProgressTracker.SetAnswerReady(")
     send = source.index("burst.BuyerNick, answer, 1, lease.CancellationToken")
-    learn = source.index("KnowledgeLearningService.QueueLearn(")
+    delivered = source.index("ReplyDeduplicationService.RememberDelivered(", send)
 
-    assert sanitize < dedupe < answer_ready < send < learn
+    assert sanitize < dedupe < answer_ready < send < delivered
+    assert "if (sendOk)" in source[send:delivered]
+    assert "KnowledgeLearningService.QueueLearn(" not in source
     assert "已移除AI回复中的内部时间线前缀" in source
 
 

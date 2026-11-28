@@ -19,14 +19,14 @@ def test_scoped_identity_prevents_cross_shop_knowledge_leak():
     assert "config.Enabled" in p
     assert "HasStableSellerId" in p
 
-def test_quarantine_is_non_destructive_and_applies_to_both_knowledge_paths():
+def test_quarantine_is_non_destructive_and_applies_to_v2_direct_and_context_paths():
     p = src(POLICY)
     assert "config.QuarantineKnowledgeIds" in p
     assert "config.QuarantineTextPatterns" in p
     v2 = src("src/Bot/Knowledge/KnowledgeEngineV2.Service.Index.cs")
-    smart = src("src/Bot/ChromeNs/SmartReplyRouterService.cs")
+    context = src("src/Bot/Knowledge/KnowledgeEngineV2.Service.Public.cs")
     assert "ShopReceptionPolicy.IsQuarantined(seller, record.Id, record.Title, record.Answer)" in v2
-    assert "ShopReceptionPolicy.IsQuarantined(seller, x.Id, x.Title, x.Answer)" in smart
+    assert "ShopReceptionPolicy.IsQuarantined(seller, x.Id, x.Title, x.Answer)" in context
     assert "KnowledgeEngineV2Repository.ReplaceAll" not in p
     assert "Delete(" not in p
 

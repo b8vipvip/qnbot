@@ -387,6 +387,12 @@ namespace Bot.Knowledge
                     && double.TryParse(confidenceRaw, System.Globalization.NumberStyles.Float,
                         System.Globalization.CultureInfo.InvariantCulture, out confidence)
                     ? confidence : KnowledgeEngineV2Constants.DefaultMinConfidence;
+                // Older installations or restored settings may already contain
+                // non-finite values; Math.Min/Max alone do not sanitize NaN.
+                if (double.IsNaN(threshold) || double.IsInfinity(threshold))
+                    threshold = KnowledgeEngineV2Constants.DefaultDirectThreshold;
+                if (double.IsNaN(confidence) || double.IsInfinity(confidence))
+                    confidence = KnowledgeEngineV2Constants.DefaultMinConfidence;
                 cached = new RuntimeSettings
                 {
                     Enabled = enabled,

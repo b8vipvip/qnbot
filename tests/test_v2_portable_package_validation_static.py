@@ -26,3 +26,16 @@ def test_invalid_threshold_is_rejected_before_settings_write():
     method = source.split("public static void SetSettings(", 1)[1].split("public static KnowledgeV2Decision Resolve(", 1)[0]
     assert method.index("double.IsNaN(threshold)") < method.index("store.SetString")
     assert "double.IsInfinity(minConfidence)" in method
+
+def test_restored_non_finite_thresholds_and_reviewed_write_races_are_guarded():
+    index = read("src/Bot/Knowledge/KnowledgeEngineV2.Service.Index.cs")
+    assert "if (double.IsNaN(threshold) || double.IsInfinity(threshold))" in index
+    assert "if (double.IsNaN(confidence) || double.IsInfinity(confidence))" in index
+    repo = read("src/Bot/Knowledge/KnowledgeEngineV2.Repository.cs")
+    method = repo.split("public static bool TrySaveReviewedDirectAnswer(string seller,", 2)[2].split("public static bool TryApplyCommerceScenarioScope", 1)[0]
+    assert "var expectedFingerprint = exact.Count == 1" in method
+    assert "EditorRecordFingerprint(currentRecord), expectedFingerprint" in method
+    assert "matchingQuestion(x) && !string.Equals(x.Id, record.Id" in method
+    review = read("src/Bot/ChromeNs/ReviewedKnowledgeLearningService.cs")
+    assert "TrySaveReviewedDirectAnswer(" in review
+    assert "KnowledgeEngineV2Repository.Save(" not in review
