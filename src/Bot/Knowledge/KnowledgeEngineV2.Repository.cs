@@ -1531,7 +1531,20 @@ namespace Bot.Knowledge
                 .ToList();
             lock (state.Sync)
             {
+                var pending = state.Db.ReadOneRecord<KnowledgeV2MetaRow>(x => x.Key == PendingPortableImportKey);
+                if (pending != null && !string.IsNullOrWhiteSpace(pending.Value))
+                    throw new InvalidOperationException("有尚未恢复完成的知识包操作，禁止再次覆盖知识。");
                 var replacementRows = normalized.Select(x => (object)ToRow(x)).ToList();
+                if (recovery != null)
+                {
+                    if (!string.Equals(recovery.ShopKey, shop.ShopKey, StringComparison.Ordinal))
+                        throw new InvalidOperationException("导入恢复记录店铺身份不匹配。");
+                    replacementRows.Add(new KnowledgeV2MetaRow
+                    {
+                        Key = PendingPortableImportKey,
+                        Value = JsonConvert.SerializeObject(recovery, Formatting.None)
+                    });
+                }
                 replacementRows.Add(new KnowledgeV2MetaRow
                 {
                     Key = "schema_version",
@@ -1595,8 +1608,21 @@ namespace Bot.Knowledge
         // Compare-and-replace for cloud replay. The expected fingerprint is checked while
         // holding the same repository lock used by Save/ReplaceAll, so a concurrent local
         // learning write cannot be silently erased by a stale cloud response.
+        private const string PendingPortableImportKey = "pending_portable_import";
+        private static readonly ConcurrentDictionary<string, object> PortableImportLocks =
+            new ConcurrentDictionary<string, object>(StringComparer.Ordinal);
+
+        internal sealed class PortableImportRecovery
+        {
+            public string ShopKey { get; set; }
+            public KnowledgeV2Settings BeforeSettings { get; set; }
+            public KnowledgeV2Settings TargetSettings { get; set; }
+            public List<KnowledgeV2FeedbackEventRow> FeedbackEvents { get; set; }
+        }
+
         internal static bool TryReplaceAllIfUnchanged(
-            string seller,string expectedFingerprint,IEnumerable<KnowledgeV2Record> records)
+            string seller,string expectedFingerprint,IEnumerable<KnowledgeV2Record> records,
+            PortableImportRecovery recovery = null)
         {
             var shop=ResolveShopRequired(seller);
             var state=GetState(shop);
@@ -1629,6 +1655,41 @@ namespace Bot.Knowledge
             }
             KnowledgeEngineV2Service.ReplaceSnapshot(seller,normalized);
             return true;
+        }
+
+        // Cross-store restore is a durable saga. The knowledge replacement and intent
+        // commit atomically; the remaining operations are idempotent and replayable.
+        internal static int ResumePortableImport(string seller)
+        {
+            var shop = ResolveShopRequired(seller);
+            var state = GetState(shop);
+            EnsureSchemaInitialized(state);
+            lock (PortableImportLocks.GetOrAdd(shop.ShopKey, _ => new object()))
+            {
+                string json;
+                lock (state.Sync)
+                {
+                    var row = state.Db.ReadOneRecord<KnowledgeV2MetaRow>(x => x.Key == PendingPortableImportKey);
+                    json = row == null ? string.Empty : row.Value;
+                }
+                if (string.IsNullOrWhiteSpace(json)) return 0;
+                var pending = JsonConvert.DeserializeObject<PortableImportRecovery>(json);
+                if (pending == null || !string.Equals(pending.ShopKey, shop.ShopKey, StringComparison.Ordinal))
+                    throw new InvalidDataException("知识包恢复日志损坏或店铺不匹配。");
+                var restored = pending.FeedbackEvents == null || pending.FeedbackEvents.Count == 0 ? 0
+                    : KnowledgeEngineV2FeedbackService.MergeBackupEvents(seller, pending.ShopKey, pending.FeedbackEvents);
+                if (pending.TargetSettings != null
+                    && !KnowledgeEngineV2Service.TryRestorePortableSettings(seller, pending.BeforeSettings, pending.TargetSettings))
+                    throw new InvalidOperationException("知识包恢复期间检索设置被另行修改；保留新设置，待处理恢复日志。");
+                lock (state.Sync)
+                {
+                    var current = state.Db.ReadOneRecord<KnowledgeV2MetaRow>(x => x.Key == PendingPortableImportKey);
+                    if (current == null || !string.Equals(current.Value, json, StringComparison.Ordinal))
+                        throw new InvalidOperationException("知识包恢复日志已变化。");
+                    state.Db.SaveOneRecord(new KnowledgeV2MetaRow { Key = PendingPortableImportKey, Value = string.Empty });
+                }
+                return restored;
+            }
         }
 
         public static string GetDatabasePath(string seller)

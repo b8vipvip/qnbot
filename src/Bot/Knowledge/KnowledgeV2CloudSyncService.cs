@@ -109,7 +109,13 @@ namespace Bot.Knowledge
                 if (profile == null) continue;
                 try
                 {
-                    Queue(profile.ToContext());
+                    var shop = profile.ToContext();
+                    // Recover even when cloud sync is disabled. The durable import intent
+                    // must finish before sending a replacement corpus to another device.
+                    if (shop != null && shop.HasStableSellerId)
+                        using (ShopSettingsScope.Enter(shop))
+                            KnowledgeEngineV2Repository.ResumePortableImport(shop.DisplayName);
+                    Queue(shop);
                 }
                 catch (Exception ex)
                 {
@@ -206,6 +212,7 @@ namespace Bot.Knowledge
         {
             using(ShopSettingsScope.Enter(shop))
             {
+                KnowledgeEngineV2Repository.ResumePortableImport(shop.DisplayName);
                 var connection=new ShopControlPlaneConnectionStore(shop,Paths);
                 string token,error;
                 var url=connection.GetServerUrl();

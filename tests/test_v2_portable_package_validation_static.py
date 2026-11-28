@@ -45,7 +45,7 @@ def test_portable_import_preserves_tombstones_and_uses_exact_backup_snapshot_for
     assert "ComputeCloudSyncFingerprint(before.Records)" in source
     assert "BuildImportReplacement(before.Records, package.Records)" in source
     assert "CreateAutomaticBackup(before)" in source
-    assert "TryReplaceAllIfUnchanged(_seller, expectedFingerprint, replacement)" in source
+    assert "TryReplaceAllIfUnchanged(_seller, expectedFingerprint, replacement, recovery)" in source
     assert "snapshot ?? BuildPackage()" in source
     assert 'tombstone.Status = "deleted"' in source
     assert "rows[old.Id] = old;" in source
@@ -57,7 +57,7 @@ def test_complete_backup_carries_same_shop_feedback_without_replacing_existing_e
     assert "KnowledgeEngineV2FeedbackService.ExportEvents(_seller)" in page
     assert "KnowledgeEngineV2FeedbackService.ValidateBackupEvents(package.FeedbackEvents, package.Records)" in page
     assert "package.SourceShopKey, _shopKey" in page
-    assert "KnowledgeEngineV2FeedbackService.MergeBackupEvents" in page
+    assert "KnowledgeEngineV2Repository.ResumePortableImport" in page
 
 def test_additive_import_and_records_only_export_use_validated_v2_packages():
     source = read("src/Bot/Knowledge/KnowledgeCenterV2OperationsPages.cs")
@@ -65,8 +65,20 @@ def test_additive_import_and_records_only_export_use_validated_v2_packages():
     assert 'ImportPackage("append")' in source
     assert "KnowledgeV2CloudSyncService.MergeCloudAndLocal(before.Records" in source
     assert "append ? package.Records.Where(x => !before.Records.Any(old => old.Id == x.Id))" in source
-    assert "if (replace && package.Settings != null)" in source
-    assert "var restoredFeedback = !replace" in source
+    assert "TargetSettings = package.Settings" in source
+    assert "var recovery = replace ?" in source
     export = source.split("private void ExportRecords()", 1)[1].split("private void ImportPackage()", 1)[0]
     assert "SchemaVersion = KnowledgeEngineV2Constants.SchemaVersion" in export
     assert "FeedbackEvents = null" in export and "Settings = null" in export
+
+def test_portable_import_journal_commits_with_knowledge_and_replays_before_sync():
+    repo = read("src/Bot/Knowledge/KnowledgeEngineV2.Repository.cs")
+    page = read("src/Bot/Knowledge/KnowledgeCenterV2OperationsPages.cs")
+    cloud = read("src/Bot/Knowledge/KnowledgeV2CloudSyncService.cs")
+    assert "Key = PendingPortableImportKey" in repo
+    assert "Value = JsonConvert.SerializeObject(recovery, Formatting.None)" in repo
+    assert repo.index("Value = JsonConvert.SerializeObject(recovery, Formatting.None)") < repo.index("state.Db.ReplaceRecordsInTransaction(", repo.index("Value = JsonConvert.SerializeObject(recovery, Formatting.None)"))
+    restore = repo.split("internal static int ResumePortableImport",1)[1].split("public static string GetDatabasePath",1)[0]
+    assert restore.index("MergeBackupEvents") < restore.index("TryRestorePortableSettings") < restore.index("Value = string.Empty")
+    assert "知识已提交，反馈/设置恢复尚未完成" in page
+    assert "KnowledgeEngineV2Repository.ResumePortableImport(shop.DisplayName)" in cloud
