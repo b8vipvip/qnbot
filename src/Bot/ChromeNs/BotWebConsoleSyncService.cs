@@ -119,6 +119,8 @@ namespace Bot.ChromeNs
         private sealed class KnowledgeOperation
         {
             public string Claim;
+            public string JournalScope;
+            public string JournalPath;
             public readonly CancellationTokenSource Cancellation = new CancellationTokenSource();
             public readonly object Sync = new object();
             public JObject Progress = new JObject();
@@ -694,12 +696,19 @@ namespace Bot.ChromeNs
                             ? SelectPendingMessageBatch(state)
                             : new List<WebMessage>();
                     }
-                    // Running jobs publish a heartbeat without blocking message/feedback sync.
-                    foreach (var job in state.KnowledgeOperations)
+                    // Load the exact server/device/shop outbox before sending.
+                    // A process restart cannot lose a committed terminal result.
+                    var journalScope = KnowledgeJournalScope(state.Shop, serverUrl);
+                    RestoreKnowledgeOperationResults(state, journalScope);
+                    foreach (var job in state.KnowledgeOperations.Where(x => x.Value.JournalScope == journalScope))
                         PublishKnowledgeOperationProgress(state, job.Key, job.Value);
                     KeyValuePair<long, JObject>[] resultSnapshot;
                     lock (state.PendingCommandResultsSync)
-                        resultSnapshot = state.PendingCommandResults.ToArray();
+                        resultSnapshot = state.PendingCommandResults
+                            .Where(x => x.Value["journal_scope"] == null || ((string)x.Value["journal_scope"] == journalScope
+                                && EnsureKnowledgeResultDurable(x.Value, journalScope)))
+                            .OrderByDescending(x => x.Value["journal_scope"] != null)
+                            .ThenBy(x => x.Key).Take(100).ToArray();
                     var payload = new JObject
                     {
                         ["shop_key"] = state.Shop.ShopKey,
@@ -756,7 +765,7 @@ namespace Bot.ChromeNs
                                 }
                             }
                             ApplyDesiredSettings(state, root["desired_settings"] as JObject);
-                            await ApplyCommandsAsync(state, root["commands"] as JArray);
+                            await ApplyCommandsAsync(state, root["commands"] as JArray, journalScope);
                         }
                     }
 
@@ -1011,7 +1020,7 @@ namespace Bot.ChromeNs
             }
         }
 
-        private static async Task ApplyCommandsAsync(ShopWebState state, JArray commands)
+        private static async Task ApplyCommandsAsync(ShopWebState state, JArray commands, string journalScope)
         {
             if (commands == null) return;
             foreach (var token in commands.Take(30))
@@ -1025,13 +1034,13 @@ namespace Bot.ChromeNs
                 {
                     KnowledgeOperation running;
                     if (state.KnowledgeOperations.TryGetValue(id, out running)
-                        && running.Claim == (string)command["payload"]?["claim"])
+                        && running.Claim == (string)command["payload"]?["claim"] && running.JournalScope == journalScope)
                         lock (running.Sync) { if (!running.Finished) running.Cancellation.Cancel(); }
                     continue;
                 }
                 if (type == "knowledge_v2_operation")
                 {
-                    StartKnowledgeOperation(state, id, command["payload"] as JObject);
+                    StartKnowledgeOperation(state, id, command["payload"] as JObject, journalScope);
                     continue;
                 }
                 if (WasProcessed(state, id))
@@ -1077,16 +1086,150 @@ namespace Bot.ChromeNs
                 var result = Result(id, true, string.Empty, (JObject)job.Progress.DeepClone());
                 result["claim"] = job.Claim;
                 result["phase"] = "running";
+                result["journal_scope"] = job.JournalScope;
                 SetPendingCommandResult(state, id, result);
             }
         }
 
-        private static void StartKnowledgeOperation(ShopWebState state, long id, JObject payload)
+        private static string KnowledgeJournalScope(ShopContext shop, string serverUrl)
+        {
+            return Hash(shop.ShopKey + "\n" + KnowledgeDeviceId.Value + "\n" + (serverUrl ?? string.Empty).TrimEnd('/'));
+        }
+
+        private static string KnowledgeJournalDirectory(string scope)
+        {
+            return Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
+                "qnbot", "knowledge-operation-outbox", scope);
+        }
+
+        private static string KnowledgeJournalPath(string scope, long id, string claim)
+        {
+            if (string.IsNullOrWhiteSpace(scope) || scope.Length != 64 || id < 1 || string.IsNullOrWhiteSpace(claim)
+                || claim.Length != 48 || claim.Any(c => !"0123456789abcdef".Contains(c)))
+                throw new InvalidOperationException("知识操作领取凭证无效。");
+            return Path.Combine(KnowledgeJournalDirectory(scope), id + "-" + claim + ".result");
+        }
+
+        private static void WriteKnowledgeJournal(string path, string scope, JObject result)
+        {
+            Directory.CreateDirectory(Path.GetDirectoryName(path));
+            var plain = Encoding.UTF8.GetBytes(result.ToString(Formatting.None));
+            byte[] encrypted = null;
+            try
+            {
+                encrypted = ProtectedData.Protect(plain, Encoding.UTF8.GetBytes(scope), DataProtectionScope.CurrentUser);
+                string error;
+                if (!CrossProcessAtomicStateFile.WriteAllTextAtomic(path, Convert.ToBase64String(encrypted), 3, 50, out error, path + ".bak"))
+                    throw new IOException("知识任务结果持久化失败：" + error);
+            }
+            finally
+            {
+                Array.Clear(plain, 0, plain.Length);
+                if (encrypted != null) Array.Clear(encrypted, 0, encrypted.Length);
+            }
+        }
+
+        private static JObject ReadKnowledgeJournal(string path, string scope)
+        {
+            var encrypted = Convert.FromBase64String(File.ReadAllText(path, Encoding.UTF8));
+            var plain = ProtectedData.Unprotect(encrypted, Encoding.UTF8.GetBytes(scope), DataProtectionScope.CurrentUser);
+            try { return JObject.Parse(Encoding.UTF8.GetString(plain)); }
+            finally { Array.Clear(plain, 0, plain.Length); Array.Clear(encrypted, 0, encrypted.Length); }
+        }
+
+        private static bool EnsureKnowledgeResultDurable(JObject result, string scope)
+        {
+            if ((string)result["phase"] == "running") return true;
+            try
+            {
+                var path = KnowledgeJournalPath(scope, result.Value<long>("id"), (string)result["claim"]);
+                var saved = File.Exists(path) ? ReadKnowledgeJournal(path, scope) : null;
+                if (!JToken.DeepEquals(saved, result)) WriteKnowledgeJournal(path, scope, result);
+                return true;
+            }
+            catch (Exception ex)
+            {
+                Log.ErrorWithMaxCount("知识操作终态暂不可持久化：" + ex.GetType().Name, 10);
+                return false;
+            }
+        }
+
+        private static void RestoreKnowledgeOperationResults(ShopWebState state, string scope)
+        {
+            var directory = KnowledgeJournalDirectory(scope);
+            if (!Directory.Exists(directory)) return;
+            foreach (var path in Directory.EnumerateFiles(directory, "*.result"))
+            {
+                try
+                {
+                    var result = ReadKnowledgeJournal(path, scope);
+                    var id = result.Value<long?>("id") ?? 0;
+                    var claim = (string)result["claim"];
+                    if ((string)result["journal_scope"] != scope || path != KnowledgeJournalPath(scope, id, claim)) continue;
+                    KnowledgeOperation running;
+                    if (state.KnowledgeOperations.TryGetValue(id, out running) && running.Claim == claim && running.JournalScope == scope)
+                        continue;
+                    lock (state.PendingCommandResultsSync)
+                    {
+                        JObject pending;
+                        if (state.PendingCommandResults.TryGetValue(id, out pending) && (string)pending["claim"] == claim
+                            && (string)pending["journal_scope"] == scope && (string)pending["phase"] != "running")
+                        {
+                            // Terminal result was computed but its first disk write
+                            // failed. Retry the durable write before publishing it.
+                            WriteKnowledgeJournal(path, scope, pending);
+                            continue;
+                        }
+                        if ((string)result["phase"] == "started")
+                        {
+                            // We have proof of dispatch but not of its outcome.
+                            // Never re-execute a possibly committed mutation.
+                            result = Result(id, false, "客户端重启中断任务，执行结果未知；请查看原设备断点或知识修订状态后重试。", new JObject());
+                            result["claim"] = claim;
+                            result["journal_scope"] = scope;
+                            result["phase"] = "interrupted";
+                            WriteKnowledgeJournal(path, scope, result);
+                        }
+                        state.PendingCommandResults[id] = result;
+                    }
+                }
+                catch (Exception ex)
+                {
+                    Log.ErrorWithMaxCount("知识操作结果恢复失败：" + ex.GetType().Name, 10);
+                }
+            }
+        }
+
+        private static void StartKnowledgeOperation(ShopWebState state, long id, JObject payload, string journalScope)
         {
             var claim = (string)payload?["claim"];
             if (string.IsNullOrWhiteSpace(claim)) return;
-            var job = new KnowledgeOperation { Claim = claim };
+            var shop = state.Shop;
+            if (shop == null || !shop.HasStableSellerId || (string)payload["shop_key"] != shop.ShopKey
+                || string.IsNullOrEmpty(KnowledgeDeviceId.Value) || (string)payload["device_id"] != KnowledgeDeviceId.Value) return;
+            var path = KnowledgeJournalPath(journalScope, id, claim);
+            if (File.Exists(path))
+            {
+                RestoreKnowledgeOperationResults(state, journalScope);
+                return;
+            }
+            var job = new KnowledgeOperation { Claim = claim, JournalScope = journalScope, JournalPath = path };
             if (!state.KnowledgeOperations.TryAdd(id, job)) { job.Cancellation.Dispose(); return; }
+            try
+            {
+                var receipt = Result(id, false, string.Empty, new JObject());
+                receipt["phase"] = "started";
+                receipt["claim"] = claim;
+                receipt["journal_scope"] = journalScope;
+                WriteKnowledgeJournal(path, journalScope, receipt);
+            }
+            catch
+            {
+                KnowledgeOperation ignored;
+                state.KnowledgeOperations.TryRemove(id, out ignored);
+                job.Cancellation.Dispose();
+                throw; // fail closed before any mutation
+            }
             Task.Run(async () =>
             {
                 JObject result;
@@ -1112,6 +1255,15 @@ namespace Bot.ChromeNs
                 {
                     job.Finished = true;
                     result["claim"] = job.Claim;
+                    result["journal_scope"] = job.JournalScope;
+                    try
+                    {
+                        WriteKnowledgeJournal(job.JournalPath, job.JournalScope, result);
+                    }
+                    catch (Exception ex)
+                    {
+                        Log.ErrorWithMaxCount("知识操作终态写盘失败，将重试：" + ex.GetType().Name, 10);
+                    }
                     SetPendingCommandResult(state, id, result);
                 }
                 KnowledgeOperation ignored;
@@ -1372,6 +1524,15 @@ namespace Bot.ChromeNs
                     if (state.PendingCommandResults.TryGetValue(pair.Key, out current)
                         && ReferenceEquals(current, pair.Value))
                     {
+                        var scope = (string)current["journal_scope"];
+                        if (!string.IsNullOrWhiteSpace(scope) && (string)current["phase"] != "running")
+                        {
+                            var path = KnowledgeJournalPath(scope, pair.Key, (string)current["claim"]);
+                            // Server already committed this exact terminal receipt.
+                            // Delete the encrypted local copy only after HTTP acknowledgement.
+                            if (File.Exists(path + ".bak")) File.Delete(path + ".bak");
+                            if (File.Exists(path)) File.Delete(path);
+                        }
                         JObject ignored;
                         state.PendingCommandResults.TryRemove(pair.Key, out ignored);
                     }

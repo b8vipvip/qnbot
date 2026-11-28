@@ -680,3 +680,17 @@ def test_feedback_convergence_requires_two_registered_persisted_device_receipts(
     assert proof["verified_devices"]==2 and proof["two_device_nonempty_convergence"]
     m.runtime_feedback_sync(m.KnowledgeV2FeedbackInput(events=[dict(event,Id=uuid.uuid4().hex)]),None,"shop-a")
     assert not m.web_v2_devices({"id":1})["two_device_nonempty_convergence"]
+
+def test_remote_knowledge_job_receipts_survive_restart_without_replaying_mutations():
+    source=read(ROOT/"src/Bot/ChromeNs/BotWebConsoleSyncService.cs")
+    assert "ProtectedData.Protect(plain" in source
+    assert "ProtectedData.Unprotect(encrypted" in source
+    assert "CrossProcessAtomicStateFile.WriteAllTextAtomic(path" in source
+    start=source.split("private static void StartKnowledgeOperation(",1)[1].split("private static async Task<JObject> ExecuteKnowledgeOperationAsync",1)[0]
+    assert start.index("WriteKnowledgeJournal(path, journalScope, receipt)") < start.index("Task.Run(async")
+    assert "WriteKnowledgeJournal(job.JournalPath, job.JournalScope, result)" in start
+    assert 'result["phase"] = "interrupted"' in source
+    assert "EnsureKnowledgeResultDurable(x.Value, journalScope)" in source
+    assert "ReferenceEquals(current, pair.Value)" in source
+    assert "ThenBy(x => x.Key).Take(100)" in source
+    assert "File.Delete(path)" in source
