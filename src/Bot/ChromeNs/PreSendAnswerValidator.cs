@@ -68,7 +68,8 @@ namespace Bot.ChromeNs
             string question,
             string answer,
             bool secondAttempt,
-            string approvedV2ContextEvidence = null)
+            string approvedV2ContextEvidence = null,
+            KnowledgeV2Decision decision = null)
         {
             var result = new AnswerValidationResult();
             answer = BotOutboundMessageFormatter.StripAiMarker(answer);
@@ -86,6 +87,11 @@ namespace Bot.ChromeNs
             var state = BuildState(seller, buyer, question);
             var authoritativeEvidence = BuildAuthoritativeEvidence(state, approvedV2ContextEvidence);
             var verifiedStatusEvidence = BuildVerifiedStatusEvidence(state);
+            var scopedQuestion = question;
+            if (decision != null && decision.Query != null)
+                scopedQuestion += " " + string.Join(" ", (decision.Query.Entities ?? new List<string>())
+                    .Where(KnowledgeEngineV2Semantics.IsProductEntity)
+                    .Select(id => "商品ID:" + id.Substring("product:".Length)));
 
             if (MachinePhrases.Any(x => compactAnswer.Contains(Compact(x))))
             {
@@ -119,7 +125,7 @@ namespace Bot.ChromeNs
                 result.Issues.Add("出现店铺提示词、知识或已确认订单事实中没有依据的具体数字/时效：" + string.Join("、", unsupportedNumbers));
             }
 
-            if (HasUnverifiedScopedNumbers(question, answer, approvedV2ContextEvidence,
+            if (HasUnverifiedScopedNumbers(scopedQuestion, answer, approvedV2ContextEvidence,
                 StorePromptProfileService.GetStandardPrompt()))
                 result.Issues.Add("数字事实与商品、价格/时效类型或适用条件不一致");
 
@@ -141,7 +147,7 @@ namespace Bot.ChromeNs
                 result.Issues.Add("声称已经核实或完成具体订单/售后状态，但没有可靠依据：" + string.Join("、", unsupportedStatus));
             }
 
-            if (HasUnverifiedProductConclusion(question, answer, approvedV2ContextEvidence))
+            if (HasUnverifiedProductConclusion(scopedQuestion, answer, approvedV2ContextEvidence))
                 result.Issues.Add("商品支持/不支持结论缺少明确适用的Knowledge V2证据");
 
             if (HasKnowledgeContradiction(answer, approvedV2ContextEvidence))
