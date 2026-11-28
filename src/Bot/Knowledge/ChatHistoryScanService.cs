@@ -397,7 +397,10 @@ namespace Bot.Knowledge
                                 ? "scan-turn:" + turns.IndexOf(x) : x.MessageKey;
                             string botEcho;
                             matchedBotReplies.TryGetValue(key, out botEcho);
-                            return Tuple.Create(x.Text, x.Time, x.MessageKey, botEcho ?? string.Empty);
+                            var evidenceKey = string.IsNullOrWhiteSpace(x.MessageKey)
+                                ? "history:" + buyer + "|" + x.Time.Ticks + "|" + x.Text
+                                : x.MessageKey;
+                            return Tuple.Create(x.Text, x.Time, evidenceKey, botEcho ?? string.Empty);
                         }));
                         foreach (var turn in buyerTurns)
                         {
@@ -522,6 +525,8 @@ namespace Bot.Knowledge
                                 throw;
                             }
                             read = checkpoint.ArchivedMessages;
+                            if (options.LearnKnowledge)
+                                evidence.RecordCommittedLearning(buyer, turns.Count, pairCount, referenced, supplemented, nonReusable);
                         }
                         evidence.Contact(buyer, true, count, "history_read");
                         Log.Info("[BuyerQuestions] history_scan_contact_complete run="
