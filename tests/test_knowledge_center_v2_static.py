@@ -38,7 +38,7 @@ def test_buyer_runtime_builds_a_cold_v2_snapshot_instead_of_skipping_retrieval()
     assert "QueueWarm(shopKey, seller)" in runtime
     assert "KnowledgeEngineV2Service.Resolve(burst.SellerNick, burst.BuyerNick, retrievalQuestion)" in runtime
     assert "if (!KnowledgeEngineV2Service.IsSnapshotReady(burst.SellerNick))" not in runtime
-    assert "Resolve() builds the exact ShopKey snapshot under its per-shop build lock when cold" in runtime
+    assert "builds the exact ShopKey snapshot under its per-shop build lock when cold" in runtime
     assert "return KnowledgeV2RuntimeResult.Continue(warmContext);" not in runtime
 
 def test_v2_edits_use_atomic_incremental_snapshot_updates():
@@ -49,7 +49,12 @@ def test_v2_edits_use_atomic_incremental_snapshot_updates():
     assert 'CloneSnapshot(current)' in incremental
     assert 'RemoveRecordFromIndexes' in incremental
     assert 'AddRecordToIndexes' in incremental
-    assert 'Snapshots[shop.ShopKey] = next;' in incremental
+    assert 'Snapshots[shopKey] = next;' in incremental
+    refresh = incremental[incremental.index("private static void RefreshCommittedRecord"):incremental.index("internal static void ApplyRecordDelete")]
+    assert refresh.index("lock (BuildLocks.GetOrAdd(shopKey") < refresh.index("KnowledgeEngineV2Repository.LoadCommittedRecord(seller, id)") < refresh.index("Snapshots[shopKey] = next;")
+    assert "KnowledgeV2AuthorityPolicy.NormalizeForRead(record)" in refresh
+    assert "RefreshCommittedRecord(seller, shop.ShopKey, record.Id)" in incremental
+    assert "internal static KnowledgeV2Record LoadCommittedRecord" in repo
 
 
 def test_v2_disable_delete_and_bulk_replace_keep_snapshot_hot():
@@ -58,10 +63,14 @@ def test_v2_disable_delete_and_bulk_replace_keep_snapshot_hot():
     assert 'KnowledgeEngineV2Service.ApplyRecordDelete(seller, id)' in repo
     assert 'KnowledgeEngineV2Service.ReplaceSnapshot(seller, normalized)' in repo
     assert 'internal static void ApplyRecordDelete' in incremental
-    assert 'tombstone.Status = "deleted";' in incremental
+    assert 'replacement.Status = "deleted";' in incremental
+    assert "RefreshCommittedRecord(seller, shop.ShopKey, id)" in incremental
     assert 'internal static void ReplaceSnapshot' in incremental
     assert 'BuildSnapshot(shop.ShopKey, enabled)' in incremental
-    assert 'if (record.Enabled && index >= 0)' in incremental
+    assert 'if (indexable && index >= 0)' in incremental
+    replace = incremental[incremental.index("internal static void ReplaceSnapshot"):incremental.index("private static Snapshot CloneSnapshot")]
+    assert replace.index("lock (BuildLocks.GetOrAdd(shop.ShopKey") < replace.index("KnowledgeEngineV2Repository.LoadAll(seller)") < replace.index("BuildSnapshot(shop.ShopKey, enabled)")
+    assert "records ?? Enumerable.Empty" not in replace
     assert 'else KnowledgeEngineV2Service.Invalidate(seller);' not in repo
 
 
@@ -225,3 +234,13 @@ def test_bot_reply_knowledge_mapping_only_offers_enabled_production_records():
     assert "x.Enabled" in rank
     assert 'x.Status, "deleted"' in rank
     assert "KnowledgeV2AuthorityPolicy.IsCandidate(x)" in rank
+
+
+def test_ocr_cold_snapshot_resolves_instead_of_skipping_the_only_knowledge_engine():
+    ocr = read("src/Bot/ChromeNs/OcrFirstKnowledgeDecisionService.cs")
+    assert "SnapshotWarmWaitMs" not in ocr
+    assert "if (!KnowledgeEngineV2Service.IsSnapshotReady(knowledgeSeller))" not in ocr
+    assert "Knowledge V2索引未就绪" not in ocr
+    assert "KnowledgeEngineV2Service.ResolveWithEvidence(" in ocr
+    assert "KnowledgeEngineV2Service.ResolveWithCuratedImageKnowledgeEvidence(" in ocr
+    assert "cancellationToken.ThrowIfCancellationRequested();" in ocr
