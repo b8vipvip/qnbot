@@ -617,3 +617,39 @@ def test_web_operations_ui_uses_selected_device_and_atomic_bulk_revision():
     assert "knowledge_v2_operation_cancel" in windows
     assert 'EditorRecordFingerprint(before) != EditorRecordFingerprint(applied)' in repo
     assert "expectedRevisionId" in repo
+
+@pytest.mark.skipif(importlib.util.find_spec("fastapi") is None, reason="server dependencies are not installed")
+def test_remote_operation_claims_once_across_two_devices_and_rejects_unclaimed_results(tmp_path):
+    m=_load_v2_cas_module(tmp_path)
+    spec=importlib.util.spec_from_file_location("bot_web_console_claim_test",ROOT/"services/api-control-plane/bot_web_console.py")
+    console=importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(console)
+    console._cp=m._cp
+    with m._cp.db() as conn:
+        conn.execute("CREATE TABLE bot_client_shop_binding(client_id INTEGER PRIMARY KEY,shop_key TEXT)")
+        conn.execute("INSERT INTO bot_client_shop_binding VALUES(1,'shop-a')")
+        conn.execute("ALTER TABLE bot_commands ADD COLUMN completed_at TEXT")
+        for device in ("a"*32,"b"*32):
+            conn.execute("INSERT INTO bot_knowledge_v2_devices VALUES(1,'shop-a',?,?)",(device,m._cp.iso_now()))
+    task=m.web_v2_operation(m.KnowledgeV2OperationInput(action="history_scan",confirmed=True,device_id="a"*32),{"id":1})
+    assert console._command_rows(1,"shop-a","b"*32)==[]
+    barrier=threading.Barrier(2)
+    def claim():
+        barrier.wait(timeout=5)
+        return console._command_rows(1,"shop-a","a"*32)
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        futures=[pool.submit(claim),pool.submit(claim)]
+        rows=[row for future in futures for row in future.result(timeout=10)]
+    assert len(rows)==1
+    command=rows[0];cid=command["id"];claim_token=command["payload"]["claim"]
+    console._apply_command_results(1,[{"id":cid,"success":True,"result":{"forged":True}}])
+    assert m.web_v2_operation_status(cid,{"id":1})["status"]=="running"
+    console._apply_command_results(1,[{"id":cid,"claim":claim_token,"phase":"running","success":True,"result":{"messages":150}}])
+    assert m.web_v2_operation_status(cid,{"id":1})["result"]["messages"]==150
+    assert m.web_v2_operation_cancel(cid,{"id":1})["status"]=="cancel_requested"
+    assert console._command_rows(1,"shop-a","b"*32)==[]
+    assert console._command_rows(1,"shop-a","a"*32)[0]["type"]=="knowledge_v2_operation_cancel"
+    console._apply_command_results(1,[{"id":cid,"claim":claim_token,"phase":"cancelled","success":False,"result":{}}])
+    assert m.web_v2_operation_status(cid,{"id":1})["status"]=="cancelled"
+    console._apply_command_results(1,[{"id":cid,"claim":claim_token,"success":True,"result":{"duplicate":True}}])
+    assert m.web_v2_operation_status(cid,{"id":1})["status"]=="cancelled"

@@ -1130,17 +1130,19 @@ namespace Bot.ChromeNs
             switch (action)
             {
                 case "history_status":
-                    var latest = BuyerHistoryScanCheckpointStore.Latest(seller);
+                    var latest = BuyerHistoryScanCheckpointStore.Latest(seller, payload.Value<bool?>("learn_knowledge"));
                     return new JObject { ["checkpoint"] = latest == null ? JValue.CreateNull() : JToken.FromObject(latest),
                         ["active"] = ChatHistoryScanService.IsBuyerScanActive(seller) };
                 case "history_scan":
                 case "history_resume":
-                    var scanOptions = new ChatHistoryScanOptions { ScanAll = true, MaxContacts = payload.Value<int?>("max_contacts") ?? 5000 };
+                    var scanOptions = new ChatHistoryScanOptions { ScanAll = true, MaxContacts = payload.Value<int?>("max_contacts") ?? 5000,
+                        LearnKnowledge = payload.Value<bool?>("learn_knowledge") == true };
                     if (action == "history_resume")
                     {
-                        var checkpoint = BuyerHistoryScanCheckpointStore.Latest(seller);
+                        var checkpoint = BuyerHistoryScanCheckpointStore.Latest(seller, payload.Value<bool?>("learn_knowledge"));
                         if (checkpoint == null || checkpoint.Id != (string)payload["checkpoint_id"])
                             throw new InvalidOperationException("所选设备没有此最新断点，请重新读取断点。");
+                        scanOptions.LearnKnowledge = checkpoint.LearnKnowledge;
                         scanOptions.ScanAll = checkpoint.ScanAll;
                         scanOptions.MaxContacts = checkpoint.MaxContacts;
                         scanOptions.StartTime = checkpoint.StartTime;
@@ -1152,12 +1154,16 @@ namespace Bot.ChromeNs
                         {
                             lock (job.Sync)
                                 job.Progress = new JObject { ["phase"] = p.Phase, ["contacts"] = p.ContactIndex,
-                                    ["total_contacts"] = p.ContactCount, ["messages"] = p.MessageCount,
+                                    ["total_contacts"] = p.ContactCount, ["messages"] = p.MessageCount, ["pairs"] = p.PairCount,
                                     ["failed"] = p.FailedCount, ["run_id"] = p.RunId };
                         }, token);
                     return new JObject { ["checkpoint_id"] = scan.ResumeCheckpointId, ["run_id"] = scan.RunId,
                         ["contacts"] = scan.ScannedContacts, ["total_contacts"] = scan.ContactCount, ["messages"] = scan.MessageCount,
-                        ["failed"] = scan.FailedContacts, ["coverage_verified"] = scan.ContactCoverageVerified,
+                        ["failed"] = scan.FailedContacts, ["observed_turns"] = scan.ObservedTurns,
+                        ["learn_knowledge"] = scanOptions.LearnKnowledge, ["analyzed_pairs"] = scan.AnalyzedHumanPairs,
+                        ["model_referenced_pairs"] = scan.ModelReferencedPairs, ["published"] = scan.PublishedKnowledge,
+                        ["candidates"] = scan.CandidateKnowledge, ["duplicate_skipped"] = scan.DuplicateKnowledge,
+                        ["coverage_verified"] = scan.ContactCoverageVerified,
                         ["coverage_warning"] = scan.CoverageWarning };
                 case "revision_generate":
                     return JObject.FromObject(KnowledgeEngineV2RevisionService.GenerateCandidates(seller, token));

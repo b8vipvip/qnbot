@@ -74,7 +74,8 @@ def test_same_shop_rollback_rejects_stale_revision_and_refreshes_snapshot():
         "public static bool Delete(", 1
     )[0]
     assert 'latest.Action != "apply"' in rollback
-    assert "before.UpdatedAt.Ticks != applied.UpdatedAt.Ticks" in rollback
+    assert "EditorRecordFingerprint(before) != EditorRecordFingerprint(applied)" in rollback
+    assert "expectedRevisionId" in rollback
     assert 'Action = "rollback"' in rollback
     assert "SaveRecordsInTransaction(new List<object> { ToRow(restored), rollback });" in rollback
     assert "KnowledgeEngineV2Service.ApplyRecordUpdate(seller, restored)" in rollback

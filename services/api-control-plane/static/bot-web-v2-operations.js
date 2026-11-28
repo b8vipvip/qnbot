@@ -103,8 +103,8 @@ function renderV2OperationResult(task){
   const data=task.result||{},list=$("v2OpsResult"),device=task.device_id,items=data.items||[];
   if(task.action==="history_status"||task.action==="history_scan"||task.action==="history_resume"){
     const cp=data.checkpoint;
-    v2Ops.checkpoint=cp?.Id||data.checkpoint_id||null;v2Ops.checkpointDevice=device;
-    list.replaceChildren(v2OpsCard("历史扫描状态",cp?["断点："+cp.Id,"已完成联系人："+cp.Completed+"/"+cp.Total,"状态："+cp.State]:[data.coverage_warning||"本机暂无可恢复断点","消息："+(data.messages??0),"成功联系人："+(data.contacts??0)+" / "+(data.total_contacts??0),"失败："+(data.failed??0),"全量覆盖证明："+(data.coverage_verified?"已验证":"未验证")]));
+    v2Ops.checkpoint=cp?.Id||data.checkpoint_id||null;v2Ops.checkpointDevice=device;v2Ops.learnKnowledge=cp?.LearnKnowledge??data.learn_knowledge??false;
+    list.replaceChildren(v2OpsCard("历史扫描状态",cp?["断点："+cp.Id,"已完成联系人："+cp.Completed+"/"+cp.Total,"状态："+cp.State,"学习模式："+(cp.LearnKnowledge?"扫描并学习":"仅归档"),"有效消息："+cp.ObservedTurns,"已分析问答："+cp.AnalyzedHumanPairs,"已发布："+cp.PublishedKnowledge]:[data.coverage_warning||"本机暂无可恢复断点","归档买家消息："+(data.messages??0),"全部有效消息："+(data.observed_turns??0),"已分析问答："+(data.analyzed_pairs??0),"模型返回证据轮次："+(data.model_referenced_pairs??0),"发布："+(data.published??0)+" · 候选："+(data.candidates??0),"成功联系人："+(data.contacts??0)+" / "+(data.total_contacts??0),"失败："+(data.failed??0),"全量覆盖证明："+(data.coverage_verified?"已验证":"未验证")]));
   }else if(task.action==="revision_list"){
     list.replaceChildren(...items.map(x=>v2OpsCard(x.KnowledgeTitle||x.KnowledgeId,["原答案："+x.OriginalAnswer,"建议："+x.ProposedAnswer,"证据："+x.EvidenceCount+" 条 / 买家："+x.DistinctBuyerCount+" · "+x.Status],x.Status==="pending"?[
       ["应用",()=>{if(confirm("确认应用此修订？"))startV2Operation("revision_apply",{candidate_id:x.Id},true,device)}],
@@ -136,9 +136,9 @@ async function pollV2Operation(id,select=false){
   }catch(err){if(epoch===v2Ops.epoch&&v2Ops.id===id){v2OpsHint("任务查询失败："+err.message);v2Ops.timer=setTimeout(()=>pollV2Operation(id),5000)}}
 }
 $("v2OpsRefresh").onclick=loadV2Operations;
-$("v2OpsHistoryStatus").onclick=()=>startV2Operation("history_status");
-$("v2OpsHistoryScan").onclick=()=>{const n=Number($("v2OpsMaxContacts").value);if(!Number.isInteger(n)||n<1||n>5000){toast("联系人上限须为1至5000");return}if(confirm("开始扫描所选设备的千牛历史消息？扫描会切换聊天窗口。"))startV2Operation("history_scan",{max_contacts:n},true)};
-$("v2OpsHistoryResume").onclick=()=>{if(v2Ops.checkpoint&&v2Ops.checkpointDevice===$("v2OpsDevice").value&&confirm("继续原设备的历史扫描断点？"))startV2Operation("history_resume",{checkpoint_id:v2Ops.checkpoint},true,v2Ops.checkpointDevice)};
+$("v2OpsHistoryStatus").onclick=()=>startV2Operation("history_status",{learn_knowledge:$("v2OpsLearnKnowledge").checked});
+$("v2OpsHistoryScan").onclick=()=>{const n=Number($("v2OpsMaxContacts").value);if(!Number.isInteger(n)||n<1||n>5000){toast("联系人上限须为1至5000");return}if(confirm("开始扫描所选设备的千牛历史消息？扫描会切换聊天窗口。"))startV2Operation("history_scan",{max_contacts:n,learn_knowledge:$("v2OpsLearnKnowledge").checked},true)};
+$("v2OpsHistoryResume").onclick=()=>{if(v2Ops.checkpoint&&v2Ops.checkpointDevice===$("v2OpsDevice").value&&confirm("继续原设备的历史扫描断点？"))startV2Operation("history_resume",{checkpoint_id:v2Ops.checkpoint,learn_knowledge:v2Ops.learnKnowledge},true,v2Ops.checkpointDevice)};
 $("v2OpsRevisionGenerate").onclick=()=>{if(confirm("基于真实人工反馈生成修订候选？"))startV2Operation("revision_generate",{},true)};
 $("v2OpsRevisionList").onclick=()=>startV2Operation("revision_list");
 $("v2OpsConflictList").onclick=()=>startV2Operation("conflict_list");

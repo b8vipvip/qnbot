@@ -52,6 +52,7 @@ class KnowledgeV2OperationInput(BaseModel):
     reason: str = ""
     max_contacts: int = 5000
     device_id: str = ""
+    learn_knowledge: bool = False
 
 class KnowledgeV2SmartImportInput(BaseModel):
     text: str

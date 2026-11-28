@@ -14,7 +14,7 @@ def test_knowledge_optimization_uses_smaller_batches_and_long_background_timeout
     assert "OperationLocks.GetOrAdd(shop.ShopKey" in source
     assert "token.ThrowIfCancellationRequested();" in source
     assert "FindPendingByProposal" in source
-    assert "TrySaveEditorRecord(seller, record, currentFingerprint)" in source
+    assert "TrySaveEditorRecord(seller, record, currentFingerprint," in source
     assert "MyOpenAI" not in source
 
 
