@@ -276,6 +276,8 @@ namespace Bot.Knowledge
         public string FactKey { get; set; }
         public string Subject { get; set; }
         public string Predicate { get; set; }
+        public bool RequiresScopeReview { get; set; }
+        public string ResolutionMode { get { return RequiresScopeReview ? "需调整适用范围" : "同范围冲突"; } }
         public List<KnowledgeV2Record> Records { get; set; }
 
         public KnowledgeV2Conflict()
