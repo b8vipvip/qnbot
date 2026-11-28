@@ -386,6 +386,7 @@ namespace Bot.ChromeNs
                     Success = false,
                     KnowledgeV2ContextPromptAddon = contextAddon,
                     ApprovedV2KnowledgeEvidence = approvedV2KnowledgeEvidence,
+                    ContextKnowledgeDecision = decision,
                     VisualQuestion = string.IsNullOrWhiteSpace(task.CombinedQuestion) ? "[图片OCR]" : task.CombinedQuestion,
                     VisualSummary = imageKnowledgeMatch != null
                         ? imageKnowledgeMatch.Description
