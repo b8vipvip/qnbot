@@ -37,6 +37,7 @@ namespace Bot.ChromeNs
         public string LocalOcrEngine { get; set; }
         public string KnowledgeV2ContextPromptAddon { get; set; }
         public string ApprovedV2KnowledgeEvidence { get; set; }
+        public KnowledgeV2Decision ContextKnowledgeDecision { get; set; }
         public bool IsKnowledgeV2DirectAnswer { get; set; }
         public KnowledgeV2Decision SelectedKnowledgeDecision { get; set; }
         public string ConditionalAdviceKey { get; set; }
@@ -215,10 +216,11 @@ namespace Bot.ChromeNs
                                     result.VisualTags,
                                     out learned))
                             {
-                                result.Answer = learned.Answer;
+                                // A visual similarity match is classification evidence only.
+                                // Its historical answer must not bypass V2 applicability.
                                 result.MatchedVisualKnowledgeId = learned.KnowledgeId;
                                 result.VisualKnowledgeScore = learned.Score;
-                                Log.Info("视觉回复采用人工学习知识: seller=" + task.SellerNick
+                                Log.Info("视觉分类命中人工学习记录，仅保留诊断，不覆盖Knowledge V2答案: seller=" + task.SellerNick
                                     + ", buyer=" + task.BuyerNick
                                     + ", knowledgeId=" + learned.KnowledgeId
                                     + ", score=" + learned.Score.ToString("0.00"));
@@ -264,7 +266,7 @@ namespace Bot.ChromeNs
                                 return blocked;
                             }
                             var source = !string.IsNullOrWhiteSpace(result.MatchedVisualKnowledgeId)
-                                ? "视觉知识"
+                                ? "视觉分类辅助AI"
                                 : (!string.IsNullOrWhiteSpace(result.MatchedImageKnowledgeId) ? "图片知识辅助AI" : "AI生成");
                             KnowledgeLearningService.RegisterAnswerSource(task.SellerNick, task.BuyerNick, currentQuestion, result.Answer, source);
                             return result;
@@ -376,6 +378,7 @@ namespace Bot.ChromeNs
                     LocalOcrCacheHit = true,
                     LocalOcrLatencyMs = ocr.ElapsedMs,
                     LocalOcrEngine = ocr.Engine,
+                    ContextKnowledgeDecision = localDecision == null ? null : localDecision.ContextKnowledgeDecision,
                     ApprovedV2KnowledgeEvidence = localDecision == null
                         ? string.Empty : localDecision.ApprovedV2KnowledgeEvidence ?? string.Empty
                 };
@@ -457,6 +460,55 @@ namespace Bot.ChromeNs
             }
         }
 
+        internal static bool CanSendCurrentAnswer(
+            BuyerMessageBurst burst, VisionRequestResult result, string answer,
+            bool workflowReply, bool trustedOcrKnowledge)
+        {
+            try
+            {
+                var shop = ShopContextLocator.ResolveRuntimeByShopKey(burst.ShopKey);
+                if (shop == null || !shop.HasStableSellerId
+                    || !string.Equals(shop.ShopKey, burst.ShopKey, StringComparison.Ordinal)
+                    || !string.Equals(shop.SellerNick, burst.SellerNick, StringComparison.Ordinal)
+                    || result == null)
+                    return false;
+                using (ShopSettingsScope.Enter(shop, false))
+                {
+                    if (!Params.Robot.CanUseRobotReal || !Params.Robot.GetIsAutoReply())
+                        return false;
+                    var config = ShopReceptionConfigService.GetConfig(shop);
+                    if (config != null && config.Enabled && !config.EnableAutoGuidance) return false;
+                    string reason, safeText;
+                    if (ShopReceptionPolicy.BlockOutgoing(
+                        burst.SellerNick, burst.BuyerNick, burst.CombinedQuestion,
+                        answer, out reason, burst.ShopKey, workflowReply)
+                        || !BuyerReplyOutputGuard.TryNormalizeForBuyer(answer, out safeText, out reason)
+                        || ConversationContextStore.IsWithdrawnAnswer(burst.SellerNick, burst.BuyerNick, answer))
+                        return false;
+                    if (workflowReply) return true;
+                    if (trustedOcrKnowledge)
+                        return KnowledgeEngineV2RuntimeBridge.IsSelectedKnowledgeCurrent(
+                            burst.SellerNick, burst.ShopKey, result.SelectedKnowledgeDecision);
+                    var context = KnowledgeV2RuntimeResult.Continue(result.ApprovedV2KnowledgeEvidence)
+                        .WithContextDecision(result.ContextKnowledgeDecision);
+                    if (!KnowledgeEngineV2RuntimeBridge.IsContextKnowledgeCurrent(
+                        burst.SellerNick, burst.ShopKey, context))
+                        return false;
+                    // OCR/pixel summaries are untrusted observations, not business facts.
+                    // Do not add them to price, order-status or promise authority.
+                    var validation = PreSendAnswerValidator.Validate(
+                        burst.SellerNick, burst.BuyerNick, burst.CombinedQuestion,
+                        answer, true, result.ApprovedV2KnowledgeEvidence);
+                    return validation.Action == AnswerValidationAction.Pass;
+                }
+            }
+            catch (Exception ex)
+            {
+                Log.ErrorWithMaxCount("视觉最终事实校验失败，拒绝发送：" + ex.GetType().Name, 10);
+                return false;
+            }
+        }
+
         private static void ApplyImageKnowledgeContext(
             VisionRequestResult result, VisionRequestResult localDecision)
         {
@@ -464,6 +516,7 @@ namespace Bot.ChromeNs
 
             result.KnowledgeV2ContextPromptAddon = localDecision.KnowledgeV2ContextPromptAddon ?? string.Empty;
             result.ApprovedV2KnowledgeEvidence = localDecision.ApprovedV2KnowledgeEvidence ?? string.Empty;
+            result.ContextKnowledgeDecision = localDecision.ContextKnowledgeDecision;
             if (string.IsNullOrWhiteSpace(localDecision.MatchedImageKnowledgeId)) return;
 
             result.MatchedImageKnowledgeId = localDecision.MatchedImageKnowledgeId;
