@@ -227,6 +227,8 @@ namespace Bot.Knowledge
                 evidenceEntities = actualProducts.Concat(evidenceEntities.Where(x => !x.StartsWith("product:", StringComparison.OrdinalIgnoreCase)))
                     .Distinct(StringComparer.OrdinalIgnoreCase).ToList();
                 var evidenceHasProductId = actualProducts.Count > 0;
+                if (actualProducts.Count > 10)
+                    query.ProductEvidenceConflict = true;
                 var buyerProducts = KnowledgeEngineV2Semantics.ExtractEntities(message)
                     .Where(x => x.StartsWith("product:", StringComparison.OrdinalIgnoreCase)).ToList();
                 if (buyerMessageHasProductId && evidenceHasProductId &&
