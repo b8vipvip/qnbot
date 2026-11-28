@@ -36,6 +36,7 @@ namespace Bot.Knowledge
         private static readonly ConcurrentDictionary<string, KnowledgeV2WorkingMemory> Working = new ConcurrentDictionary<string, KnowledgeV2WorkingMemory>(StringComparer.Ordinal);
         private static readonly ConcurrentDictionary<string, object> BuildLocks = new ConcurrentDictionary<string, object>(StringComparer.Ordinal);
         private static readonly ConcurrentDictionary<string, RuntimeSettings> SettingsCache = new ConcurrentDictionary<string, RuntimeSettings>(StringComparer.Ordinal);
+        private static readonly ConcurrentDictionary<string, object> SettingsLocks = new ConcurrentDictionary<string, object>(StringComparer.Ordinal);
         private static readonly IShopScopedPathProvider Paths = new ShopScopedPathProvider();
 
         public static bool IsEnabled(string seller) { return GetSettings(seller).Enabled; }
@@ -61,22 +62,41 @@ namespace Bot.Knowledge
                 || double.IsNaN(minConfidence) || double.IsInfinity(minConfidence))
                 throw new ArgumentOutOfRangeException(nameof(threshold), "知识库检索阈值必须是有限数字。");
             var shop = ResolveShopRequired(seller);
-            var store = new ShopScopedSettingsStore(shop, Paths);
-            // Knowledge V2 is the only supported knowledge engine. The old enable
-            // switch is retained in the package shape for compatibility, but cannot
-            // disable the authoritative V2 repository or reopen a legacy fallback.
-            store.SetString(KnowledgeEngineV2Constants.SettingsEnabled, "1");
-            store.SetString(KnowledgeEngineV2Constants.SettingsMode, KnowledgeEngineV2Constants.ModeProduction);
-            store.SetString(KnowledgeEngineV2Constants.SettingsDirectThreshold, Math.Max(0.70, Math.Min(0.96, threshold)).ToString("0.000", System.Globalization.CultureInfo.InvariantCulture));
-            store.SetString(KnowledgeEngineV2Constants.SettingsMinConfidence, Math.Max(0.50, Math.Min(0.95, minConfidence)).ToString("0.000", System.Globalization.CultureInfo.InvariantCulture));
-            SettingsCache[shop.ShopKey] = new RuntimeSettings
+            lock (SettingsLocks.GetOrAdd(shop.ShopKey, _ => new object()))
             {
-                Enabled = true,
-                Mode = KnowledgeEngineV2Constants.ModeProduction,
-                DirectThreshold = Math.Max(0.70, Math.Min(0.96, threshold)),
-                MinConfidence = Math.Max(0.50, Math.Min(0.95, minConfidence)),
-                ExpiresAt = DateTime.Now.AddMinutes(5)
-            };
+                var store = new ShopScopedSettingsStore(shop, Paths);
+                var direct = Math.Max(0.70, Math.Min(0.96, threshold));
+                var confidence = Math.Max(0.50, Math.Min(0.95, minConfidence));
+                // Persist one complete setting revision before publishing the cache.
+                var values = new Dictionary<string, string>(StringComparer.Ordinal)
+                {
+                    { KnowledgeEngineV2Constants.SettingsEnabled, "1" },
+                    { KnowledgeEngineV2Constants.SettingsMode, KnowledgeEngineV2Constants.ModeProduction },
+                    { KnowledgeEngineV2Constants.SettingsDirectThreshold, direct.ToString("0.000", System.Globalization.CultureInfo.InvariantCulture) },
+                    { KnowledgeEngineV2Constants.SettingsMinConfidence, confidence.ToString("0.000", System.Globalization.CultureInfo.InvariantCulture) }
+                };
+                store.MergeValues(values, true);
+                var persisted = store.ExportValues();
+                foreach (var pair in values)
+                {
+                    string value;
+                    if (!persisted.TryGetValue(pair.Key, out value)
+                        || !string.Equals(value, pair.Value, StringComparison.Ordinal))
+                    {
+                        RuntimeSettings ignored;
+                        SettingsCache.TryRemove(shop.ShopKey, out ignored);
+                        throw new InvalidOperationException("Knowledge V2设置写入后校验失败。");
+                    }
+                }
+                SettingsCache[shop.ShopKey] = new RuntimeSettings
+                {
+                    Enabled = true,
+                    Mode = KnowledgeEngineV2Constants.ModeProduction,
+                    DirectThreshold = double.Parse(values[KnowledgeEngineV2Constants.SettingsDirectThreshold], System.Globalization.CultureInfo.InvariantCulture),
+                    MinConfidence = double.Parse(values[KnowledgeEngineV2Constants.SettingsMinConfidence], System.Globalization.CultureInfo.InvariantCulture),
+                    ExpiresAt = DateTime.Now.AddMinutes(5)
+                };
+            }
         }
 
         public static KnowledgeV2Decision Resolve(string seller, string buyer, string message)

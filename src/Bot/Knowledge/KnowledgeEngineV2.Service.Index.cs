@@ -368,52 +368,57 @@ namespace Bot.Knowledge
             RuntimeSettings cached;
             if (SettingsCache.TryGetValue(shop.ShopKey, out cached)
                 && cached != null && cached.ExpiresAt >= DateTime.Now) return cached;
-            try
+            lock (SettingsLocks.GetOrAdd(shop.ShopKey, _ => new object()))
             {
-                var values = new ShopScopedSettingsStore(shop, Paths).ExportValues();
-                string enabledRaw;
-                string thresholdRaw;
-                string confidenceRaw;
-                double threshold;
-                double confidence;
-                // V2 is mandatory. Legacy settings cannot turn it off.
-                var enabled = true;
-                var mode = KnowledgeEngineV2Constants.ModeProduction;
-                threshold = values.TryGetValue(KnowledgeEngineV2Constants.SettingsDirectThreshold, out thresholdRaw)
-                    && double.TryParse(thresholdRaw, System.Globalization.NumberStyles.Float,
-                        System.Globalization.CultureInfo.InvariantCulture, out threshold)
-                    ? threshold : KnowledgeEngineV2Constants.DefaultDirectThreshold;
-                confidence = values.TryGetValue(KnowledgeEngineV2Constants.SettingsMinConfidence, out confidenceRaw)
-                    && double.TryParse(confidenceRaw, System.Globalization.NumberStyles.Float,
-                        System.Globalization.CultureInfo.InvariantCulture, out confidence)
-                    ? confidence : KnowledgeEngineV2Constants.DefaultMinConfidence;
-                // Older installations or restored settings may already contain
-                // non-finite values; Math.Min/Max alone do not sanitize NaN.
-                if (double.IsNaN(threshold) || double.IsInfinity(threshold))
-                    threshold = KnowledgeEngineV2Constants.DefaultDirectThreshold;
-                if (double.IsNaN(confidence) || double.IsInfinity(confidence))
-                    confidence = KnowledgeEngineV2Constants.DefaultMinConfidence;
-                cached = new RuntimeSettings
+                if (SettingsCache.TryGetValue(shop.ShopKey, out cached)
+                    && cached != null && cached.ExpiresAt >= DateTime.Now) return cached;
+                try
                 {
-                    Enabled = enabled,
-                    Mode = mode,
-                    DirectThreshold = Math.Max(0.70, Math.Min(0.96, threshold)),
-                    MinConfidence = Math.Max(0.50, Math.Min(0.95, confidence)),
-                    ExpiresAt = DateTime.Now.AddMinutes(5)
-                };
-                SettingsCache[shop.ShopKey] = cached;
-                return cached;
-            }
-            catch
-            {
-                return new RuntimeSettings
+                    var values = new ShopScopedSettingsStore(shop, Paths).ExportValues();
+                    string enabledRaw;
+                    string thresholdRaw;
+                    string confidenceRaw;
+                    double threshold;
+                    double confidence;
+                    // V2 is mandatory. Legacy settings cannot turn it off.
+                    var enabled = true;
+                    var mode = KnowledgeEngineV2Constants.ModeProduction;
+                    threshold = values.TryGetValue(KnowledgeEngineV2Constants.SettingsDirectThreshold, out thresholdRaw)
+                        && double.TryParse(thresholdRaw, System.Globalization.NumberStyles.Float,
+                            System.Globalization.CultureInfo.InvariantCulture, out threshold)
+                        ? threshold : KnowledgeEngineV2Constants.DefaultDirectThreshold;
+                    confidence = values.TryGetValue(KnowledgeEngineV2Constants.SettingsMinConfidence, out confidenceRaw)
+                        && double.TryParse(confidenceRaw, System.Globalization.NumberStyles.Float,
+                            System.Globalization.CultureInfo.InvariantCulture, out confidence)
+                        ? confidence : KnowledgeEngineV2Constants.DefaultMinConfidence;
+                    // Older installations or restored settings may already contain
+                    // non-finite values; Math.Min/Max alone do not sanitize NaN.
+                    if (double.IsNaN(threshold) || double.IsInfinity(threshold))
+                        threshold = KnowledgeEngineV2Constants.DefaultDirectThreshold;
+                    if (double.IsNaN(confidence) || double.IsInfinity(confidence))
+                        confidence = KnowledgeEngineV2Constants.DefaultMinConfidence;
+                    cached = new RuntimeSettings
+                    {
+                        Enabled = enabled,
+                        Mode = mode,
+                        DirectThreshold = Math.Max(0.70, Math.Min(0.96, threshold)),
+                        MinConfidence = Math.Max(0.50, Math.Min(0.95, confidence)),
+                        ExpiresAt = DateTime.Now.AddMinutes(5)
+                    };
+                    SettingsCache[shop.ShopKey] = cached;
+                    return cached;
+                }
+                catch
                 {
-                    Enabled = true,
-                    Mode = KnowledgeEngineV2Constants.ModeProduction,
-                    DirectThreshold = KnowledgeEngineV2Constants.DefaultDirectThreshold,
-                    MinConfidence = KnowledgeEngineV2Constants.DefaultMinConfidence,
-                    ExpiresAt = DateTime.Now.AddSeconds(30)
-                };
+                    return new RuntimeSettings
+                    {
+                        Enabled = true,
+                        Mode = KnowledgeEngineV2Constants.ModeProduction,
+                        DirectThreshold = KnowledgeEngineV2Constants.DefaultDirectThreshold,
+                        MinConfidence = KnowledgeEngineV2Constants.DefaultMinConfidence,
+                        ExpiresAt = DateTime.Now.AddSeconds(30)
+                    };
+                }
             }
         }
 
@@ -422,8 +427,12 @@ namespace Bot.Knowledge
             try
             {
                 var current = ShopSettingsScope.Current;
-                if (current != null) return current;
-                return ShopContextLocator.ResolveBySellerNick((seller ?? string.Empty).Trim());
+                var shop = current ?? ShopContextLocator.ResolveBySellerNick((seller ?? string.Empty).Trim());
+                if (shop == null || !shop.HasStableSellerId || string.IsNullOrWhiteSpace(shop.ShopKey)
+                    || (!DirectOrderIdentityResolver.IdentityEquals(shop.SellerNick, seller)
+                        && !DirectOrderIdentityResolver.IdentityEquals(shop.DisplayName, seller)))
+                    return null;
+                return shop;
             }
             catch { return null; }
         }

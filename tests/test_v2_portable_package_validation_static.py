@@ -24,7 +24,7 @@ def test_v2_package_rejects_invalid_shape_and_duplicate_ids_before_replacement()
 def test_invalid_threshold_is_rejected_before_settings_write():
     source = read("src/Bot/Knowledge/KnowledgeEngineV2.Service.Public.cs")
     method = source.split("public static void SetSettings(", 1)[1].split("public static KnowledgeV2Decision Resolve(", 1)[0]
-    assert method.index("double.IsNaN(threshold)") < method.index("store.SetString")
+    assert method.index("double.IsNaN(threshold)") < method.index("store.MergeValues")
     assert "double.IsInfinity(minConfidence)" in method
 
 def test_restored_non_finite_thresholds_and_reviewed_write_races_are_guarded():

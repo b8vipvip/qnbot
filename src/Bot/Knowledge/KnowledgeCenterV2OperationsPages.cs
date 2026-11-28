@@ -639,6 +639,7 @@ namespace Bot.Knowledge
     {
         private readonly Window _owner;
         private readonly string _seller;
+        private readonly string _shopKey;
         private ComboBox _mode;
         private TextBox _threshold;
         private TextBox _confidence;
@@ -648,8 +649,22 @@ namespace Bot.Knowledge
         {
             _owner = owner;
             _seller = seller ?? string.Empty;
+            _shopKey = KnowledgeCenterV2Context.ResolveShopKey(owner, _seller);
             Build();
             Loaded += delegate { RefreshView(); };
+        }
+
+        private T InShop<T>(Func<T> action)
+        {
+            if (string.IsNullOrWhiteSpace(_shopKey))
+                throw new InvalidOperationException("知识设置缺少精确 ShopKey。");
+            var shop = ShopContextLocator.ResolveRuntimeByShopKey(_shopKey);
+            if (shop == null || !shop.HasStableSellerId
+                || !string.Equals(shop.ShopKey, _shopKey, StringComparison.Ordinal)
+                || (!DirectOrderIdentityResolver.IdentityEquals(shop.SellerNick, _seller)
+                    && !DirectOrderIdentityResolver.IdentityEquals(shop.DisplayName, _seller)))
+                throw new InvalidOperationException("知识设置店铺身份不匹配。");
+            using (ShopSettingsScope.Enter(shop)) return action();
         }
 
         public void RefreshView()
@@ -657,8 +672,9 @@ namespace Bot.Knowledge
             if (string.IsNullOrWhiteSpace(_seller)) return;
             try
             {
-                var settings = KnowledgeEngineV2Service.GetSettingsView(_seller);
-                var stats = KnowledgeEngineV2Service.GetStats(_seller);
+                var snapshot = InShop(() => new { Settings = KnowledgeEngineV2Service.GetSettingsView(_seller), Stats = KnowledgeEngineV2Service.GetStats(_seller) });
+                var settings = snapshot.Settings;
+                var stats = snapshot.Stats;
                 _mode.Text = KnowledgeEngineV2Constants.ModeProduction;
                 _threshold.Text = settings.DirectThreshold.ToString("0.00");
                 _confidence.Text = settings.MinConfidence.ToString("0.00");
@@ -701,8 +717,13 @@ namespace Bot.Knowledge
             var warm = new Button { Content = "立即预热索引", Width = 110, Height = 32 };
             warm.Click += delegate
             {
-                Task.Run(() => KnowledgeEngineV2Service.Warm(_seller));
-                _stats.Text = "索引预热已提交。";
+                _stats.Text = "正在预热本店索引。";
+                Task.Run(() => InShop(() => { KnowledgeEngineV2Service.Warm(_seller); return true; }))
+                    .ContinueWith(t => Dispatcher.BeginInvoke(new Action(() =>
+                    {
+                        if (t.IsFaulted) _stats.Text = "预热失败：" + t.Exception.GetBaseException().Message;
+                        else RefreshView();
+                    })));
             };
             actions.Children.Add(save); actions.Children.Add(warm);
             panel.Children.Add(actions);
@@ -729,7 +750,11 @@ namespace Bot.Knowledge
             }
             try
             {
-                KnowledgeEngineV2Service.SetSettings(_seller, true, KnowledgeEngineV2Constants.ModeProduction, threshold, confidence);
+                InShop(() =>
+                {
+                    KnowledgeEngineV2Service.SetSettings(_seller, true, KnowledgeEngineV2Constants.ModeProduction, threshold, confidence);
+                    return true;
+                });
                 RefreshView();
                 _stats.Text = "设置已保存。" + _stats.Text;
             }

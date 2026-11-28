@@ -84,3 +84,17 @@ def test_manual_sync_never_reports_unconverged_or_missing_credentials_as_success
     assert "var converged = await KnowledgeV2CloudSyncService.SyncNowAsync(_shop)" in ui
     assert "_status.Text = converged" in ui
     assert "本次同步尚未收敛" in ui
+
+def test_runtime_settings_save_is_atomic_and_cache_load_cannot_overwrite_new_value():
+    public = read("src/Bot/Knowledge/KnowledgeEngineV2.Service.Public.cs")
+    index = read("src/Bot/Knowledge/KnowledgeEngineV2.Service.Index.cs")
+    save = public.split("public static void SetSettings(", 1)[1].split("public static KnowledgeV2Decision Resolve(", 1)[0]
+    assert "lock (SettingsLocks.GetOrAdd(shop.ShopKey" in save
+    assert "store.SetString(" not in save
+    assert save.index("store.MergeValues(values, true)") < save.index("var persisted = store.ExportValues()") < save.index("SettingsCache[shop.ShopKey] =")
+    load = index.split("private static RuntimeSettings GetSettings(", 1)[1].split("private static ShopContext ResolveShop(", 1)[0]
+    assert load.index("lock (SettingsLocks.GetOrAdd(shop.ShopKey") < load.index("ExportValues()") < load.index("SettingsCache[shop.ShopKey] = cached")
+    resolve = index.split("private static ShopContext ResolveShop(", 1)[1].split("private static ShopContext ResolveShopRequired", 1)[0]
+    assert "DirectOrderIdentityResolver.IdentityEquals(shop.SellerNick, seller)" in resolve
+    assert "shop.HasStableSellerId" in resolve
+    assert "if (current != null) return current" not in resolve
