@@ -83,3 +83,12 @@ def test_v2_has_no_legacy_mirror_migration_or_runtime_dual_write():
     assert "FromLegacy" not in semantics
     assert "KnowledgeBaseEntry" not in ai
 
+
+def test_candidate_lifecycle_takes_precedence_over_trusted_source_provenance():
+    bridge = read("src/Bot/ChromeNs/KnowledgeEngineV2LearningBridge.cs")
+    candidate = bridge.split("public static bool IsCandidate(",1)[1].split("public static bool IsProductionApproved(",1)[0]
+    assert candidate.index('string.Equals(record.Status, "candidate"') < candidate.index("IsTrustedProductionSource")
+    for name in ("ApplyHumanConfirmed", "ApplyAutoPublished"):
+        method = bridge.split("private static void "+name+"(",1)[1]
+        assert "|| IsCandidate(record)" in method
+        assert '!string.Equals(record.Status, "active"' in method

@@ -1891,11 +1891,15 @@ namespace Bot.Knowledge
             // Replicating an existing cloud record is not a new edit. The normal
             // Save() path updates timestamps, but cloud replay must preserve them
             // or every 10-second poll causes a spurious revision/upload loop.
+            var createdAt = clone.CreatedAt;
             var updatedAt = clone.UpdatedAt;
             var verifiedAt = clone.LastVerifiedAt;
             NormalizeForSave(clone);
-            if (updatedAt != DateTime.MinValue) clone.UpdatedAt = updatedAt;
-            if (verifiedAt != DateTime.MinValue) clone.LastVerifiedAt = verifiedAt;
+            // Unknown timestamps are meaningful. Generating "now" on each replay
+            // makes otherwise identical records diverge and fabricates verification.
+            clone.CreatedAt = createdAt;
+            clone.UpdatedAt = updatedAt;
+            clone.LastVerifiedAt = verifiedAt;
             return clone;
         }
 
@@ -1949,7 +1953,8 @@ namespace Bot.Knowledge
                 ? 0.80 : Clamp(record.Confidence);
             if (record.CreatedAt == DateTime.MinValue) record.CreatedAt = DateTime.Now;
             record.UpdatedAt = DateTime.Now;
-            if (record.LastVerifiedAt == DateTime.MinValue) record.LastVerifiedAt = record.UpdatedAt;
+            // Only explicit evidence/approval paths may establish verification.
+            // Generic save, import and sync must not invent a verified timestamp.
         }
 
         private static List<string> NormalizeList(IEnumerable<string> values, int max)

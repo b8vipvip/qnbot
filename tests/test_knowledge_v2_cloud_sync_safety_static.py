@@ -426,3 +426,12 @@ def test_conflict_candidate_identity_is_stable_across_usage_metadata_changes():
     assert "identity.CreatedAt = identity.UpdatedAt = identity.LastVerifiedAt = DateTime.MinValue" in candidate
     assert "Fingerprint(new[]{identity})" in candidate
     assert "!IsDeleteTombstone(existing)" in candidate
+
+def test_cloud_replay_preserves_unknown_timestamps_without_fabricating_verification():
+    repo = read("src/Bot/Knowledge/KnowledgeEngineV2.Repository.cs")
+    clone = repo.split("private static KnowledgeV2Record CloneAndNormalize(",1)[1].split("private static List<string> AddPreferredAlias",1)[0]
+    for field in ("CreatedAt","UpdatedAt","LastVerifiedAt"):
+        assert "clone."+field+" = " in clone
+    assert "if (verifiedAt != DateTime.MinValue)" not in clone
+    normalize = repo.split("private static void NormalizeForSave(",1)[1].split("private static List<string> NormalizeList(",1)[0]
+    assert "record.LastVerifiedAt = record.UpdatedAt" not in normalize

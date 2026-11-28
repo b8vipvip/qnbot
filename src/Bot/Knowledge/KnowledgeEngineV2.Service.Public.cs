@@ -331,7 +331,9 @@ namespace Bot.Knowledge
             var margin = second == null ? best.Score : best.Score - second.Score;
             var threshold = settings.DirectThreshold;
             var minConfidence = settings.MinConfidence;
-            var highRisk = KnowledgeEngineV2Semantics.IsHighRisk(message) || KnowledgeEngineV2Semantics.IsHighRisk(best.Record.Answer) || string.Equals(best.Record.RiskLevel, "high", StringComparison.OrdinalIgnoreCase);
+            var highRisk = KnowledgeEngineV2Semantics.IsHighRisk(message) || KnowledgeEngineV2Semantics.IsHighRisk(best.Record.Answer)
+                || string.Equals(best.Record.RiskLevel, "high", StringComparison.OrdinalIgnoreCase)
+                || string.Equals(best.Record.RiskLevel, "critical", StringComparison.OrdinalIgnoreCase);
             var sameFactSecond = second != null && string.Equals(KnowledgeEngineV2Semantics.FactKey(best.Record), KnowledgeEngineV2Semantics.FactKey(second.Record), StringComparison.Ordinal);
             var safeConsensus = HasSafeDirectConsensus(best, productionMatches, query, threshold, minConfidence, highRisk);
             var effectiveMargin = (sameFactSecond && AnswersEquivalent(best.Record.Answer, second.Record.Answer)) || safeConsensus ? Math.Max(margin, 0.12) : margin;
@@ -499,10 +501,10 @@ namespace Bot.Knowledge
         {
             var value = KnowledgeEngineV2Semantics.Compact(answer);
             if (value.Length == 0) return 0;
-            const string negativePattern = "不支持|不能使用|不能用|无法使用|无法用|不可以|不可使用|不可用|不适用";
+            const string negativePattern = "不支持|不能使用|不能用|无法使用|无法用|不可以|不可使用|不可用|不适用|不允许|不能|无法|禁止|不提供|不包含|未开通|已失效|已过期|无需|不需要";
             var negative = Regex.IsMatch(value, negativePattern);
             var positive = Regex.IsMatch(Regex.Replace(value, negativePattern, string.Empty),
-                "支持|可以|适用于|能用|可用|是电视端");
+                "支持|可以|适用于|能用|可用|允许|提供|包含|已开通|有效|需要|必须");
             if (negative && !positive) return -1;
             if (positive && !negative) return 1;
             return 0;
