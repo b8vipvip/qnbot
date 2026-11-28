@@ -1,4 +1,5 @@
 using Bot.ChromeNs;
+using Bot.ShopScope;
 using BotLib;
 using Newtonsoft.Json.Linq;
 using System;
@@ -62,6 +63,7 @@ namespace Bot.Knowledge
 
         public async Task<KnowledgeV2SmartImportResult> ImportAsync(
             string seller,
+            string shopKey,
             ClipboardKnowledgeData data,
             int timeoutSeconds,
             CancellationToken userToken,
@@ -69,6 +71,31 @@ namespace Bot.Knowledge
             Action<string> progress)
         {
             seller = (seller ?? string.Empty).Trim();
+            shopKey = (shopKey ?? string.Empty).Trim();
+            if (seller.Length == 0 || shopKey.Length == 0)
+                throw new InvalidOperationException("智能导入必须指定卖家和精确 ShopKey。");
+            var shop = ShopContextLocator.ResolveRuntimeByShopKey(shopKey);
+            if (shop == null || !shop.HasStableSellerId
+                || !string.Equals(shop.ShopKey, shopKey, StringComparison.Ordinal)
+                || (!DirectOrderIdentityResolver.IdentityEquals(shop.SellerNick, seller)
+                    && !DirectOrderIdentityResolver.IdentityEquals(shop.DisplayName, seller)))
+                throw new InvalidOperationException("智能导入店铺身份不匹配，已阻止跨店写入。");
+            // Pin one identity for endpoint selection, every awaited batch,
+            // repository writes, index updates and audit records.
+            using (ShopSettingsScope.Enter(shop))
+            {
+                return await ImportInShopAsync(seller, data, timeoutSeconds, userToken, cancelSource, progress);
+            }
+        }
+
+        private async Task<KnowledgeV2SmartImportResult> ImportInShopAsync(
+            string seller,
+            ClipboardKnowledgeData data,
+            int timeoutSeconds,
+            CancellationToken userToken,
+            Func<SmartImportCancelSource> cancelSource,
+            Action<string> progress)
+        {
             timeoutSeconds = KnowledgeAiService.ClampTimeout(timeoutSeconds);
             if (seller.Length == 0)
                 throw new InvalidOperationException("无法识别当前店铺客服账号，不能写入 Knowledge Center V2。");

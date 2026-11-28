@@ -26,6 +26,7 @@ def test_windows_executes_existing_native_smart_import_service_in_shop_scope():
     assert "new Bot.Knowledge.ClipboardKnowledgeData { Text = text }" in s
     assert "new Bot.Knowledge.KnowledgeV2SmartImportService()" in s
     assert "service.ImportAsync(" in s
+    assert "seller, state.Shop.ShopKey, data, timeout" in s
     assert '["duplicate_skipped"] = imported.DuplicateSkipped' in s
 
 def test_mobile_submits_confirms_and_polls_v2_smart_import():

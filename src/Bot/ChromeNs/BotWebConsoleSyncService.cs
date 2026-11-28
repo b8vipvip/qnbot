@@ -1124,7 +1124,7 @@ namespace Bot.ChromeNs
             var data = new Bot.Knowledge.ClipboardKnowledgeData { Text = text };
             var service = new Bot.Knowledge.KnowledgeV2SmartImportService();
             var imported = await service.ImportAsync(
-                seller, data, timeout, CancellationToken.None, null,
+                seller, state.Shop.ShopKey, data, timeout, CancellationToken.None, null,
                 progress => Log.Info("Bot Web V2智能导入: command=" + commandId + ", shop=" + state.Shop.ShopKey + ", " + Safe(progress, 260)));
             return new JObject
             {

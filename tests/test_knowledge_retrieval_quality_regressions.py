@@ -495,7 +495,9 @@ def test_ai_failure_fallback_uses_only_a_freshly_revalidated_v2_record():
 
     assert "KnowledgeEngineV2Service.Resolve(seller, buyer, v2Question)" in fallback
     assert "KnowledgeV2AuthorityPolicy.IsProductionApproved" in fallback
-    assert "KnowledgeEngineV2Repository.LoadAll(seller)" in fallback
+    assert "KnowledgeEngineV2Repository.LoadCommittedRecord(seller, latestMatch.Record.Id)" in fallback
+    assert "KnowledgeV2AuthorityPolicy.IsProductionApproved(persisted)" in fallback
+    assert "persisted.Answer, latest.Answer, StringComparison.Ordinal" in fallback
     assert "latestMatch.Record.Id, priorMatch.Record.Id, StringComparison.Ordinal" in fallback
     assert "ConversationContextStore.IsWithdrawnAnswer(seller, buyer, answer)" in fallback
     assert "ShopReceptionPolicy.IsQuarantined" not in fallback

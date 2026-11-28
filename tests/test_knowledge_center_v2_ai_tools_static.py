@@ -18,7 +18,7 @@ def test_v2_smart_import_writes_native_v2_repository_not_legacy_faq_conversion()
     service = read("src/Bot/Knowledge/KnowledgeV2SmartImportService.cs")
     assert "KnowledgeAiService.SplitTextBatches" in service
     assert "KnowledgeAiService.ContentHash" in service
-    assert "KnowledgeEngineV2Repository.Save(seller, record)" in service
+    assert "KnowledgeEngineV2Repository.TryAddHistoryImportRecord(seller, record)" in service
     assert 'record.SourceType = "ai_smart_import"' in service
     assert "KnowledgeEngineV2Semantics.NormalizeType" in service
     assert "KnowledgeEngineV2Semantics.NormalizeIntent" in service
@@ -87,9 +87,28 @@ def test_legacy_smart_import_and_knowledge_manager_write_paths_are_retired():
     assert "SaveDeduped(parsed.Items)" in legacy
     assert "Analysis only:" in legacy
     assert "BotFeatureStore.SaveKnowledgeBase" not in legacy
-    assert "KnowledgeEngineV2Repository.Save(seller, record)" in v2
+    assert "KnowledgeEngineV2Repository.TryAddHistoryImportRecord(seller, record)" in v2
     assert "KnowledgeV2SmartImportService" in ui
     assert "BotFeatureStore.SaveKnowledgeBase" not in v2
     assert "MirrorOneToLegacy" not in repository
 
 
+
+
+def test_smart_import_pins_exact_shop_for_all_async_batches_and_add_only_writes():
+    ui = read("src/Bot/Knowledge/KnowledgeCenterV2Ui.cs")
+    page = read("src/Bot/Knowledge/KnowledgeCenterV2AiToolsUi.cs")
+    service = read("src/Bot/Knowledge/KnowledgeV2SmartImportService.cs")
+    repo = read("src/Bot/Knowledge/KnowledgeEngineV2.Repository.cs")
+    assert "new KnowledgeV2SmartImportPage(_owner, _seller, _shopKey)" in ui
+    assert "service.ImportAsync(_seller, _shopKey, _data" in page
+    assert "ShopContextLocator.ResolveRuntimeByShopKey(shopKey)" in service
+    assert "!shop.HasStableSellerId" in service
+    assert "shop.ShopKey, shopKey, StringComparison.Ordinal" in service
+    assert "DirectOrderIdentityResolver.IdentityEquals(shop.SellerNick, seller)" in service
+    assert service.index("using (ShopSettingsScope.Enter(shop))") < service.index("return await ImportInShopAsync")
+    assert service.index("return await ImportInShopAsync") < service.index("KnowledgeEngineV2Repository.LoadAll(seller)")
+    assert "KnowledgeEngineV2Repository.Save(seller, record)" not in service
+    add = repo[repo.index("internal static bool TryAddHistoryImportRecord"):repo.index("internal static bool TrySaveEditorRecord")]
+    assert add.index("lock (state.Sync)") < add.index("HasExplicitlyRemovedKnowledge") < add.index("state.Db.SaveOneRecord")
+    assert "KnowledgeAiService.ContentHash(existing.Title, existing.Answer)" in add

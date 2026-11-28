@@ -16,7 +16,7 @@ def test_v2_optimization_replaces_legacy_v1_optimizer_and_preserves_revision_wor
     assert not (ROOT / "src/Bot/Knowledge/KnowledgeOptimizationUi.cs").exists()
     assert 'Nav("智能导入", () => new KnowledgeV2SmartImportPage' in shell
     assert 'Nav("优化记录", () => new KnowledgeV2AiOptimizationHistoryPage' in shell
-    assert "KnowledgeEngineV2Repository.Save(seller, record)" in service
+    assert "KnowledgeEngineV2Repository.TryAddHistoryImportRecord(seller, record)" in service
     assert "KnowledgeEngineV2GovernanceAuditService.TryAppendAction" in service
     assert "GenerateRevisionCandidates" in revision
     assert "KnowledgeEngineV2GovernanceAuditService.GetEntries" in ui
