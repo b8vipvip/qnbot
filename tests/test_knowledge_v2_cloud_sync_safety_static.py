@@ -43,7 +43,7 @@ def test_v2_cloud_replacement_uses_atomic_repository_compare_and_swap_without_v1
     repository = read("src/Bot/Knowledge/KnowledgeEngineV2.Repository.cs")
     method = repository[
         repository.index("internal static bool TryReplaceAllIfUnchanged"):
-        repository.index("public static string GetDatabasePath")
+        repository.index("internal static int ResumePortableImport")
     ]
 
     assert "lock(state.Sync)" in method
@@ -145,7 +145,7 @@ def test_v2_cloud_replacement_clears_rows_and_writes_corpus_metadata_in_one_sqli
     repository = read("src/Bot/Knowledge/KnowledgeEngineV2.Repository.cs")
     method = repository[
         repository.index("internal static bool TryReplaceAllIfUnchanged"):
-        repository.index("public static string GetDatabasePath")
+        repository.index("internal static int ResumePortableImport")
     ]
 
     assert "conn.RunInTransaction" in replace
@@ -376,7 +376,7 @@ def test_knowledge_v2_sync_isolates_profile_failures_per_shop():
     )[0]
     assert "foreach (var profile in profiles ?? new List<ShopProfile>())" in queue_all
     assert "try" in queue_all
-    assert "Queue(profile.ToContext());" in queue_all
+    assert "Queue(shop);" in queue_all
     assert "catch (Exception ex)" in queue_all
     assert "跳过异常店铺并继续处理其他店铺" in queue_all
     assert "Profiles.GetAll()" in queue_all

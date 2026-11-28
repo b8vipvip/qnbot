@@ -44,7 +44,7 @@ namespace Bot.Knowledge
         private static readonly Regex IdPattern = new Regex(
             @"^\d{8}T\d{6}Z-[0-9a-f]{10}$", RegexOptions.Compiled);
         private static readonly object Sync = new object();
-        private const int Schema = 2;
+        private const int Schema = 3;
 
         private static string Root(string seller)
         {
@@ -82,9 +82,10 @@ namespace Bot.Knowledge
                 throw new InvalidDataException("断点记录格式无效。");
 
             // Schema 1 could mark a buyer complete after the old 200-page cap or
-            // 120-round contact scroll silently stopped. Force a fresh contact
+            // 120-round contact scroll silently stopped. Schema 2 could silently
+            // accept malformed pagination markers or lose pending contacts. Force a fresh contact
             // discovery and full history rescan when upgrading that checkpoint.
-            var requiresFullRescan = value.SchemaVersion == 1;
+            var requiresFullRescan = value.SchemaVersion == 1 || value.SchemaVersion == 2;
             if (requiresFullRescan)
             {
                 value.SchemaVersion = Schema;

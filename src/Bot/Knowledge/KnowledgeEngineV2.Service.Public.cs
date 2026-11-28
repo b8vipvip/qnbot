@@ -99,6 +99,25 @@ namespace Bot.Knowledge
             }
         }
 
+        internal static bool TryRestorePortableSettings(string seller, KnowledgeV2Settings before, KnowledgeV2Settings target)
+        {
+            if (before == null || target == null) return false;
+            var shop = ResolveShopRequired(seller);
+            lock (SettingsLocks.GetOrAdd(shop.ShopKey, _ => new object()))
+            {
+                RuntimeSettings ignored;
+                SettingsCache.TryRemove(shop.ShopKey, out ignored);
+                var current = GetSettingsView(seller);
+                var direct = Math.Round(Math.Max(0.70, Math.Min(0.96, target.DirectThreshold)), 3);
+                var confidence = Math.Round(Math.Max(0.50, Math.Min(0.95, target.MinConfidence)), 3);
+                if (current.DirectThreshold == direct && current.MinConfidence == confidence) return true;
+                if (current.DirectThreshold != before.DirectThreshold || current.MinConfidence != before.MinConfidence)
+                    return false;
+                SetSettings(seller, true, KnowledgeEngineV2Constants.ModeProduction, direct, confidence);
+                return true;
+            }
+        }
+
         public static KnowledgeV2Decision Resolve(string seller, string buyer, string message)
         {
             return ResolveInternal(seller, buyer, message, false, string.Empty, string.Empty, false);

@@ -47,8 +47,8 @@ def test_old_history_checkpoints_are_migrated_and_forced_to_rescan():
         source.index("internal static BuyerHistoryScanResumeInfo Latest")
     ]
 
-    assert "private const int Schema = 2;" in source
-    assert "var requiresFullRescan = value.SchemaVersion == 1;" in decode
+    assert "private const int Schema = 3;" in source
+    assert "var requiresFullRescan = value.SchemaVersion == 1 || value.SchemaVersion == 2;" in decode
     assert "value.Contacts = new List<string>();" in decode
     assert "value.Completed = new List<string>();" in decode
     assert 'value.State = "interrupted";' in decode
@@ -65,3 +65,12 @@ def test_legacy_checkpoint_full_rescan_resets_archived_message_counter():
     assert "value.Completed = new List<string>();" in decode
     assert "value.ArchivedMessages = 0;" in decode
     assert decode.index("value.ArchivedMessages = 0;") < decode.index("Save(seller, value)")
+
+def test_resume_keeps_old_pending_roster_and_fails_closed_on_malformed_history():
+    source = read("src/Bot/Knowledge/ChatHistoryScanService.cs")
+    assert "if (options.ScanAll || contacts.Count <= 1)" in source
+    assert "var names = checkpoint.Contacts.Where(IsPlausibleBuyerNick)" in source
+    assert "successful.Remove(buyer)" in source
+    assert "checkpoint.ArchivedMessages -= count" in source
+    assert "history_pagination_incomplete:invalid_has_more" in source
+    assert 'excluded == "history_missing_timestamp" || excluded == "history_seller_identity_mismatch"' in source

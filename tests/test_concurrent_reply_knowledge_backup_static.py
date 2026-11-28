@@ -30,7 +30,7 @@ def test_policy_full_export_contains_reliability_stats():
     for field in ("UseCount", "AcceptedCount", "CorrectionCount", "WithdrawCount"):
         assert field in model
     assert "FeedbackEvents = KnowledgeEngineV2FeedbackService.ExportEvents(_seller)" in source
-    assert "KnowledgeEngineV2FeedbackService.MergeBackupEvents" in source
+    assert "KnowledgeEngineV2Repository.ResumePortableImport" in source
 
 
 def test_knowledge_center_has_complete_package_import_export():
@@ -39,7 +39,7 @@ def test_knowledge_center_has_complete_package_import_export():
     assert 'new KnowledgeV2ImportExportPage(_owner, _seller, _shopKey)' in center
     assert '导入V2完整包' in io
     assert '导出V2完整包' in io
-    assert "KnowledgeEngineV2Repository.TryReplaceAllIfUnchanged(_seller, expectedFingerprint, replacement)" in io
+    assert "KnowledgeEngineV2Repository.TryReplaceAllIfUnchanged(_seller, expectedFingerprint, replacement, recovery)" in io
     assert "Settings = KnowledgeEngineV2Service.GetSettingsView(_seller)" in io
     assert "ParseValidatedPackage" in io
     assert "CreateAutomaticBackup()" in io

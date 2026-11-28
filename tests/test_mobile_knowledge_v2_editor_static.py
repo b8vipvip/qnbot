@@ -27,5 +27,5 @@ def test_mobile_v2_save_preserves_governance_counters_and_structured_policy_fiel
     s=read(JS)
     for field in ("Authority","Confidence","UseCount","AcceptedCount","CorrectionCount","WithdrawCount","Conditions","Exclusions","RequiredContext","ProductIds","RiskLevel","Enabled","Status"):
         assert field+":" in s
-    assert "state.knowledgeV2.filter(x=>x.Id!==id)" in s
+    assert "state.knowledgeV2.map(x=>x.Id===id?{...x,Enabled:false,Status:\"deleted\"" in s
     assert "等待 Windows 同步" in s

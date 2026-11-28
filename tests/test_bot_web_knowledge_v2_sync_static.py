@@ -123,7 +123,7 @@ def test_web_v2_edits_use_compare_and_swap_to_prevent_stale_device_overwrites():
     assert "expected_revision=payload.expected_revision" in web_put
     assert "raise_on_conflict=True" in web_put
     assert "knowledgeV2Revision:0" in js
-    assert "expected_revision:state.knowledgeV2Revision" in js
+    assert "expected_revision:state.knowledgeV2EditRevision" in js
     assert "err.status===409" in js
     assert "await loadKnowledgeV2(false)" in js
     assert 'bot-web-v2.js?v=13' in html
@@ -486,3 +486,53 @@ def test_windows_cloud_sync_recovers_missing_tombstone_snapshot_from_cloud():
     assert recovery.index("Backup(shop, latestLocal, cloudRevision)") < recovery.index("TryReplaceAllIfUnchanged")
     assert "local_changed_during_tombstone_recovery" in recovery
     assert "PersistState(shop, state, cloudRevision, cloudFingerprint)" in recovery
+
+@pytest.mark.skipif(importlib.util.find_spec("fastapi") is None, reason="server dependencies are not installed")
+def test_feedback_two_devices_retry_and_paginate_without_duplicate_counts(tmp_path):
+    from fastapi import HTTPException
+    import uuid
+    m=_load_v2_cas_module(tmp_path)
+    with m._cp.db() as conn:
+        conn.execute("CREATE TABLE bot_client_shop_binding(client_id INTEGER PRIMARY KEY,shop_key TEXT)")
+        conn.execute("INSERT INTO bot_client_shop_binding VALUES(1,'shop-a')")
+    def event(kind="sent"):
+        return {"Id":uuid.uuid4().hex,"KnowledgeId":"a","EventType":kind,"UtcTicks":m._feedback_now_ticks()}
+    a,b=event(),event("accepted")
+    first=m.runtime_feedback_sync(m.KnowledgeV2FeedbackInput(events=[a]),None,"shop-a")
+    second=m.runtime_feedback_sync(m.KnowledgeV2FeedbackInput(events=[a,b]),None,"shop-a")
+    assert len(second["events"])==2
+    assert m.web_feedback({"id":1})["items"]["a"]["sent"]==1
+    assert m.web_feedback({"id":1})["items"]["a"]["accepted"]==1
+    latest=m.runtime_feedback_sync(m.KnowledgeV2FeedbackInput(epoch=first["epoch"],cursor=first["cursor"]),None,"shop-a")
+    assert latest["events"]==[b]
+    assert m.runtime_feedback_sync(m.KnowledgeV2FeedbackInput(epoch=latest["epoch"],cursor=latest["cursor"]),None,"shop-a")["events"]==[]
+    with pytest.raises(HTTPException) as wrong:
+        m.runtime_feedback_sync(m.KnowledgeV2FeedbackInput(events=[a]),None,"shop-b")
+    assert wrong.value.status_code==403
+    with pytest.raises(HTTPException) as clash:
+        m.runtime_feedback_sync(m.KnowledgeV2FeedbackInput(events=[dict(a,EventType="correction")]),None,"shop-a")
+    assert clash.value.status_code==409
+    more=[event() for _ in range(200)]
+    m.runtime_feedback_sync(m.KnowledgeV2FeedbackInput(events=more),None,"shop-a")
+    page=m.runtime_feedback_sync(m.KnowledgeV2FeedbackInput(),None,"shop-a")
+    assert len(page["events"])==200 and page["has_more"]
+    tail=m.runtime_feedback_sync(m.KnowledgeV2FeedbackInput(epoch=page["epoch"],cursor=page["cursor"]),None,"shop-a")
+    assert len(tail["events"])==2 and not tail["has_more"]
+    assert m.web_feedback({"id":1})["items"]["a"]["sent"]==201
+
+@pytest.mark.skipif(importlib.util.find_spec("fastapi") is None, reason="server dependencies are not installed")
+def test_web_delete_preserves_tombstone_and_rejects_resurrection(tmp_path):
+    from fastapi import HTTPException
+    module=_load_v2_cas_module(tmp_path)
+    record=_v2_cas_record("answer")
+    module._save(1,[record],"windows",expected_revision=0)
+    result=module.web_put(module.KnowledgeV2WebInput(records=[],expected_revision=1),client={"id":1})
+    assert result["records"][0]["Id"]==record["Id"]
+    assert result["records"][0]["Status"]=="deleted" and result["records"][0]["Enabled"] is False
+    with pytest.raises(HTTPException) as exc:
+        module.web_put(module.KnowledgeV2WebInput(records=[record],expected_revision=2),client={"id":1})
+    assert exc.value.status_code==409
+    js=read(ROOT/"services/api-control-plane/static/bot-web-v2.js")
+    assert "knowledgeV2EditRevision!==state.knowledgeV2Revision" in js
+    assert "expected_revision:state.knowledgeV2EditRevision" in js
+    assert "/api/bot-web/knowledge-v2/feedback" in js

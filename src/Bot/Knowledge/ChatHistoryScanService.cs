@@ -266,7 +266,9 @@ namespace Bot.Knowledge
 
                 var managerOpened = false;
                 var managerContacts = new List<string>();
-                if (contacts.Count <= 1)
+                // The visible list can be nonempty yet incomplete; always attempt the
+                // independent message-manager discovery source for full history scans.
+                if (options.ScanAll || contacts.Count <= 1)
                 {
                     managerOpened = await TryOpenMessageManagerAsync(diagnostics, token);
                     requireOriginalSession();
@@ -305,7 +307,12 @@ namespace Bot.Knowledge
                 // new buyers on resume to extend coverage beyond the old list.
                 foreach (var previous in checkpoint.Contacts)
                     AddContact(contacts, previous, seller);
-                var names = contacts.Where(IsPlausibleBuyerNick).OrderBy(x => x, StringComparer.Ordinal)
+                // Keep the exact pending/completed contact roster ahead of newly
+                // discovered contacts. Sorting the union before Take can evict an
+                // unfinished buyer forever when resuming a capped scan.
+                var names = checkpoint.Contacts.Where(IsPlausibleBuyerNick)
+                    .Concat(contacts.Where(IsPlausibleBuyerNick).OrderBy(x => x, StringComparer.Ordinal))
+                    .Distinct(StringComparer.Ordinal)
                     .Take(Math.Max(1, Math.Min(5000, options.MaxContacts))).ToList();
                 checkpoint.Contacts = names;
                 checkpoint.Completed = checkpoint.Completed
@@ -402,7 +409,16 @@ namespace Bot.Knowledge
                         {
                             checkpoint.Completed.Add(buyer);
                             checkpoint.ArchivedMessages += count;
-                            BuyerHistoryScanCheckpointStore.Save(seller, checkpoint);
+                            try { BuyerHistoryScanCheckpointStore.Save(seller, checkpoint); }
+                            catch
+                            {
+                                // Roll back in-memory progress if the durable checkpoint
+                                // did not commit; the next retry must re-read this buyer.
+                                checkpoint.Completed.Remove(buyer);
+                                checkpoint.ArchivedMessages -= count;
+                                successful.Remove(buyer);
+                                throw;
+                            }
                             read = checkpoint.ArchivedMessages;
                         }
                         evidence.Contact(buyer, true, count, "history_read");
@@ -1404,6 +1420,8 @@ namespace Bot.Knowledge
                 var hasMoreToken = resultObject == null ? null : resultObject["hasMore"];
                 var hasMoreKnown = hasMoreToken != null;
                 var hasMore = hasMoreKnown ? ToInt(hasMoreToken) : -1;
+                if (hasMoreKnown && hasMore != 0 && hasMore != 1)
+                    throw new InvalidOperationException("history_pagination_incomplete:invalid_has_more");
                 var msgsToken = resultObject == null
                     ? result as JArray
                     : (resultObject["msgs"] ?? resultObject["messages"] ?? resultObject["list"]);
@@ -1432,8 +1450,12 @@ namespace Bot.Knowledge
                     string excluded;
                     if (TryConvertTurn(message, seller, buyer, options,
                         out turn, out excluded)) turns.Add(turn);
-                    else if (!string.IsNullOrWhiteSpace(excluded) && onExcluded != null)
-                        onExcluded(excluded);
+                    else if (!string.IsNullOrWhiteSpace(excluded))
+                    {
+                        if (onExcluded != null) onExcluded(excluded);
+                        if (excluded == "history_missing_timestamp" || excluded == "history_seller_identity_mismatch")
+                            throw new InvalidOperationException("history_pagination_incomplete:" + excluded);
+                    }
                 }
 
                 // An explicit hasMore=false is authoritative even when the last page
@@ -1484,7 +1506,7 @@ namespace Bot.Knowledge
             int value;
             if (int.TryParse(token.ToString(), out value)) return value;
             bool flag;
-            return bool.TryParse(token.ToString(), out flag) && flag ? 1 : 0;
+            return bool.TryParse(token.ToString(), out flag) ? (flag ? 1 : 0) : -1;
         }
 
         private static bool TryConvertTurn(
@@ -1512,17 +1534,6 @@ namespace Bot.Knowledge
                     return false;
                 }
             }
-            if (!options.ScanAll && time == DateTime.MinValue)
-            {
-                excludeReason = "history_missing_timestamp";
-                return false;
-            }
-            if (!options.ScanAll)
-            {
-                if (options.StartTime.HasValue && time != DateTime.MinValue && time < options.StartTime.Value) return false;
-                if (options.EndTime.HasValue && time != DateTime.MinValue && time > options.EndTime.Value) return false;
-            }
-
             var text = ExtractMessageText(message);
             if (ConversationContextStore.IsPlatformSystemTip(message, text)) return false;
             if (ConversationContextStore.IsWithdrawalNotice(message, text)) return false;
@@ -1544,6 +1555,16 @@ namespace Bot.Knowledge
             if (role == "buyer" && BuyerHistoryMessageFilter.ShouldExcludeRaw(
                 message, seller, text, out excludeReason))
                 return false;
+            if (time == DateTime.MinValue)
+            {
+                excludeReason = "history_missing_timestamp";
+                return false;
+            }
+            if (!options.ScanAll)
+            {
+                if (options.StartTime.HasValue && time < options.StartTime.Value) return false;
+                if (options.EndTime.HasValue && time > options.EndTime.Value) return false;
+            }
             turn = new HistoryTurn
             {
                 Role = role, Text = text, Time = time,

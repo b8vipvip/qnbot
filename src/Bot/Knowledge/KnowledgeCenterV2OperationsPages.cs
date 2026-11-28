@@ -526,6 +526,7 @@ namespace Bot.Knowledge
                     + "已删除的ID不会自动复活。导入前自动备份。是否继续？",
                     "导入完整包", MessageBoxButton.YesNo, MessageBoxImage.Warning) != MessageBoxResult.Yes) return;
 
+                KnowledgeEngineV2Repository.ResumePortableImport(_seller);
                 var before = BuildPackage();
                 var expectedFingerprint = KnowledgeEngineV2Repository.ComputeCloudSyncFingerprint(before.Records);
                 var replacement = replace ? BuildImportReplacement(before.Records, package.Records)
@@ -533,19 +534,28 @@ namespace Bot.Knowledge
                         append ? package.Records.Where(x => !before.Records.Any(old => old.Id == x.Id)) : package.Records,
                         preserveLocalOnly: true);
                 var backup = CreateAutomaticBackup(before);
-                if (!KnowledgeEngineV2Repository.TryReplaceAllIfUnchanged(_seller, expectedFingerprint, replacement))
+                var recovery = replace ? new KnowledgeEngineV2Repository.PortableImportRecovery
+                {
+                    ShopKey = _shopKey, BeforeSettings = before.Settings, TargetSettings = package.Settings,
+                    FeedbackEvents = package.FeedbackEvents
+                } : null;
+                if (!KnowledgeEngineV2Repository.TryReplaceAllIfUnchanged(_seller, expectedFingerprint, replacement, recovery))
                     throw new InvalidOperationException("备份期间知识库已被自动学习或其他设备修改；未覆盖任何知识，请重新导入。");
-                if (replace && package.Settings != null)
-                    KnowledgeEngineV2Service.SetSettings(_seller, package.Settings.Enabled, package.Settings.Mode,
-                        package.Settings.DirectThreshold, package.Settings.MinConfidence);
-                // In additive modes evidence may describe a conflicting answer or an
-                // incoming ID that was deduplicated. Only restore feedback when the full
-                // package is restored, preserving its original record IDs.
-                var restoredFeedback = !replace || package.FeedbackEvents == null || package.FeedbackEvents.Count == 0 ? 0
-                    : KnowledgeEngineV2FeedbackService.MergeBackupEvents(_seller, package.SourceShopKey, package.FeedbackEvents);
+                // In additive modes settings and feedback remain untouched. The full
+                // restore's durable intent was committed with its knowledge rows.
+                int restoredFeedback;
+                try { restoredFeedback = KnowledgeEngineV2Repository.ResumePortableImport(_seller); }
+                catch (Exception ex)
+                {
+                    _status.Text = "知识已提交，反馈/设置恢复尚未完成；已保留恢复日志及备份：" + backup;
+                    MessageBox.Show(_owner, _status.Text + "\n" + ex.Message);
+                    return;
+                }
                 KnowledgeEngineV2Service.Warm(_seller);
                 _status.Text = "导入完成，当前共 " + replacement.Count + " 条（含删除标记及候选）；新增反馈 " + restoredFeedback
-                    + " 条。" + (!replace ? "合并/追加未修改检索设置或恢复反馈事件。" : "") + " 导入前备份：" + backup;
+                    + " 条。" + (!replace ? "合并/追加未修改检索设置或恢复反馈事件。" :
+                        KnowledgeEngineV2Repository.GetLastPortableImportStatus(_seller) == "completed_settings_conflict_preserved"
+                        ? "检索设置在恢复期间发生并发修改，已保留较新设置。" : "") + " 导入前备份：" + backup;
             }
             catch (Exception ex) { MessageBox.Show(_owner, "导入失败：" + ex.Message); }
         }
