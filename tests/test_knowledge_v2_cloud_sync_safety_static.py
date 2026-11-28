@@ -376,7 +376,7 @@ def test_knowledge_v2_sync_isolates_profile_failures_per_shop():
     )[0]
     assert "foreach (var profile in profiles ?? new List<ShopProfile>())" in queue_all
     assert "try" in queue_all
-    assert "Queue(profile.ToContext());" in queue_all
+    assert "Queue(shop);" in queue_all
     assert "catch (Exception ex)" in queue_all
     assert "跳过异常店铺并继续处理其他店铺" in queue_all
     assert "Profiles.GetAll()" in queue_all

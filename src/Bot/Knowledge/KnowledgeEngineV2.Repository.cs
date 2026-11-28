@@ -1678,17 +1678,34 @@ namespace Bot.Knowledge
                     throw new InvalidDataException("知识包恢复日志损坏或店铺不匹配。");
                 var restored = pending.FeedbackEvents == null || pending.FeedbackEvents.Count == 0 ? 0
                     : KnowledgeEngineV2FeedbackService.MergeBackupEvents(seller, pending.ShopKey, pending.FeedbackEvents);
-                if (pending.TargetSettings != null
-                    && !KnowledgeEngineV2Service.TryRestorePortableSettings(seller, pending.BeforeSettings, pending.TargetSettings))
-                    throw new InvalidOperationException("知识包恢复期间检索设置被另行修改；保留新设置，待处理恢复日志。");
+                var settingsConflict = pending.TargetSettings != null
+                    && !KnowledgeEngineV2Service.TryRestorePortableSettings(seller, pending.BeforeSettings, pending.TargetSettings);
+                // Do not block the entire corpus forever on an intentional newer
+                // operator setting. Record the conflict durably and preserve it.
+                var status = settingsConflict ? "completed_settings_conflict_preserved" : "completed";
+                if (settingsConflict) Log.Info("知识包恢复期间检索设置另有修改，已保留较新的设置。");
                 lock (state.Sync)
                 {
                     var current = state.Db.ReadOneRecord<KnowledgeV2MetaRow>(x => x.Key == PendingPortableImportKey);
                     if (current == null || !string.Equals(current.Value, json, StringComparison.Ordinal))
                         throw new InvalidOperationException("知识包恢复日志已变化。");
-                    state.Db.SaveOneRecord(new KnowledgeV2MetaRow { Key = PendingPortableImportKey, Value = string.Empty });
+                    state.Db.SaveRecordsInTransaction(new List<object>
+                    {
+                        new KnowledgeV2MetaRow { Key = PendingPortableImportKey, Value = string.Empty },
+                        new KnowledgeV2MetaRow { Key = "last_portable_import_status", Value = status }
+                    });
                 }
                 return restored;
+            }
+        }
+
+        internal static string GetLastPortableImportStatus(string seller)
+        {
+            var state = GetState(ResolveShopRequired(seller));
+            lock (state.Sync)
+            {
+                var row = state.Db.ReadOneRecord<KnowledgeV2MetaRow>(x => x.Key == "last_portable_import_status");
+                return row == null ? string.Empty : row.Value ?? string.Empty;
             }
         }
 

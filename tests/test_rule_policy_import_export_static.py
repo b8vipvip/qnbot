@@ -43,7 +43,7 @@ def test_knowledge_policy_import_merges_and_restores_learning_stats():
     feedback = read(ROOT / "src/Bot/Knowledge/KnowledgeEngineV2FeedbackService.cs")
     assert "KnowledgeV2CloudSyncService.MergeCloudAndLocal" in source
     assert "CreateAutomaticBackup(before)" in source
-    assert "KnowledgeEngineV2FeedbackService.MergeBackupEvents" in source
+    assert "KnowledgeEngineV2Repository.ResumePortableImport" in source
     assert "ids.Add(x.Id)" in feedback
     assert "state.Db.SaveRecordsInTransaction(additions)" in feedback
 

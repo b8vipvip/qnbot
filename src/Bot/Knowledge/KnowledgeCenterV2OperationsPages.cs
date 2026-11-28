@@ -553,7 +553,9 @@ namespace Bot.Knowledge
                 }
                 KnowledgeEngineV2Service.Warm(_seller);
                 _status.Text = "导入完成，当前共 " + replacement.Count + " 条（含删除标记及候选）；新增反馈 " + restoredFeedback
-                    + " 条。" + (!replace ? "合并/追加未修改检索设置或恢复反馈事件。" : "") + " 导入前备份：" + backup;
+                    + " 条。" + (!replace ? "合并/追加未修改检索设置或恢复反馈事件。" :
+                        KnowledgeEngineV2Repository.GetLastPortableImportStatus(_seller) == "completed_settings_conflict_preserved"
+                        ? "检索设置在恢复期间发生并发修改，已保留较新设置。" : "") + " 导入前备份：" + backup;
             }
             catch (Exception ex) { MessageBox.Show(_owner, "导入失败：" + ex.Message); }
         }
