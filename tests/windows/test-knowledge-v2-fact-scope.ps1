@@ -51,6 +51,20 @@ $many = (1..11 | ForEach-Object { '商品ID:' + (10000000 + $_) }) -join ' '
 $overflow = $parse.Invoke($null, [object[]]@($many, $null))
 $conflictProperty = $queryType.GetProperty('ProductEvidenceConflict', [Reflection.BindingFlags]'Instance,Public,NonPublic')
 Assert-Equal ($conflictProperty.GetValue($overflow, $null)) $true 'product evidence overflow'
+$memoryType = $assembly.GetType('Bot.Knowledge.KnowledgeV2WorkingMemory', $true)
+$memory = [Activator]::CreateInstance($memoryType)
+$memory.UpdatedAt = [DateTime]::Now
+$memory.Entities = [System.Collections.Generic.List[string]]@(1..10 | ForEach-Object { 'product:' + (10000000 + $_) })
+$follow = $parse.Invoke($null, [object[]]@('这款支持手机吗', $memory))
+Assert-Equal ($follow.Entities.Count) 10 'followup preserves every explicit product'
+Assert-Equal ($follow.Entities.Contains('product:10000010')) $true 'tenth product not dropped'
+$memoryConflict = $memoryType.GetProperty('ProductEvidenceConflict', [Reflection.BindingFlags]'Instance,Public,NonPublic')
+$memoryConflict.SetValue($memory, $true, $null)
+$follow = $parse.Invoke($null, [object[]]@('这个呢', $memory))
+Assert-Equal ($conflictProperty.GetValue($follow, $null)) $true 'overflow ambiguity survives followup'
+$follow = $parse.Invoke($null, [object[]]@('这款商品ID:12345678 是否支持', $memory))
+Assert-Equal ($conflictProperty.GetValue($follow, $null)) $false 'explicit fresh product replaces previous ambiguity'
+
 $unverified = $validator.GetMethod('HasUnverifiedProductConclusion', $flags)
 $promise = $validator.GetMethod('HasTransactionalPromise', $flags)
 $overlap = $semantics.GetMethod('ProductScopesOverlap', $flags)
