@@ -1417,16 +1417,22 @@ namespace Bot.Knowledge
             {
                 var meta = state.Db.ReadOneRecord<KnowledgeV2MetaRow>(x => x.Key == key);
                 var checkpoint = meta == null ? new JObject() : JObject.Parse(meta.Value);
-                var last = (string)checkpoint["upload_after"] ?? string.Empty;
-                var all = state.Db.ReadRecords<KnowledgeV2ManualEditRevisionRow>(null)
-                    .Where(x => x != null).OrderBy(x => x.Id, StringComparer.Ordinal).ToList();
-                var rows = all.Where(x => string.CompareOrdinal(x.Id, last) > 0).Take(20).ToList();
+                var epoch = (string)checkpoint["epoch"] ?? string.Empty;
+                // Acknowledge immutable IDs durably rather than repeatedly walking the
+                // whole history. Random GUID ordering cannot hide a newly inserted row.
+                var ackPrefix = key + ":ack:";
+                var rows = state.Db.Select(typeof(KnowledgeV2ManualEditRevisionRow),
+                    "where not exists (select 1 from KnowledgeV2MetaRow m where m.Key = ? || KnowledgeV2ManualEditRevisionRow.Id and m.Value = ?) order by Id limit 20",
+                    ackPrefix, epoch).OfType<KnowledgeV2ManualEditRevisionRow>().ToList();
+                var all = rows.Count == 0
+                    ? state.Db.ReadRecords<KnowledgeV2ManualEditRevisionRow>(null).Where(x => x != null).ToList()
+                    : null;
                 return new JObject
                 {
                     ["epoch"] = (string)checkpoint["epoch"] ?? string.Empty,
                     ["cursor"] = checkpoint.Value<long?>("cursor") ?? 0L,
-                    ["local_revision_count"] = all.Count,
-                    ["local_revision_digest"] = RevisionHistoryDigest(all),
+                    ["local_revision_count"] = all == null ? JValue.CreateNull() : new JValue(all.Count),
+                    ["local_revision_digest"] = all == null ? string.Empty : RevisionHistoryDigest(all),
                     ["rows"] = JArray.FromObject(rows)
                 };
             }
@@ -1462,9 +1468,10 @@ namespace Bot.Knowledge
                 throw new InvalidDataException("修订同步响应或确认凭证无效");
             lock (state.Sync)
             {
-                var existing = state.Db.ReadRecords<KnowledgeV2ManualEditRevisionRow>(null)
-                    .ToDictionary(x => x.Id, StringComparer.Ordinal);
+                var key = RevisionSyncCheckpointKey(scope);
                 var writes = new List<object>();
+                var confirmedIds = new HashSet<string>(ack.Values<string>(), StringComparer.Ordinal);
+                var receivedIds = new HashSet<string>(StringComparer.Ordinal);
                 foreach (var token in incoming)
                 {
                     var row = token.ToObject<KnowledgeV2ManualEditRevisionRow>();
@@ -1472,28 +1479,26 @@ namespace Bot.Knowledge
                         || string.IsNullOrWhiteSpace(row.KnowledgeId)
                         || row.CreatedAtTicks <= 0 || row.CreatedAtTicks > DateTime.MaxValue.Ticks)
                         throw new InvalidDataException("远端修订记录无效");
-                    KnowledgeV2ManualEditRevisionRow prior;
-                    if (existing.TryGetValue(row.Id, out prior))
-                    {
-                        if (!JToken.DeepEquals(JObject.FromObject(prior), JObject.FromObject(row)))
-                            throw new InvalidDataException("同一修订ID内容冲突");
-                        continue;
-                    }
-                    existing.Add(row.Id, row);
-                    writes.Add(row);
+                    if (!receivedIds.Add(row.Id))
+                        throw new InvalidDataException("远端修订ID重复");
+                    var prior = state.Db.ReadOneRecord<KnowledgeV2ManualEditRevisionRow>(x => x.Id == row.Id);
+                    if (prior != null && !JToken.DeepEquals(JObject.FromObject(prior), JObject.FromObject(row)))
+                        throw new InvalidDataException("同一修订ID内容冲突");
+                    if (prior == null) writes.Add(row);
+                    confirmedIds.Add(row.Id);
                 }
                 // Never replay historical snapshots onto the active corpus. Current
                 // record sync and rollback CAS independently verify current content.
-                var after = uploaded.Count == 0 || (string)request["epoch"] != epoch
-                    ? string.Empty : (string)uploaded.Last["Id"];
+                foreach (var id in confirmedIds)
+                    writes.Add(new KnowledgeV2MetaRow { Key = key + ":ack:" + id, Value = epoch });
                 writes.Add(new KnowledgeV2MetaRow
                 {
                     Key = RevisionSyncCheckpointKey(scope),
-                    Value = new JObject { ["epoch"] = epoch, ["cursor"] = cursor.Value, ["upload_after"] = after }.ToString(Formatting.None)
+                    Value = new JObject { ["epoch"] = epoch, ["cursor"] = cursor.Value }.ToString(Formatting.None)
                 });
                 state.Db.SaveRecordsInTransaction(writes);
             }
-            return response.Value<bool?>("has_more") == true || uploaded.Count == 20;
+            return response.Value<bool?>("has_more") == true || uploaded.Count > 0 || incoming.Count > 0;
         }
 
         internal static Dictionary<string, long> GetCommittedRevisionCandidateReceipts(string seller)
