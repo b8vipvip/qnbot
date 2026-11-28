@@ -210,6 +210,7 @@ namespace Bot.Knowledge
         // Populated only from the verified order ledger, never buyer/OCR text.
         internal string VerifiedCommerceScope { get; set; }
         internal bool ProductEvidenceConflict { get; set; }
+        internal bool RecallBudgetAmbiguous { get; set; }
         public string Normalized { get; set; }
         public string Intent { get; set; }
         public string Subject { get; set; }
