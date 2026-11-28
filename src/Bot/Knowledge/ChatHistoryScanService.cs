@@ -190,7 +190,7 @@ namespace Bot.Knowledge
             if (seller.Length == 0)
                 throw new InvalidOperationException("缺少当前店铺客服身份，已阻止历史扫描。");
             var shop = ShopContextLocator.ResolveCurrentOrBySellerNick(seller);
-            if (shop == null || string.IsNullOrWhiteSpace(shop.ShopKey))
+            if (shop == null || !shop.HasStableSellerId || string.IsNullOrWhiteSpace(shop.ShopKey))
                 throw new InvalidOperationException("当前店铺 ShopKey 不可用，已阻止历史扫描。");
             var shopKey = shop.ShopKey;
             if (!ActiveBuyerScans.TryAdd(shopKey, 0))
@@ -234,6 +234,25 @@ namespace Bot.Knowledge
                 var boundShop = ShopContextLocator.ResolveRuntimeBySeller(qn);
                 if (boundShop == null || !string.Equals(boundShop.ShopKey, shopKey, StringComparison.Ordinal))
                     throw new InvalidOperationException("千牛会话登录身份与扫描窗口 ShopKey 不一致，已阻止读取历史消息。");
+                var scanCdp = qn.CDP;
+                var scanSessionId = scanCdp.SessionId;
+                Func<bool> isOriginalSession = () =>
+                    ReferenceEquals(QN.CurQN, qn)
+                    && ReferenceEquals(qn.CDP, scanCdp)
+                    && !scanCdp.IsInvalidated && !scanCdp.IsShopIdentityRetired
+                    && !string.IsNullOrWhiteSpace(scanSessionId)
+                    && string.Equals(scanCdp.SessionId, scanSessionId, StringComparison.Ordinal)
+                    && string.Equals(scanCdp.ShopKey, shopKey, StringComparison.Ordinal)
+                    && qn.Seller != null
+                    && DirectOrderIdentityResolver.IdentityEquals(qn.Seller.Nick, shop.SellerNick)
+                    && MyWebSocketServer.WSocketSvrInst != null
+                    && MyWebSocketServer.WSocketSvrInst.IsAuthoritativeShopSession(shopKey, scanSessionId);
+                Action requireOriginalSession = () =>
+                {
+                    if (!isOriginalSession())
+                        throw new InvalidOperationException("历史扫描权威店铺会话已变化，请回到原店铺后从断点继续。");
+                };
+                requireOriginalSession();
                 var originalBuyer = qn.Buyer == null ? string.Empty : (qn.Buyer.Nick ?? string.Empty);
                 var diagnostics = new StringBuilder();
                 Report(progress, "正在搜集本店可访问的联系人", 0, 0, "", 0, 0, 0);
@@ -241,6 +260,7 @@ namespace Bot.Knowledge
                 AddContact(contacts, originalBuyer, seller);
                 evidence.Event("contact_discovery_started", "ui_list");
                 var visible = await ReadVisibleChatBuyerListContactsAsync(diagnostics, token);
+                requireOriginalSession();
                 foreach (var nick in visible) AddContact(contacts, nick, seller);
                 evidence.Discovery("visible_chat_list", visible.Count, contacts.Count);
 
@@ -249,15 +269,18 @@ namespace Bot.Knowledge
                 if (contacts.Count <= 1)
                 {
                     managerOpened = await TryOpenMessageManagerAsync(diagnostics, token);
+                    requireOriginalSession();
                     if (managerOpened)
                     {
                         managerContacts = await ReadVisibleMessageManagerContactsAsync(diagnostics, token);
+                        requireOriginalSession();
                         foreach (var nick in managerContacts) AddContact(contacts, nick, seller);
                     }
                 }
                 evidence.Discovery("message_manager", managerContacts.Count, contacts.Count);
 
                 var apiContacts = await ReadContactsFromApisAsync(qn, diagnostics, token);
+                requireOriginalSession();
                 foreach (var nick in apiContacts) AddContact(contacts, nick, seller);
                 evidence.Discovery("contacts_api", apiContacts.Count, contacts.Count);
 
@@ -320,6 +343,7 @@ namespace Bot.Knowledge
                 Func<string, int, Task<bool>> scanContact = async (buyer, ordinal) =>
                 {
                     token.ThrowIfCancellationRequested();
+                    requireOriginalSession();
                     var count = 0;
                     ReportBuyer(progress, "正在扫描买家消息", ordinal, names.Count, read,
                         successful.Count, failed, evidence);
@@ -328,11 +352,13 @@ namespace Bot.Knowledge
                         lastScannerBuyer = buyer;
                         var ccode = await ResolveConversationCodeAsync(qn, buyer, token,
                             reason => evidence.Retry(reason));
+                        requireOriginalSession();
                         if (string.IsNullOrWhiteSpace(ccode))
                             throw new InvalidOperationException("conversation_not_stable");
                         var turns = await ReadHistoryAsync(qn, seller, buyer, ccode, options,
                             token, reason => evidence.Retry(reason),
-                            reason => evidence.Excluded(reason));
+                            reason => evidence.Excluded(reason), requireOriginalSession);
+                        requireOriginalSession();
                         var buyerTurns = turns.Where(x => x.Role == "buyer").ToList();
                         var matchedBotReplies = MatchBotRepliesToBuyerTurns(
                             turns.Select((x, i) => Tuple.Create(x.Role, x.Text, x.Time,
@@ -351,6 +377,7 @@ namespace Bot.Knowledge
                         foreach (var turn in buyerTurns)
                         {
                             token.ThrowIfCancellationRequested();
+                            requireOriginalSession();
                             // Some QN history pages omit message keys. Use a
                             // deterministic per-buyer fallback receipt so
                             // replay after a crash does not double-insert.
@@ -370,6 +397,7 @@ namespace Bot.Knowledge
                         // checkpoint a contact after its entire pagination and
                         // archive write succeeded. A crash before Save will
                         // replay the contact safely on the next run.
+                        requireOriginalSession();
                         if (successful.Add(buyer))
                         {
                             checkpoint.Completed.Add(buyer);
@@ -388,6 +416,7 @@ namespace Bot.Knowledge
                     catch (OperationCanceledException) { throw; }
                     catch (Exception ex)
                     {
+                        requireOriginalSession();
                         // Do not log the buyer identity or exception message.
                         evidence.Event("contact_retryable_failure", ex.GetType().Name);
                         Log.Info("[BuyerQuestions] scan_contact_failed run=" + evidence.Record.RunId
@@ -432,11 +461,12 @@ namespace Bot.Knowledge
                     // Do not override a newly-arrived active buyer's chat.
                     // Restore only if the current conversation still belongs to
                     // the scanner's last selected contact.
-                    if (!string.IsNullOrWhiteSpace(originalBuyer))
+                    if (!string.IsNullOrWhiteSpace(originalBuyer) && isOriginalSession())
                     {
                         try
                         {
                             var now = await qn.CDP.Invoke<JObject>("im.uiutil.GetCurrentConversationID");
+                            requireOriginalSession();
                             var current = CleanNick(FindString(now, "nick", "buyerNick", "display"));
                             if (string.Equals(current, CleanNick(lastScannerBuyer), StringComparison.Ordinal)
                                 && BotActivityCoordinator.GetSnapshot(seller).ActiveCount == 0)
@@ -1324,7 +1354,7 @@ namespace Bot.Knowledge
             string ccode,
             ChatHistoryScanOptions options,
             CancellationToken token, Action<string> onInterruption = null,
-            Action<string> onExcluded = null)
+            Action<string> onExcluded = null, Action requireSession = null)
         {
             var turns = new List<HistoryTurn>();
             var seen = new HashSet<string>(StringComparer.Ordinal);
@@ -1347,6 +1377,7 @@ namespace Bot.Knowledge
                     token.ThrowIfCancellationRequested();
                     try
                     {
+                        if (requireSession != null) requireSession();
                         response = await qn.CDP.Invoke<JObject>("im.singlemsg.GetRemoteHisMsg", new
                         {
                             cid = new { ccode = ccode, type = 1 },
@@ -1355,6 +1386,7 @@ namespace Bot.Knowledge
                             msgid = cursorId,
                             msgtime = cursorTime
                         });
+                        if (requireSession != null) requireSession();
                         if (response != null) break;
                     }
                     catch (OperationCanceledException) { throw; }
@@ -1375,9 +1407,11 @@ namespace Bot.Knowledge
                 var msgsToken = resultObject == null
                     ? result as JArray
                     : (resultObject["msgs"] ?? resultObject["messages"] ?? resultObject["list"]);
-                var messages = msgsToken == null
-                    ? new List<QNChatMessage>()
-                    : msgsToken.ToObject<List<QNChatMessage>>() ?? new List<QNChatMessage>();
+                if (!(msgsToken is JArray))
+                    throw new InvalidOperationException("history_pagination_incomplete:missing_message_array");
+                var messages = msgsToken.ToObject<List<QNChatMessage>>();
+                if (messages == null || messages.Any(x => x == null))
+                    throw new InvalidOperationException("history_pagination_incomplete:invalid_message_array");
 
                 if (messages.Count < 1)
                 {
@@ -1464,6 +1498,25 @@ namespace Bot.Knowledge
             excludeReason = null;
             if (message == null || message.fromid == null || message.toid == null) return false;
             var time = GetMessageTime(message);
+            var shop = ShopSettingsScope.Current;
+            if (shop != null && shop.HasStableSellerId)
+            {
+                var loginId = message.loginid == null ? string.Empty : (message.loginid.targetId ?? string.Empty).Trim();
+                var sellerEndpoint = string.Equals(CleanNick(message.fromid.nick), CleanNick(seller), StringComparison.Ordinal)
+                    ? message.fromid : message.toid;
+                var endpointId = (sellerEndpoint.targetId ?? string.Empty).Trim();
+                if ((!string.IsNullOrEmpty(loginId) && !string.Equals(loginId, shop.SellerId, StringComparison.Ordinal))
+                    || (!string.IsNullOrEmpty(endpointId) && !string.Equals(endpointId, shop.SellerId, StringComparison.Ordinal)))
+                {
+                    excludeReason = "history_seller_identity_mismatch";
+                    return false;
+                }
+            }
+            if (!options.ScanAll && time == DateTime.MinValue)
+            {
+                excludeReason = "history_missing_timestamp";
+                return false;
+            }
             if (!options.ScanAll)
             {
                 if (options.StartTime.HasValue && time != DateTime.MinValue && time < options.StartTime.Value) return false;

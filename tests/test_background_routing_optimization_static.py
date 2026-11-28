@@ -9,12 +9,13 @@ def read(path: str) -> str:
 
 
 def test_knowledge_optimization_uses_smaller_batches_and_long_background_timeout():
-    source = read("src/Bot/Knowledge/KnowledgeOptimizationService.cs")
-
-    assert "private const int BatchSize = 5;" in source
-    assert "private const int BackgroundTimeoutSeconds = 300;" in source
-    assert "MyOpenAI.CallStructuredChat(messages, MaxOutputTokens, 0.05, BackgroundTimeoutSeconds, token)" in source
-    assert "QuickFailureRetrySeconds = 30" in source
+    assert not (ROOT / "src/Bot/Knowledge/KnowledgeOptimizationService.cs").exists()
+    source = read("src/Bot/Knowledge/KnowledgeEngineV2RevisionService.cs")
+    assert "OperationLocks.GetOrAdd(shop.ShopKey" in source
+    assert "token.ThrowIfCancellationRequested();" in source
+    assert "FindPendingByProposal" in source
+    assert "TrySaveEditorRecord(seller, record, currentFingerprint)" in source
+    assert "MyOpenAI" not in source
 
 
 def test_control_plane_has_separate_background_and_realtime_budgets():

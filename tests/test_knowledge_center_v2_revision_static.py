@@ -44,11 +44,12 @@ def test_apply_is_manual_and_refuses_to_overwrite_newer_knowledge():
         "public static bool RejectCandidate", 1
     )[0]
     assert 'string.Equals(row.Status, "pending"' in apply
-    assert "NormalizeComparable(record.Answer)" in apply
+    assert "row.OriginalFingerprint" in apply
+    assert "EditorRecordFingerprint(record)" in apply
     assert 'MarkStatus(seller, row, "stale"' in apply
     assert "record.Answer = row.ProposedAnswer.Trim();" in apply
     assert "record.LastVerifiedAt = DateTime.Now;" in apply
-    assert "KnowledgeEngineV2Repository.Save(seller, record);" in apply
+    assert "KnowledgeEngineV2Repository.TrySaveEditorRecord(seller, record, currentFingerprint)" in apply
     assert 'MarkStatus(seller, row, "applied"' in apply
 
 
@@ -84,3 +85,11 @@ def test_revision_components_compile_and_bootstrap_for_wpf_projects():
     assert "KnowledgeCenterV2RevisionUi.cs" in props
     assert "KnowledgeV2RevisionUiBridge.InitializeForApp()" in ui
     assert "_knowledgeV2RevisionUiBootstrap" in ui
+
+def test_revision_generation_is_shop_serialized_cancellable_and_not_capped_to_first_120():
+    service = read("src/Bot/Knowledge/KnowledgeEngineV2RevisionService.cs")
+    assert "OperationLocks.GetOrAdd(shop.ShopKey" in service
+    assert "token.ThrowIfCancellationRequested();" in service
+    assert ".Take(120)" not in service
+    assert "OriginalFingerprint = KnowledgeEngineV2Repository.EditorRecordFingerprint(record)" in service
+    assert "SafeDate(x.CreatedAtTicks) >= record.LastVerifiedAt" in service

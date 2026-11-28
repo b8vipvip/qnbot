@@ -1,3 +1,5 @@
+using Bot.ShopScope;
+using Bot.ChromeNs;
 using System;
 using System.Collections.Generic;
 using System.Collections.ObjectModel;
@@ -88,6 +90,8 @@ namespace Bot.Knowledge
     internal sealed class KnowledgeV2RevisionWindow : Window
     {
         private readonly string _seller;
+        private readonly string _shopKey;
+        private readonly CancellationTokenSource _generationCancellation = new CancellationTokenSource();
         private readonly ObservableCollection<KnowledgeV2RevisionCandidate> _view =
             new ObservableCollection<KnowledgeV2RevisionCandidate>();
         private List<KnowledgeV2RevisionCandidate> _all = new List<KnowledgeV2RevisionCandidate>();
@@ -104,6 +108,8 @@ namespace Bot.Knowledge
         {
             Owner = owner;
             _seller = seller ?? string.Empty;
+            _shopKey = KnowledgeCenterV2Context.ResolveShopKey(owner, _seller);
+            Closed += delegate { _generationCancellation.Cancel(); };
             Title = "Knowledge Center V2 - 修订候选复核";
             Width = 1240;
             Height = 800;
@@ -209,6 +215,16 @@ namespace Bot.Knowledge
             Content = root;
         }
 
+        private T InShop<T>(Func<T> action)
+        {
+            var shop = ShopContextLocator.ResolveRuntimeByShopKey(_shopKey);
+            if (shop == null || !shop.HasStableSellerId || !string.Equals(shop.ShopKey, _shopKey, StringComparison.Ordinal)
+                || (!DirectOrderIdentityResolver.IdentityEquals(shop.SellerNick, _seller)
+                    && !DirectOrderIdentityResolver.IdentityEquals(shop.DisplayName, _seller)))
+                throw new InvalidOperationException("知识修订店铺身份不匹配。");
+            using (ShopSettingsScope.Enter(shop)) return action();
+        }
+
         private async Task GenerateAsync()
         {
             if (string.IsNullOrWhiteSpace(_seller))
@@ -220,7 +236,7 @@ namespace Bot.Knowledge
             _summary.Text = "正在聚类最近120天真实人工纠正...";
             try
             {
-                var result = await Task.Run(() => KnowledgeEngineV2RevisionService.GenerateCandidates(_seller));
+                var result = await Task.Run(() => InShop(() => KnowledgeEngineV2RevisionService.GenerateCandidates(_seller, _generationCancellation.Token)));
                 _summary.Text = "扫描 " + result.ScannedKnowledge + " 条｜纠正事件 " + result.CorrectionEvents
                     + "｜新增候选 " + result.Generated + "｜已有候选 " + result.ExistingPending
                     + "｜证据不足 " + result.SkippedInsufficientEvidence;
@@ -243,7 +259,7 @@ namespace Bot.Knowledge
                 _summary.Text = "未识别当前店铺";
                 return;
             }
-            Task.Run(() => KnowledgeEngineV2RevisionService.GetCandidates(_seller, "all", 300))
+            Task.Run(() => InShop(() => KnowledgeEngineV2RevisionService.GetCandidates(_seller, "all", 300)))
                 .ContinueWith(t => Dispatcher.BeginInvoke(new Action(() =>
                 {
                     if (t.IsFaulted)
@@ -327,8 +343,8 @@ namespace Bot.Knowledge
             if (MessageBox.Show(this,
                 "确定将建议答案替换当前知识答案吗？\n\n系统会保留原答案和纠正证据作为审计记录，且不会自动修改其他字段。" + warning,
                 "应用知识修订", MessageBoxButton.YesNo, MessageBoxImage.Warning) != MessageBoxResult.Yes) return;
-            string error;
-            if (!KnowledgeEngineV2RevisionService.ApplyCandidate(_seller, item.Id, out error))
+            string error = string.Empty;
+            if (!InShop(() => KnowledgeEngineV2RevisionService.ApplyCandidate(_seller, item.Id, out error)))
             {
                 MessageBox.Show(this, error, "应用失败", MessageBoxButton.OK, MessageBoxImage.Warning);
                 RefreshView();
@@ -345,8 +361,8 @@ namespace Bot.Knowledge
             if (MessageBox.Show(this,
                 "确定驳回这个修订候选吗？驳回只影响候选，不会修改当前知识。",
                 "驳回修订候选", MessageBoxButton.YesNo, MessageBoxImage.Question) != MessageBoxResult.Yes) return;
-            string error;
-            if (!KnowledgeEngineV2RevisionService.RejectCandidate(_seller, item.Id, "人工复核驳回。", out error))
+            string error = string.Empty;
+            if (!InShop(() => KnowledgeEngineV2RevisionService.RejectCandidate(_seller, item.Id, "人工复核驳回。", out error)))
             {
                 MessageBox.Show(this, error, "驳回失败", MessageBoxButton.OK, MessageBoxImage.Warning);
                 return;
