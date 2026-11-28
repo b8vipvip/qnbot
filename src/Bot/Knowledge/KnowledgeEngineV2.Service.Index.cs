@@ -367,7 +367,8 @@ namespace Bot.Knowledge
                 {
                     Seller = memory.Seller, Buyer = memory.Buyer, Subject = memory.Subject,
                     Predicate = memory.Predicate, Intent = memory.Intent, UpdatedAt = memory.UpdatedAt,
-                    Entities = (memory.Entities ?? new List<string>()).ToList()
+                    Entities = (memory.Entities ?? new List<string>()).ToList(),
+                    ProductEvidenceConflict = memory.ProductEvidenceConflict
                 };
             }
         }
@@ -391,15 +392,17 @@ namespace Bot.Knowledge
                     current.Subject = query.Subject ?? string.Empty;
                     current.Predicate = query.Predicate ?? "general";
                     current.Intent = query.Intent ?? "general";
-                    current.Entities = (query.Entities ?? new List<string>()).Take(8).ToList();
+                    current.Entities = (query.Entities ?? new List<string>()).OrderByDescending(KnowledgeEngineV2Semantics.IsProductEntity).Take(10).ToList();
                 }
                 else
                 {
                     if (!string.IsNullOrWhiteSpace(query.Subject)) current.Subject = query.Subject;
                     if (query.Predicate != "general") current.Predicate = query.Predicate;
                     if (query.Intent != "general") current.Intent = query.Intent;
-                    if (query.Entities != null && query.Entities.Count > 0) current.Entities = query.Entities.Take(8).ToList();
+                    if (query.Entities != null && query.Entities.Count > 0)
+                        current.Entities = query.Entities.OrderByDescending(KnowledgeEngineV2Semantics.IsProductEntity).Take(10).ToList();
                 }
+                current.ProductEvidenceConflict = query.ProductEvidenceConflict;
                 current.UpdatedAt = DateTime.Now;
             }
             SweepExpiredWorkingMemoryIfDue();
