@@ -36,7 +36,7 @@ def test_mobile_runtime_settings_require_confirmation_and_show_safety_semantics(
     assert 'id="knowledgeV2RuntimeMode"' in h
     assert 'id="knowledgeV2DirectThreshold"' in h
     assert 'id="knowledgeV2MinConfidence"' in h
-    assert 'src="/static/bot-web-v2.js?v=13"' in h
+    assert 'src="/static/bot-web-v2.js?v=14"' in h
     assert 'api("/api/bot-web/knowledge-v2/runtime-settings/read"' in s
     assert 'api("/api/bot-web/knowledge-v2/runtime-settings"' in s
     assert "Knowledge V2 是唯一检索引擎，始终启用" in s
