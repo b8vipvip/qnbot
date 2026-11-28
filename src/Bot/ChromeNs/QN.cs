@@ -1,5 +1,5 @@
 using Bot.Knowledge;
-﻿using Bot.ChromeNs;
+using Bot.ChromeNs;
 using DbEntity.Response;
 using DbEntity;
 using System;
