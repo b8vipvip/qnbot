@@ -159,3 +159,16 @@ def test_followups_preserve_product_scope_and_overflow_and_compact_tombstones():
     incremental = read("src/Bot/Knowledge/KnowledgeEngineV2.Service.Incremental.cs")
     assert "ShouldCompactSnapshot(next)" in incremental
     assert "next.Records.Where(IsIndexableRecord)" in incremental
+
+
+def test_cross_scope_conflicts_are_visible_but_never_bulk_disabled():
+    service = read("src/Bot/Knowledge/KnowledgeEngineV2.Service.Public.cs")
+    assert 'var key = "scope-review:"' in service
+    assert "RequiresScopeReview = true" in service
+    assert "KnowledgeEngineV2Semantics.ProductScopesOverlap(left, right)" in service
+    assert "conflict != null && conflict.RequiresScopeReview" in service
+    ui = read("src/Bot/Knowledge/KnowledgeCenterV2OperationsPages.cs")
+    assert "conflict.RequiresScopeReview" in ui
+    web = read("services/api-control-plane/static/bot-web-v2-operations.js")
+    assert "x.RequiresScopeReview?[]:" in web
+    assert "y.ProductIds" in web and "y.Exclusions" in web
