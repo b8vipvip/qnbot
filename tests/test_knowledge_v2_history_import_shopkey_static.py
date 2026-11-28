@@ -84,3 +84,15 @@ def test_history_promotion_checks_actual_question_and_answer_not_just_valid_toke
     assert "record.Enabled = autoPublish" in importer
     assert 'record.Status = autoPublish ? "active" : "candidate"' in importer
     assert "StringComparison.Ordinal" in importer.split("private static bool MatchesSourceText(", 1)[1].split("private static List<string> Clean(", 1)[0]
+
+
+def test_verified_history_source_identity_is_stable_across_device_scans():
+    importer = read("src/Bot/Knowledge/KnowledgeV2HistoryImportService.cs")
+    cloud = read("src/Bot/Knowledge/KnowledgeV2CloudSyncService.cs")
+    assert "? BuildVerifiedHistorySourceId(questionIds, answerIds, contextIds)" in importer
+    helper = importer.split("private static string BuildVerifiedHistorySourceId(", 1)[1].split("// Deliberately ignore whitespace only;", 1)[0]
+    for name in ("question", "answer", "context"):
+        assert name + "_message_ids = " + name + "Ids.OrderBy(x => x, StringComparer.Ordinal).ToArray()" in helper
+    assert "importId" not in helper and "tokens" not in helper and "Guid" not in helper
+    assert "AutoPublishedEvidenceKey" in cloud
+    assert "return (record.SourceId ?? string.Empty).Trim();" in cloud

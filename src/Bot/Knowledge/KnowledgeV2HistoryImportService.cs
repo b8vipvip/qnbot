@@ -160,15 +160,20 @@ namespace Bot.Knowledge
                     record.SourceType = autoPublish
                         ? "ai_auto_learned_human_evidence"
                         : "chat_history_unverified_candidate";
-                    record.SourceId = JsonConvert.SerializeObject(new
-                    {
-                        import_id = importId,
-                        evidence_type = autoPublish ? "historical_human_reply" : "unverified_history_import",
-                        source_evidence_ids = tokens,
-                        question_message_ids = questionIds,
-                        answer_message_ids = answerIds,
-                        context_message_ids = contextIds
-                    });
+                    // Active historical facts use stable original message IDs, not the
+                    // random scan tokens/import ID. Cloud sync compares SourceId when
+                    // reconciling independently learned facts across devices.
+                    record.SourceId = autoPublish
+                        ? BuildVerifiedHistorySourceId(questionIds, answerIds, contextIds)
+                        : JsonConvert.SerializeObject(new
+                        {
+                            import_id = importId,
+                            evidence_type = "unverified_history_import",
+                            source_evidence_ids = tokens,
+                            question_message_ids = questionIds,
+                            answer_message_ids = answerIds,
+                            context_message_ids = contextIds
+                        });
                     record.Authority = autoPublish ? Math.Max(record.Authority, 0.90) : Math.Min(record.Authority, 0.69);
                     record.Confidence = autoPublish ? Math.Max(record.Confidence, 0.90) : Math.Min(record.Confidence, 0.69);
                     record.Enabled = autoPublish;
@@ -193,6 +198,18 @@ namespace Bot.Knowledge
                     result.SourceItems, result.Added, result.DuplicateSkipped));
                 return result;
             }
+        }
+
+        private static string BuildVerifiedHistorySourceId(
+            IEnumerable<string> questionIds, IEnumerable<string> answerIds, IEnumerable<string> contextIds)
+        {
+            return JsonConvert.SerializeObject(new
+            {
+                evidence_type = "historical_human_reply",
+                question_message_ids = questionIds.OrderBy(x => x, StringComparer.Ordinal).ToArray(),
+                answer_message_ids = answerIds.OrderBy(x => x, StringComparer.Ordinal).ToArray(),
+                context_message_ids = contextIds.OrderBy(x => x, StringComparer.Ordinal).ToArray()
+            });
         }
 
         // Deliberately ignore whitespace only; do not erase negation, amounts,
