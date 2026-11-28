@@ -68,7 +68,9 @@ async function loadV2Operations(){
     const [devices,history]=await Promise.all([api("/api/bot-web/knowledge-v2/devices"),api(v2OpsBase)]);
     if(epoch!==v2Ops.epoch)return;
     const chosen=$("v2OpsDevice").value;
-    $("v2OpsDevice").replaceChildren(new Option("请选择 Windows 设备",""),...(devices.items||[]).map(x=>new Option("设备 "+x.id.slice(0,8)+(x.online?" · 在线":" · 离线"),x.id)));
+    const proof=$("v2OpsFeedbackProof");
+    if(proof)proof.textContent="反馈事件云端 "+(devices.server_feedback_event_count??0)+" 条 · 最近90秒已核验设备 "+(devices.verified_devices??0)+" 台 · "+(devices.two_device_nonempty_convergence?"两台设备非空反馈事件集一致":"尚无两台设备非空一致性证据");
+    $("v2OpsDevice").replaceChildren(new Option("请选择 Windows 设备",""),...(devices.items||[]).map(x=>new Option("设备 "+x.id.slice(0,8)+(x.online?" · 在线":" · 离线")+(x.feedback_verified?" · 反馈一致":""),x.id)));
     if((devices.items||[]).some(x=>x.id===chosen))$("v2OpsDevice").value=chosen;
     else if(devices.items?.length===1)$("v2OpsDevice").value=devices.items[0].id;
     $("v2OpsTaskList").replaceChildren(...(history.items||[]).map(x=>{

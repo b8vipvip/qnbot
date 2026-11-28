@@ -25,6 +25,9 @@ class KnowledgeV2FeedbackInput(BaseModel):
     epoch: str = ""
     cursor: int = 0
     events: list[dict[str, Any]] = []
+    device_id: str = ""
+    local_event_count: int | None = None
+    local_event_digest: str = ""
 
 class KnowledgeV2WebInput(BaseModel):
     records: list[dict[str, Any]]
@@ -90,6 +93,12 @@ def init_db():
             client_id INTEGER NOT NULL, shop_key TEXT NOT NULL, device_id TEXT NOT NULL,
             last_seen_at TEXT NOT NULL, PRIMARY KEY(client_id,shop_key,device_id),
             FOREIGN KEY(client_id) REFERENCES client_tokens(id) ON DELETE CASCADE)""")
+        conn.execute("""CREATE TABLE IF NOT EXISTS bot_knowledge_v2_feedback_receipts (
+            client_id INTEGER NOT NULL, shop_key TEXT NOT NULL, device_id TEXT NOT NULL,
+            event_count INTEGER NOT NULL, event_digest TEXT NOT NULL, cursor INTEGER NOT NULL,
+            verified INTEGER NOT NULL, received_at TEXT NOT NULL,
+            PRIMARY KEY(client_id,shop_key,device_id),
+            FOREIGN KEY(client_id) REFERENCES client_tokens(id) ON DELETE CASCADE)""")
         conn.execute("""CREATE TABLE IF NOT EXISTS bot_knowledge_v2_backups (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             client_id INTEGER NOT NULL, revision INTEGER NOT NULL, records_json TEXT NOT NULL,
@@ -122,6 +131,12 @@ def _feedback_binding(conn, client_id, requested=None):
     if not bound or (requested is not None and requested != bound):
         raise HTTPException(status_code=403, detail="反馈同步令牌未绑定该店铺")
     return bound
+
+def _feedback_digest(conn,client_id,shop_key,cutoff):
+    rows=conn.execute("""SELECT event_id,seq FROM bot_knowledge_v2_feedback
+        WHERE client_id=? AND shop_key=? AND utc_ticks>=? ORDER BY event_id""",(client_id,shop_key,cutoff)).fetchall()
+    digest=hashlib.sha256("\n".join(row["event_id"] for row in rows).encode("utf-8")).hexdigest()
+    return len(rows),digest,max((int(row["seq"]) for row in rows),default=0)
 
 def _validate_feedback(events, now):
     if len(events) > 200:
@@ -171,6 +186,23 @@ def runtime_feedback_sync(payload: KnowledgeV2FeedbackInput, request: Request, x
         rows = conn.execute("""SELECT seq,event_id,knowledge_id,event_type,utc_ticks FROM bot_knowledge_v2_feedback
             WHERE client_id=? AND shop_key=? AND seq>? ORDER BY seq LIMIT 201""", (client_id,shop_key,cursor)).fetchall()
         page = rows[:200]
+        # A proof is based on the device's already persisted cursor and local ID
+        # digest, not just its HTTP success. Require an empty outgoing batch and
+        # a registered device, so uploading an event cannot itself prove replay.
+        if (payload.device_id and payload.local_event_count is not None and payload.local_event_count>=0
+            and len(payload.local_event_digest)==64 and all(c in "0123456789abcdef" for c in payload.local_event_digest)
+            and conn.execute("""SELECT 1 FROM bot_knowledge_v2_devices WHERE client_id=?
+                AND shop_key=? AND device_id=?""",(client_id,shop_key,payload.device_id)).fetchone()):
+            count,digest,highwater=_feedback_digest(conn,client_id,shop_key,cutoff)
+            verified=int(not events and payload.epoch==epoch and payload.cursor>=highwater
+                         and payload.local_event_count==count and payload.local_event_digest==digest)
+            conn.execute("""INSERT INTO bot_knowledge_v2_feedback_receipts
+                (client_id,shop_key,device_id,event_count,event_digest,cursor,verified,received_at)
+                VALUES(?,?,?,?,?,?,?,?) ON CONFLICT(client_id,shop_key,device_id) DO UPDATE SET
+                event_count=excluded.event_count,event_digest=excluded.event_digest,cursor=excluded.cursor,
+                verified=excluded.verified,received_at=excluded.received_at""",
+                (client_id,shop_key,payload.device_id,payload.local_event_count,payload.local_event_digest,
+                 payload.cursor,verified,_cp.iso_now()))
         return {"epoch":epoch,"cursor":int(page[-1]["seq"]) if page else cursor,
             "has_more":len(rows)>200,"ack_ids":[e[0] for e in events],
             "events":[{"Id":row["event_id"],"KnowledgeId":row["knowledge_id"],"EventType":row["event_type"],
@@ -508,8 +540,12 @@ def web_v2_devices(client=Depends(bot_web_console._web_client)):
     from datetime import datetime,timezone,timedelta
     with _cp.db() as conn:
         shop_key=_feedback_binding(conn,int(client["id"]))
-        rows=conn.execute("""SELECT device_id,last_seen_at FROM bot_knowledge_v2_devices WHERE client_id=? AND shop_key=?
-            ORDER BY last_seen_at DESC LIMIT 30""",(int(client["id"]),shop_key)).fetchall()
+        client_id=int(client["id"])
+        rows=conn.execute("""SELECT d.device_id,d.last_seen_at,r.event_count,r.event_digest,r.verified,r.received_at
+            FROM bot_knowledge_v2_devices d LEFT JOIN bot_knowledge_v2_feedback_receipts r
+            ON d.client_id=r.client_id AND d.shop_key=r.shop_key AND d.device_id=r.device_id
+            WHERE d.client_id=? AND d.shop_key=? ORDER BY d.last_seen_at DESC LIMIT 30""",(client_id,shop_key)).fetchall()
+        count,digest,_=_feedback_digest(conn,client_id,shop_key,_feedback_now_ticks()-180*86400*_TICKS_PER_SECOND)
     cutoff=datetime.now(timezone.utc)-timedelta(seconds=90)
     result=[]
     for row in rows:
@@ -519,8 +555,18 @@ def web_v2_devices(client=Depends(bot_web_console._web_client)):
             online=seen>=cutoff
         except (ValueError,TypeError):
             online=False
-        result.append({"id":row["device_id"],"last_seen_at":row["last_seen_at"],"online":online})
-    return {"items":result}
+        try:
+            receipt=datetime.fromisoformat(row["received_at"])
+            if receipt.tzinfo is None: receipt=receipt.replace(tzinfo=timezone.utc)
+            fresh=receipt>=cutoff
+        except (ValueError,TypeError):
+            fresh=False
+        verified=bool(online and fresh and row["verified"] and row["event_count"]==count and row["event_digest"]==digest)
+        result.append({"id":row["device_id"],"last_seen_at":row["last_seen_at"],"online":online,
+            "feedback_verified":verified,"feedback_event_count":row["event_count"],"feedback_receipt_at":row["received_at"]})
+    return {"items":result,"server_feedback_event_count":count,
+        "verified_devices":sum(1 for item in result if item["feedback_verified"]),
+        "two_device_nonempty_convergence":count>0 and sum(1 for item in result if item["feedback_verified"])>=2}
 
 @router.post("/api/bot-web/knowledge-v2/operations")
 def web_v2_operation(payload: KnowledgeV2OperationInput,client=Depends(bot_web_console._web_client)):

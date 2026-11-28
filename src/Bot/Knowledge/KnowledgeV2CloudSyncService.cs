@@ -471,6 +471,7 @@ namespace Bot.Knowledge
                 for (var i = 0; i < 4; i++)
                 {
                     var payload = KnowledgeEngineV2FeedbackService.BuildCloudFeedbackRequest(shop.DisplayName, scope);
+                    payload["device_id"] = BotWebConsoleSyncService.LocalKnowledgeDeviceId;
                     using (var response = await ShopRuntimeCredentialAuthority.SendWithUnauthorizedRecoveryAsync(
                         shop, token, async requestToken =>
                         {

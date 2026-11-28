@@ -653,3 +653,29 @@ def test_remote_operation_claims_once_across_two_devices_and_rejects_unclaimed_r
     assert m.web_v2_operation_status(cid,{"id":1})["status"]=="cancelled"
     console._apply_command_results(1,[{"id":cid,"claim":claim_token,"success":True,"result":{"duplicate":True}}])
     assert m.web_v2_operation_status(cid,{"id":1})["status"]=="cancelled"
+
+@pytest.mark.skipif(importlib.util.find_spec("fastapi") is None, reason="server dependencies are not installed")
+def test_feedback_convergence_requires_two_registered_persisted_device_receipts(tmp_path):
+    import hashlib,uuid
+    from datetime import datetime,timezone
+    m=_load_v2_cas_module(tmp_path)
+    m._cp.iso_now=lambda:datetime.now(timezone.utc).isoformat()
+    with m._cp.db() as conn:
+        conn.execute("CREATE TABLE bot_client_shop_binding(client_id INTEGER PRIMARY KEY,shop_key TEXT)")
+        conn.execute("INSERT INTO bot_client_shop_binding VALUES(1,'shop-a')")
+        for device in ("a"*32,"b"*32):
+            conn.execute("INSERT INTO bot_knowledge_v2_devices VALUES(1,'shop-a',?,?)",(device,m._cp.iso_now()))
+    event={"Id":uuid.uuid4().hex,"KnowledgeId":"a","EventType":"sent","UtcTicks":m._feedback_now_ticks()}
+    initial=m.runtime_feedback_sync(m.KnowledgeV2FeedbackInput(events=[event],device_id="a"*32,local_event_count=1,local_event_digest=hashlib.sha256(event["Id"].encode()).hexdigest()),None,"shop-a")
+    assert not m.web_v2_devices({"id":1})["two_device_nonempty_convergence"]
+    def prove(device,digest):
+        return m.runtime_feedback_sync(m.KnowledgeV2FeedbackInput(epoch=initial["epoch"],cursor=initial["cursor"],device_id=device,
+            local_event_count=1,local_event_digest=digest),None,"shop-a")
+    digest=hashlib.sha256(event["Id"].encode()).hexdigest()
+    prove("a"*32,digest);prove("b"*32,"0"*64)
+    assert m.web_v2_devices({"id":1})["verified_devices"]==1
+    prove("b"*32,digest)
+    proof=m.web_v2_devices({"id":1})
+    assert proof["verified_devices"]==2 and proof["two_device_nonempty_convergence"]
+    m.runtime_feedback_sync(m.KnowledgeV2FeedbackInput(events=[dict(event,Id=uuid.uuid4().hex)]),None,"shop-a")
+    assert not m.web_v2_devices({"id":1})["two_device_nonempty_convergence"]
