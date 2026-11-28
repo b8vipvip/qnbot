@@ -62,18 +62,14 @@
     <section id="page-knowledge" class="page">
       <div class="knowledge-head">
         <div><h2>云同步知识库</h2><p id="knowledgeSyncHint">等待 Windows Bot 同步</p></div>
-        <button id="addKnowledgeBtn" class="primary">新增知识</button>
       </div>
-      <div class="knowledge-toolbar"><input id="knowledgeSearch" placeholder="搜索问题、答案或关键词"><select id="knowledgeCategory"><option value="">全部分类</option></select><button id="refreshKnowledgeBtn">刷新</button></div>
-      <div class="knowledge-toolbar knowledge-import-toolbar"><button id="knowledgeExportBtn">导出 JSON</button><button id="knowledgeMergeImportBtn">合并导入</button><button id="knowledgeReplaceImportBtn" class="danger">替换导入</button><button id="knowledgeBackupsBtn">版本备份</button><input id="knowledgeImportFile" class="hidden" type="file" accept=".json,application/json"></div>
-      <div id="knowledgeMeta" class="knowledge-meta"></div>
+      <div class="knowledge-toolbar knowledge-import-toolbar"><button id="knowledgeExportBtn">导出 JSON</button><button id="knowledgeMergeImportBtn">合并导入</button><button id="knowledgeAppendImportBtn">追加导入</button><button id="knowledgeReplaceImportBtn" class="danger">替换导入</button><button id="knowledgeBackupsBtn">版本备份</button><input id="knowledgeImportFile" class="hidden" type="file" accept=".json,application/json"></div>
       <section class="panel"><div class="panel-head"><div><h3>知识库</h3><small>原生结构化知识 · 与 Windows V2 引擎双向同步</small></div><button id="addKnowledgeV2Btn" class="primary">新增 V2 知识</button></div><div class="knowledge-toolbar"><input id="knowledgeV2Search" placeholder="搜索标题、答案、意图、主体或实体"><button id="refreshKnowledgeV2Btn">刷新 V2</button></div><div class="knowledge-toolbar"><textarea id="knowledgeV2SmartImportText" rows="3" maxlength="20000" placeholder="粘贴商品说明、售前售后规则、发货说明等资料，AI 将在 Windows Bot 使用当前本店 AI 接口整理成原生 V2 结构"></textarea><button id="knowledgeV2SmartImportBtn" class="primary">AI 智能导入</button></div><div id="knowledgeV2SmartImportHint" class="hint"></div>
       <div class="knowledge-toolbar"><strong>V2 运行策略</strong><button id="refreshKnowledgeV2SettingsBtn">读取 Windows 设置</button></div>
       <div class="knowledge-toolbar"><label class="remember"><input id="knowledgeV2RuntimeEnabled" type="checkbox" checked disabled>Knowledge V2 始终启用</label><label>模式<select id="knowledgeV2RuntimeMode" disabled><option value="production">Production（允许安全直答）</option></select></label></div>
       <div class="knowledge-toolbar"><label>本地直答阈值<input id="knowledgeV2DirectThreshold" type="number" min="0.70" max="0.96" step="0.01" value="0.82"></label><label>最低可信度<input id="knowledgeV2MinConfidence" type="number" min="0.50" max="0.95" step="0.01" value="0.72"></label><button id="saveKnowledgeV2SettingsBtn" class="primary">保存运行策略</button></div>
       <div id="knowledgeV2SettingsHint" class="hint">设置保存在当前 Windows 店铺作用域；Production 仍受冲突、高风险、上下文和发送安全门控限制。</div><div class="knowledge-toolbar"><strong>运行策略审计</strong><button id="refreshKnowledgeV2SettingsAuditBtn">刷新审计</button></div><div id="knowledgeV2SettingsAudit" class="knowledge-list"><div class="empty">暂无运行策略操作记录</div></div><div id="knowledgeV2Meta" class="knowledge-meta">等待 V2 同步</div><div id="knowledgeV2List" class="knowledge-list"><div class="empty">暂无 V2 结构化知识</div></div></section>
        <section class="panel"><div class="panel-head"><div><h3>图片知识</h3><small>上传图片后自动调用服务端 OCR，编辑识别结果和图片说明</small></div><button id="addImageKnowledgeBtn" class="primary">新增图片知识</button></div><div id="imageKnowledgeScopeNotice" class="hint"></div><div id="imageKnowledgeList" class="knowledge-list"><div class="empty">暂无图片知识</div></div></section>
-      <div id="knowledgeList" class="knowledge-list"><div class="empty">暂无云端知识</div></div>
     </section>
 
     <section id="page-settings" class="page">
@@ -133,19 +129,6 @@
 
 <div id="messageActionSheet" class="sheet-backdrop hidden"><div class="action-sheet"><div id="actionMessagePreview" class="sheet-preview"></div><button id="copyMessageAction">复制消息</button><button id="saveKnowledgeAction">保存为知识问答</button><button id="importImageKnowledgeAction" class="hidden">导入图片知识</button><button id="searchKnowledgeAction">搜索相关知识</button><button id="cancelMessageAction" class="cancel">取消</button></div></div>
 
-<dialog id="knowledgeDialog" class="knowledge-dialog">
-  <form method="dialog" id="knowledgeForm">
-    <input id="knowledgeId" type="hidden">
-    <div class="dialog-head"><h3 id="knowledgeDialogTitle">新增知识</h3><button value="cancel" class="close-button">×</button></div>
-    <label>分类<input id="knowledgeEditCategory" maxlength="200" value="通用"></label>
-    <label>问题<textarea id="knowledgeEditTitle" rows="3" maxlength="1000" required></textarea></label>
-    <label>答案<textarea id="knowledgeEditAnswer" rows="7" maxlength="10000" required></textarea></label>
-    <label>关键词<textarea id="knowledgeEditKeywords" rows="2" maxlength="2000"></textarea></label>
-    <label class="remember"><input id="knowledgeEditEnabled" type="checkbox" checked>启用这条知识</label>
-    <div class="dialog-actions"><button id="deleteKnowledgeBtn" type="button" class="danger hidden">删除</button><span></span><button value="cancel" class="secondary">取消</button><button id="saveKnowledgeBtn" type="button" class="primary">保存</button></div>
-  </form>
-</dialog>
-
 <dialog id="knowledgeV2Dialog" class="knowledge-dialog">
   <form method="dialog" id="knowledgeV2Form">
     <input id="knowledgeV2Id" type="hidden">
@@ -153,7 +136,7 @@
     <label>标题 / 用户问题<textarea id="knowledgeV2Title" rows="2" maxlength="1000" required></textarea></label>
     <label>标准答案<textarea id="knowledgeV2Answer" rows="6" maxlength="10000" required></textarea></label>
     <label>短答案<textarea id="knowledgeV2ShortAnswer" rows="2" maxlength="2000"></textarea></label>
-    <label>知识类型<select id="knowledgeV2Type"><option value="fact">事实</option><option value="procedure">流程</option><option value="safety_rule">安全规则</option><option value="policy">策略</option><option value="general">通用</option></select></label>
+    <label>知识类型<select id="knowledgeV2Type"><option value="business_fact">业务事实</option><option value="procedure">流程</option><option value="presale">售前</option><option value="order_rule">订单规则</option><option value="after_sale">售后</option><option value="safety_rule">安全规则</option><option value="fixed_reply">固定答复</option><option value="product_knowledge">商品知识</option><option value="learning_candidate">学习候选</option><option value="temporary">临时知识</option></select></label>
     <label>意图<input id="knowledgeV2Intent" maxlength="200" placeholder="general / price / delivery ..."></label>
     <label>主体<input id="knowledgeV2Subject" maxlength="500" placeholder="商品、服务或业务主体"></label>
     <label>谓词<input id="knowledgeV2Predicate" maxlength="200" placeholder="price / delivery_time / rule ..."></label>
@@ -191,7 +174,7 @@
   </form>
 </dialog>
 <div id="toast" class="toast hidden"></div>
-<script src="/static/bot-web-v2.js?v=13"></script>
+<script src="/static/bot-web-v2.js?v=14"></script>
 <script src="/static/bot-web-bot-enabled.js?v=5"></script>
 </body>
 </html>
