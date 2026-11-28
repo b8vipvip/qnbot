@@ -265,6 +265,11 @@ namespace Bot.Knowledge
             var queryProductIds = NormalizeProductIds(
                 (query.Entities ?? new List<string>())
                     .Where(x => x.StartsWith("product:", StringComparison.OrdinalIgnoreCase)));
+            if (queryProductIds.Count > 1 && recordProductIds.Count == 0)
+            {
+                reason = "多商品问题缺少明确覆盖全部商品的知识范围";
+                return false;
+            }
             if (recordProductIds.Count > 0 && queryProductIds.Count > 0
                 && !queryProductIds.All(queryId => recordProductIds.Any(id =>
                     string.Equals(id, queryId, StringComparison.OrdinalIgnoreCase))))
@@ -357,6 +362,15 @@ namespace Bot.Knowledge
                 + "|c=" + conditions
                 + "|r=" + required
                 + "|x=" + exclusions;
+        }
+
+        internal static bool ProductScopesOverlap(KnowledgeV2Record left, KnowledgeV2Record right)
+        {
+            if (left == null || right == null) return false;
+            var a = NormalizeProductIds(left.ProductIds);
+            var b = NormalizeProductIds(right.ProductIds);
+            return a.Count == 0 || b.Count == 0
+                || a.Intersect(b, StringComparer.OrdinalIgnoreCase).Any();
         }
 
         private static List<string> NormalizeProductIds(IEnumerable<string> values)
