@@ -26,6 +26,9 @@ namespace Bot.Knowledge
         public int MaxContacts { get; set; }
         // Supplied only when user explicitly elects to continue a stored job.
         public string ResumeCheckpointId { get; set; }
+        // Remote callers can bind the durable command receipt to the exact
+        // checkpoint/run before any contact is read or learned.
+        internal Action<string, string> OnCheckpointBound { get; set; }
         public bool LearnKnowledge { get; set; }
 
         public ChatHistoryScanOptions()
@@ -236,6 +239,8 @@ namespace Bot.Knowledge
                 checkpoint.State = "running";
                 checkpoint.LastRunId = evidence.Record.RunId;
                 BuyerHistoryScanCheckpointStore.Save(seller, checkpoint);
+                if (options.OnCheckpointBound != null)
+                    options.OnCheckpointBound(checkpoint.Id, evidence.Record.RunId);
                 Log.Info("[BuyerQuestions] history_scan_started run=" + evidence.Record.RunId
                     + ";checkpoint=" + checkpoint.Id
                     + ";maxContacts=" + options.MaxContacts);
