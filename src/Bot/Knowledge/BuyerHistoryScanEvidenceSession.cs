@@ -23,6 +23,13 @@ namespace Bot.Knowledge
         public int CompletedContacts { get; set; }
         public int FailedContacts { get; set; }
         public int ReadMessages { get; set; }
+        public int DistinctBuyerEventHashes { get; set; }
+        public int CommittedLearningContacts { get; set; }
+        public int ObservedTurns { get; set; }
+        public int AnalyzedHumanPairs { get; set; }
+        public int ModelReferencedPairs { get; set; }
+        public int SupplementedPairs { get; set; }
+        public int NonReusablePairs { get; set; }
         public int InterruptedContacts { get; set; }
         public int RetryAttempts { get; set; }
         public int ExcludedMessages { get; set; }
@@ -47,6 +54,8 @@ namespace Bot.Knowledge
         private readonly string _manifestFile;
         private readonly BuyerHistoryScanEvidence _record;
         private bool _finished;
+        private readonly HashSet<string> _messageHashes = new HashSet<string>(StringComparer.Ordinal);
+        private readonly HashSet<string> _committedContacts = new HashSet<string>(StringComparer.Ordinal);
         internal BuyerHistoryScanEvidence Record { get { return _record; } }
         internal string ExpectedPackagePath
         {
@@ -208,6 +217,8 @@ namespace Bot.Knowledge
         {
             var pseudonym = ContactHash(buyer);
             var lines = new StringBuilder();
+            lock (_sync)
+            {
             foreach (var turn in turns)
             {
                 var text = BuyerMessageArchiveService.Redact(turn.Item1);
@@ -222,8 +233,11 @@ namespace Bot.Knowledge
                 using (var sha = SHA256.Create())
                 {
                     var fingerprint = BitConverter.ToString(sha.ComputeHash(
-                        Encoding.UTF8.GetBytes(_record.RunId + "|" + (turn.Item3 ?? ""))))
+                        Encoding.UTF8.GetBytes(_record.RunId + "|" + pseudonym + "|" +
+                            (string.IsNullOrWhiteSpace(turn.Item3)
+                                ? "fallback:" + turn.Item2.Ticks + "|" + turn.Item1 : turn.Item3))))
                         .Replace("-", "").Substring(0, 24);
+                    if (!_messageHashes.Add(fingerprint)) continue;
                     lines.AppendLine(JsonConvert.SerializeObject(new
                     {
                         contact = pseudonym,
@@ -233,7 +247,34 @@ namespace Bot.Knowledge
                     }));
                 }
             }
-            lock (_sync) File.AppendAllText(_messagesFile, lines.ToString(), Encoding.UTF8);
+            File.AppendAllText(_messagesFile, lines.ToString(), Encoding.UTF8);
+            _record.DistinctBuyerEventHashes = _messageHashes.Count;
+            SaveManifest();
+            }
+        }
+
+        internal void RecordCommittedLearning(string buyer, int observedTurns, int pairs,
+            int referenced, int supplemented, int nonReusable)
+        {
+            lock (_sync)
+            {
+                var contact = ContactHash(buyer);
+                if (!_committedContacts.Add(contact)) return;
+                _record.CommittedLearningContacts++;
+                _record.ObservedTurns += observedTurns;
+                _record.AnalyzedHumanPairs += pairs;
+                _record.ModelReferencedPairs += referenced;
+                _record.SupplementedPairs += supplemented;
+                _record.NonReusablePairs += nonReusable;
+                File.AppendAllText(_eventsFile, JsonConvert.SerializeObject(new
+                {
+                    utc = DateTime.UtcNow.ToString("o"), type = "learning_commit",
+                    contact = contact, observed_turns = observedTurns, analyzed_pairs = pairs,
+                    model_referenced = referenced, supplemented_pairs = supplemented,
+                    non_reusable_pairs = nonReusable
+                }) + Environment.NewLine, Encoding.UTF8);
+                SaveManifest();
+            }
         }
 
         internal void Complete(string status, string phase)
