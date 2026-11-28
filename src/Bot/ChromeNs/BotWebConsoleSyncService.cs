@@ -1,4 +1,5 @@
 using Bot.ShopScope;
+using Bot.Knowledge;
 using Bot.UpdateNs;
 using BotLib;
 using BotLib.Db.Sqlite;
@@ -71,6 +72,8 @@ namespace Bot.ChromeNs
             public readonly ConcurrentDictionary<long, JObject> PendingCommandResults =
                 new ConcurrentDictionary<long, JObject>();
             public readonly object PendingCommandResultsSync = new object();
+            public readonly ConcurrentDictionary<long, KnowledgeOperation> KnowledgeOperations =
+                new ConcurrentDictionary<long, KnowledgeOperation>();
             public readonly object ProcessedSync = new object();
             public readonly HashSet<long> ProcessedCommands = new HashSet<long>();
             public volatile bool RemotePause;
@@ -80,6 +83,15 @@ namespace Bot.ChromeNs
             public DateTime NextSyncUtc = DateTime.MinValue;
             public int Syncing;
             public bool Loaded;
+        }
+
+        private sealed class KnowledgeOperation
+        {
+            public string Claim;
+            public readonly CancellationTokenSource Cancellation = new CancellationTokenSource();
+            public readonly object Sync = new object();
+            public JObject Progress = new JObject();
+            public bool Finished;
         }
 
         // The sync timer runs every second, but the underlying store writes
@@ -651,6 +663,9 @@ namespace Bot.ChromeNs
                             ? SelectPendingMessageBatch(state)
                             : new List<WebMessage>();
                     }
+                    // Running jobs publish a heartbeat without blocking message/feedback sync.
+                    foreach (var job in state.KnowledgeOperations)
+                        PublishKnowledgeOperationProgress(state, job.Key, job.Value);
                     KeyValuePair<long, JObject>[] resultSnapshot;
                     lock (state.PendingCommandResultsSync)
                         resultSnapshot = state.PendingCommandResults.ToArray();
@@ -973,12 +988,25 @@ namespace Bot.ChromeNs
                 if (command == null) continue;
                 var id = command.Value<long?>("id") ?? 0;
                 if (id < 1) continue;
+                var type = Convert.ToString(command["type"]);
+                if (type == "knowledge_v2_operation_cancel")
+                {
+                    KnowledgeOperation running;
+                    if (state.KnowledgeOperations.TryGetValue(id, out running)
+                        && running.Claim == (string)command["payload"]?["claim"])
+                        lock (running.Sync) { if (!running.Finished) running.Cancellation.Cancel(); }
+                    continue;
+                }
+                if (type == "knowledge_v2_operation")
+                {
+                    StartKnowledgeOperation(state, id, command["payload"] as JObject);
+                    continue;
+                }
                 if (WasProcessed(state, id))
                 {
                     SetPendingCommandResult(state, id, Result(id, true, string.Empty, new JObject { ["duplicate"] = true }));
                     continue;
                 }
-                var type = Convert.ToString(command["type"]);
                 try
                 {
                     JObject result;
@@ -1006,6 +1034,123 @@ namespace Bot.ChromeNs
                     MarkProcessed(state, id);
                     SetPendingCommandResult(state, id, Result(id, false, Safe(ex.Message, 600), new JObject()));
                 }
+            }
+        }
+
+        private static void PublishKnowledgeOperationProgress(ShopWebState state, long id, KnowledgeOperation job)
+        {
+            lock (job.Sync)
+            {
+                if (job.Finished) return;
+                var result = Result(id, true, string.Empty, (JObject)job.Progress.DeepClone());
+                result["claim"] = job.Claim;
+                result["phase"] = "running";
+                SetPendingCommandResult(state, id, result);
+            }
+        }
+
+        private static void StartKnowledgeOperation(ShopWebState state, long id, JObject payload)
+        {
+            var claim = (string)payload?["claim"];
+            if (string.IsNullOrWhiteSpace(claim)) return;
+            var job = new KnowledgeOperation { Claim = claim };
+            if (!state.KnowledgeOperations.TryAdd(id, job)) { job.Cancellation.Dispose(); return; }
+            Task.Run(async () =>
+            {
+                JObject result;
+                try
+                {
+                    if (state.Shop == null || !state.Shop.HasStableSellerId
+                        || (string)payload["shop_key"] != state.Shop.ShopKey)
+                        throw new InvalidOperationException("远程知识操作店铺身份不匹配。");
+                    using (ShopSettingsScope.Enter(state.Shop))
+                        result = Result(id, true, string.Empty, await ExecuteKnowledgeOperationAsync(state, payload, job));
+                }
+                catch (OperationCanceledException)
+                {
+                    result = Result(id, false, "任务已取消；已保存历史扫描断点。", new JObject());
+                    result["phase"] = "cancelled";
+                }
+                catch (Exception ex)
+                {
+                    result = Result(id, false, Safe(ex.Message, 600), new JObject());
+                }
+                lock (job.Sync)
+                {
+                    job.Finished = true;
+                    result["claim"] = job.Claim;
+                    SetPendingCommandResult(state, id, result);
+                }
+                KnowledgeOperation ignored;
+                state.KnowledgeOperations.TryRemove(id, out ignored);
+                job.Cancellation.Dispose();
+            });
+        }
+
+        private static async Task<JObject> ExecuteKnowledgeOperationAsync(ShopWebState state, JObject payload, KnowledgeOperation job)
+        {
+            var seller = state.Shop.DisplayName;
+            var action = (string)payload["action"];
+            var token = job.Cancellation.Token;
+            if (string.IsNullOrWhiteSpace(seller)) throw new InvalidOperationException("本店身份未识别。");
+            if (new[] { "history_scan", "history_resume", "revision_generate", "revision_apply", "revision_reject", "conflict_resolve", "rollback" }.Contains(action)
+                && payload.Value<bool?>("confirmed") != true)
+                throw new InvalidOperationException("知识操作未经确认。");
+            switch (action)
+            {
+                case "history_status":
+                    var latest = BuyerHistoryScanCheckpointStore.Latest(seller);
+                    return new JObject { ["checkpoint"] = latest == null ? JValue.CreateNull() : JToken.FromObject(latest),
+                        ["active"] = ChatHistoryScanService.IsBuyerScanActive(seller) };
+                case "history_scan":
+                case "history_resume":
+                    var scan = await new ChatHistoryScanService().ScanBuyerMessagesAsync(seller,
+                        new ChatHistoryScanOptions { ScanAll = true, MaxContacts = payload.Value<int?>("max_contacts") ?? 5000,
+                            ResumeCheckpointId = action == "history_resume" ? (string)payload["checkpoint_id"] : null },
+                        p =>
+                        {
+                            lock (job.Sync)
+                                job.Progress = new JObject { ["phase"] = p.Phase, ["contacts"] = p.ContactIndex,
+                                    ["total_contacts"] = p.ContactCount, ["messages"] = p.MessageCount,
+                                    ["failed"] = p.FailedCount, ["run_id"] = p.RunId };
+                        }, token);
+                    return new JObject { ["checkpoint_id"] = scan.ResumeCheckpointId, ["run_id"] = scan.RunId,
+                        ["contacts"] = scan.ScannedContacts, ["total_contacts"] = scan.ContactCount, ["messages"] = scan.MessageCount,
+                        ["failed"] = scan.FailedContacts, ["coverage_verified"] = scan.ContactCoverageVerified,
+                        ["coverage_warning"] = scan.CoverageWarning };
+                case "revision_generate":
+                    return JObject.FromObject(KnowledgeEngineV2RevisionService.GenerateCandidates(seller, token));
+                case "revision_list":
+                    return new JObject { ["items"] = JArray.FromObject(KnowledgeEngineV2RevisionService.GetCandidates(seller, "all", 100)
+                        .Select(x => new { x.Id, x.KnowledgeId, x.KnowledgeTitle, x.OriginalAnswer, x.ProposedAnswer,
+                            x.EvidenceCount, x.DistinctBuyerCount, x.ClusterScore, x.Status, x.ResolutionNote })) };
+                case "revision_apply":
+                case "revision_reject":
+                    string revisionError;
+                    bool ok = action == "revision_apply"
+                        ? KnowledgeEngineV2RevisionService.ApplyCandidate(seller, (string)payload["candidate_id"], out revisionError)
+                        : KnowledgeEngineV2RevisionService.RejectCandidate(seller, (string)payload["candidate_id"], (string)payload["reason"], out revisionError);
+                    if (!ok) throw new InvalidOperationException(revisionError);
+                    return new JObject { ["applied"] = true };
+                case "conflict_list":
+                    var records = KnowledgeEngineV2Repository.LoadAll(seller);
+                    return new JObject { ["fingerprint"] = KnowledgeEngineV2Repository.ComputeCloudSyncFingerprint(records),
+                        ["items"] = JArray.FromObject(KnowledgeEngineV2Service.GetConflictsForRecords(records).Take(100)
+                            .Select(x => new { x.FactKey, x.Subject, x.Predicate, Records = x.Records.Select(y => new { y.Id, y.Title, y.Answer }) })) };
+                case "conflict_resolve":
+                    if (!KnowledgeEngineV2Service.TryResolveConflict(seller, (string)payload["fingerprint"],
+                        (string)payload["fact_key"], (string)payload["knowledge_id"], (string)payload["reason"] == "candidate"))
+                        throw new InvalidOperationException("知识或冲突已变化，请刷新后重试。");
+                    return new JObject { ["applied"] = true };
+                case "rollback_list":
+                    return new JObject { ["items"] = JArray.FromObject(KnowledgeEngineV2Repository.GetRollbackOptions(seller)) };
+                case "rollback":
+                    string rollbackError;
+                    if (!KnowledgeEngineV2Repository.TryRollbackLastBotCorrection(seller, (string)payload["knowledge_id"], out rollbackError,
+                        (string)payload["revision_id"], (string)payload["fingerprint"]))
+                        throw new InvalidOperationException(rollbackError);
+                    return new JObject { ["message"] = rollbackError };
+                default: throw new InvalidOperationException("不支持的知识操作。");
             }
         }
 

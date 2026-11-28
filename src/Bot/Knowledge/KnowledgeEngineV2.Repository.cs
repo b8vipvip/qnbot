@@ -108,7 +108,7 @@ namespace Bot.Knowledge
 
         // A knowledge editor may remain open across a learning or cloud-sync update.
         // Use the exact record fingerprint, not a wall-clock timestamp, to reject stale writes.
-        internal static bool TrySaveEditorRecord(string seller, KnowledgeV2Record record, string expectedFingerprint)
+        internal static bool TrySaveEditorRecord(string seller, KnowledgeV2Record record, string expectedFingerprint, string revisionSource = null)
         {
             if (record == null || string.IsNullOrWhiteSpace(record.Id)) return false;
             var shop = ResolveShopRequired(seller);
@@ -129,7 +129,21 @@ namespace Bot.Knowledge
                         || !string.Equals(EditorRecordFingerprint(FromRow(row)), expectedFingerprint, StringComparison.Ordinal))
                         return false;
                 }
-                state.Db.SaveOneRecord(ToRow(record));
+                if (!string.IsNullOrEmpty(revisionSource) && row != null)
+                {
+                    state.Db.SaveRecordsInTransaction(new List<object>
+                    {
+                        ToRow(record),
+                        new KnowledgeV2ManualEditRevisionRow
+                        {
+                            Id = Guid.NewGuid().ToString("N"), KnowledgeId = record.Id,
+                            MessageRecordId = revisionSource, Action = "apply",
+                            PreviousJson = JsonConvert.SerializeObject(FromRow(row)),
+                            CurrentJson = JsonConvert.SerializeObject(record), CreatedAtTicks = DateTime.Now.Ticks
+                        }
+                    });
+                }
+                else state.Db.SaveOneRecord(ToRow(record));
             }
             KnowledgeEngineV2Service.ApplyRecordUpdate(seller, record);
             return true;
@@ -1386,7 +1400,37 @@ namespace Bot.Knowledge
             return true;
         }
 
-        public static bool TryRollbackLastBotCorrection(string seller, string knowledgeId, out string result)
+        internal static List<object> GetRollbackOptions(string seller)
+        {
+            var state = GetState(ResolveShopRequired(seller));
+            EnsureSchemaInitialized(state);
+            lock (state.Sync)
+            {
+                var records = state.Db.ReadRecords<KnowledgeV2RecordRow>(null).Select(FromRow)
+                    .Where(x => x != null).ToDictionary(x => x.Id, StringComparer.Ordinal);
+                var result = new List<object>();
+                foreach (var latest in state.Db.ReadRecords<KnowledgeV2ManualEditRevisionRow>(null)
+                    .Where(x => x != null).GroupBy(x => x.KnowledgeId)
+                    .Select(g => g.OrderByDescending(x => x.CreatedAtTicks).First())
+                    .OrderByDescending(x => x.CreatedAtTicks).Take(200))
+                {
+                    KnowledgeV2Record current;
+                    if (latest.Action != "apply" || !records.TryGetValue(latest.KnowledgeId, out current)
+                        || string.Equals(current.Status, "deleted", StringComparison.OrdinalIgnoreCase)) continue;
+                    var applied = JsonConvert.DeserializeObject<KnowledgeV2Record>(latest.CurrentJson ?? "");
+                    var previous = JsonConvert.DeserializeObject<KnowledgeV2Record>(latest.PreviousJson ?? "");
+                    if (applied == null || previous == null
+                        || EditorRecordFingerprint(current) != EditorRecordFingerprint(applied)) continue;
+                    result.Add(new { revision_id = latest.Id, knowledge_id = current.Id, title = current.Title,
+                        current_answer = current.Answer, previous_answer = previous.Answer,
+                        fingerprint = EditorRecordFingerprint(current), created_at = new DateTime(latest.CreatedAtTicks) });
+                }
+                return result;
+            }
+        }
+
+        public static bool TryRollbackLastBotCorrection(string seller, string knowledgeId, out string result,
+            string expectedRevisionId = null, string expectedFingerprint = null)
         {
             result = string.Empty;
             knowledgeId = (knowledgeId ?? string.Empty).Trim();
@@ -1403,7 +1447,8 @@ namespace Bot.Knowledge
                     .Where(x => x != null && x.KnowledgeId == id)
                     .OrderByDescending(x => x.CreatedAtTicks).ToList();
                 var latest = revisions.FirstOrDefault();
-                if (latest == null || latest.Action != "apply")
+                if (latest == null || latest.Action != "apply"
+                    || (!string.IsNullOrEmpty(expectedRevisionId) && latest.Id != expectedRevisionId))
                 {
                     result = "没有可回滚的最近一次Bot人工纠错。";
                     return false;
@@ -1414,8 +1459,9 @@ namespace Bot.Knowledge
                 var applied = JsonConvert.DeserializeObject<KnowledgeV2Record>(latest.CurrentJson ?? "");
                 restored = JsonConvert.DeserializeObject<KnowledgeV2Record>(latest.PreviousJson ?? "");
                 if (applied == null || restored == null
-                    || !string.Equals(before.Answer, applied.Answer, StringComparison.Ordinal)
-                    || before.UpdatedAt.Ticks != applied.UpdatedAt.Ticks)
+                    || string.Equals(before.Status, "deleted", StringComparison.OrdinalIgnoreCase)
+                    || EditorRecordFingerprint(before) != EditorRecordFingerprint(applied)
+                    || (!string.IsNullOrEmpty(expectedFingerprint) && EditorRecordFingerprint(before) != expectedFingerprint))
                 {
                     result = "知识在纠错后又发生变化，禁止覆盖新的编辑。请人工处理冲突。";
                     return false;

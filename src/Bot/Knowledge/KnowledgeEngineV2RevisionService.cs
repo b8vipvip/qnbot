@@ -337,7 +337,7 @@ namespace Bot.Knowledge
             var beforeState = KnowledgeEngineV2GovernanceAuditService.DescribeRecord(record);
             record.Answer = row.ProposedAnswer.Trim();
             record.LastVerifiedAt = DateTime.Now;
-            if (!KnowledgeEngineV2Repository.TrySaveEditorRecord(seller, record, currentFingerprint))
+            if (!KnowledgeEngineV2Repository.TrySaveEditorRecord(seller, record, currentFingerprint, "revision-candidate:" + row.Id))
             {
                 MarkStatus(seller, row, "stale", "应用期间原知识被修改，未覆盖。", false);
                 error = "知识已发生并发变化，修订未应用。";
