@@ -72,7 +72,7 @@ def test_unverified_broad_session_suggestions_remain_review_only_but_verified_co
     session = read("src/Bot/ChromeNs/ConversationSessionLearningService.cs")
     assert "private const bool EnableAutomaticWrites = false;" in session
     assert "private const bool EnableVerifiedCorpusCorrectionWrites = true;" in session
-    assert "ApplyVerifiedCorpusCorrections(session, corpusAnalysis, expectedCurrentFingerprint, out corpusSkipped)" in session
+    assert "ApplyVerifiedCorpusCorrections(\n                            session, corpusAnalysis, turns, cards, expectedCurrentFingerprint, out corpusSkipped)" in session
     assert "EnableVerifiedCorpusNewKnowledgeWrites = true" in session
     assert "ApplyVerifiedCorpusNewKnowledge(" in session
     assert "CanAutoApplyVerifiedCorpusCorrection" in session
@@ -122,7 +122,7 @@ def test_duplicate_manual_exact_aliases_fail_closed():
     public = read("src/Bot/Knowledge/KnowledgeEngineV2.Service.Public.cs")
     assert "var manualExactMatches = rankedMatches.Where(IsApprovedProductionMatch)" in public
     assert "var manualExactConflict = manualExactMatches.Count > 1;" in public
-    assert "manualExactConflict || (manualExact == null && HasConflict(best, second))" in public
+    assert "allProductionMatches.Any(x => !ReferenceEquals(x, best) && HasConflict(best, x))" in public
 
 
 def test_durable_manual_save_warms_a_cold_snapshot_before_next_buyer_question():

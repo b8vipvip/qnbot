@@ -267,7 +267,8 @@ namespace Bot.Knowledge
 
             var rankSw = Stopwatch.StartNew();
             var rankedMatches = candidates.Select(i => Score(seller, snapshot.Records[i], query)).Where(x => x != null && x.Score >= 0.30).OrderByDescending(x => x.Score).ThenByDescending(x => x.ConfidenceScore).ToList();
-            var productionMatches = rankedMatches.Where(x => IsEligibleProductionMatch(x, query)).Take(5).ToList();
+            var allProductionMatches = rankedMatches.Where(x => IsEligibleProductionMatch(x, query)).ToList();
+            var productionMatches = allProductionMatches.Take(5).ToList();
             // Operator-reviewed direct replies take precedence at the exact question
             // boundary; confidence observations never delay an explicit manual save.
             // Other semantically similar questions continue through normal safety ranking.
@@ -306,7 +307,8 @@ namespace Bot.Knowledge
                 && !object.ReferenceEquals(x, best));
             // An explicit human correction of this exact standalone question wins over
             // older generic answers; unrelated queries still use conflict rejection.
-            decision.HasConflict = manualExactConflict || (manualExact == null && HasConflict(best, second));
+            decision.HasConflict = manualExactConflict || (manualExact == null
+                && allProductionMatches.Any(x => !ReferenceEquals(x, best) && HasConflict(best, x)));
             var margin = second == null ? best.Score : best.Score - second.Score;
             var threshold = settings.DirectThreshold;
             var minConfidence = settings.MinConfidence;
@@ -415,7 +417,7 @@ namespace Bot.Knowledge
             // A local direct answer must be grounded by the current buyer message itself. Working
             // Memory may help AI/contextual reasoning, but it must never turn “充没/1?/不满意/人工”
             // into the previous account_binding fact and auto-send it as a fresh answer.
-            if (!string.IsNullOrWhiteSpace(query.WorkingMemoryReason)) return false;
+            if (query.ContextDependent || !string.IsNullOrWhiteSpace(query.WorkingMemoryReason)) return false;
             if (Regex.IsMatch(compact, @"^\d{5,20}$")) return false;
             if (Regex.IsMatch(compact, @"^[?？!！.。]+$")) return false;
             if (Regex.IsMatch(compact, @"(人工|客服|转人工|投诉|不满意|有病|垃圾|骗子|差评|举报|生气|退款|退货|充没|充上没|到账没|付款没|发货没)")) return false;
@@ -445,11 +447,11 @@ namespace Bot.Knowledge
             if (query.ContextDependent && (query.Entities == null || query.Entities.Count < 1) && string.IsNullOrWhiteSpace(query.Subject)) return false;
             var close = productionMatches.Where(x => x != null && x.Record != null).Where(x => best.Score - x.Score < 0.08).Where(x => x.Score >= threshold && x.ConfidenceScore >= minConfidence).Take(4).ToList();
             if (close.Count < 2) return false;
-            foreach (var candidate in close.Skip(1))
+            foreach (var candidate in close.Where(x => !ReferenceEquals(x, best)))
             {
                 if (!candidate.Record.Enabled || string.Equals(candidate.Record.RiskLevel, "high", StringComparison.OrdinalIgnoreCase) || KnowledgeEngineV2Semantics.IsHighRisk(candidate.Record.Answer)) return false;
                 if (!SameConsensusScope(best.Record, candidate.Record)) return false;
-                if (HasAnswerPolarityConflict(best.Record.Answer, candidate.Record.Answer)) return false;
+                if (!AnswersEquivalent(best.Record.Answer, candidate.Record.Answer)) return false;
             }
             return true;
         }
@@ -478,8 +480,10 @@ namespace Bot.Knowledge
         {
             var value = KnowledgeEngineV2Semantics.Compact(answer);
             if (value.Length == 0) return 0;
-            var negative = value.Contains("不支持") || value.Contains("不能使用") || value.Contains("无法使用") || value.Contains("不可以") || value.Contains("不可使用");
-            var positive = value.Contains("可以使用") || value.Contains("支持使用") || value.Contains("可以用于") || value.Contains("适用于") || value.Contains("是电视端") || value.Contains("可以支持");
+            const string negativePattern = "不支持|不能使用|不能用|无法使用|无法用|不可以|不可使用|不可用|不适用";
+            var negative = Regex.IsMatch(value, negativePattern);
+            var positive = Regex.IsMatch(Regex.Replace(value, negativePattern, string.Empty),
+                "支持|可以|适用于|能用|可用|是电视端");
             if (negative && !positive) return -1;
             if (positive && !negative) return 1;
             return 0;

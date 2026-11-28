@@ -62,8 +62,11 @@ def test_order_empty_message_center_event_triggers_independent_probe():
 
 
 def test_demonstrative_question_can_still_use_high_confidence_local_direct():
-    source = read("src/Bot/ChromeNs/SmartReplyRouterService.cs")
+    source = read("src/Bot/Knowledge/KnowledgeEngineV2.Semantics.cs")
+    public = read("src/Bot/Knowledge/KnowledgeEngineV2.Service.Public.cs")
     assert "IsSelfContainedDemonstrativeQuestion" in source
-    assert "selfContainedDemonstrative" in source
+    assert "!IsSelfContainedDemonstrativeQuestion(message)" in source
+    assert 'StartsWith("product:", StringComparison.OrdinalIgnoreCase)' in source
+    assert "query.ContextDependent || !string.IsNullOrWhiteSpace(query.WorkingMemoryReason)" in public
 
 # CI trigger: final feature branch contains no temporary workflow or patch helper files.

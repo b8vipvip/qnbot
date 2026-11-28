@@ -52,7 +52,7 @@ def test_explicit_product_id_mismatch_cannot_use_product_bound_knowledge():
     assert "NormalizeProductIds(" in applicable
     assert "recordProductIds.Count > 0 && queryProductIds.Count > 0" in applicable
     assert "商品ID与当前问题中的商品不匹配" in applicable
-    assert "recordProductIds.Any(id => queryProductIds.Any(queryId =>" in applicable
+    assert "queryProductIds.All(queryId => recordProductIds.Any(id =>" in applicable
     assert "StringComparison.OrdinalIgnoreCase" in normalize
     # No supplied product ID is not a mismatch: buyers can identify a product by name.
     assert "queryProductIds.Count > 0" in applicable
@@ -647,3 +647,15 @@ def test_ai_outage_rechecks_the_actual_selected_match_not_the_top_ranked_row():
     assert "var priorMatch = approvedDecision.SelectedMatch;" in source
     assert "var latestMatch = latest.SelectedMatch;" in source
     assert "KnowledgeEngineV2RuntimeBridge.IsSelectedKnowledgeCurrent(seller, shopKey, latest)" in source
+
+def test_conflicting_knowledge_is_not_equivalent_by_text_similarity_alone():
+    index = read("src/Bot/Knowledge/KnowledgeEngineV2.Service.Index.cs")
+    public = read("src/Bot/Knowledge/KnowledgeEngineV2.Service.Public.cs")
+    equivalent = index.split("private static bool AnswersEquivalent(", 1)[1].split("private static double EntitySimilarity", 1)[0]
+    assert "!HasAnswerPolarityConflict(left, right)" in equivalent
+    assert "SameAnswerNumbers(left, right)" in equivalent
+    assert "a.SequenceEqual(b, StringComparer.Ordinal)" in equivalent
+    assert "if (exactQuestion) return true;" in index
+    assert "allProductionMatches.Any(x => !ReferenceEquals(x, best) && HasConflict(best, x))" in public
+    assert "if (!AnswersEquivalent(best.Record.Answer, candidate.Record.Answer)) return false;" in public
+    assert "query.ContextDependent || !string.IsNullOrWhiteSpace(query.WorkingMemoryReason)" in public

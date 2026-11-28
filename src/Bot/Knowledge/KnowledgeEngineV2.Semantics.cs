@@ -214,7 +214,7 @@ namespace Bot.Knowledge
         public static bool IsContextDependent(string message)
         {
             var compact = Compact(message);
-            if (ContextCue.IsMatch(compact)) return true;
+            if (ContextCue.IsMatch(compact)) return !IsSelfContainedDemonstrativeQuestion(message);
             if (compact.Length <= 8)
             {
                 // Short does not mean contextual by itself. A concise question with
@@ -226,6 +226,17 @@ namespace Bot.Knowledge
                 return entities.Count == 0 || !hasExplicitIntent;
             }
             return false;
+        }
+
+        internal static bool IsSelfContainedDemonstrativeQuestion(string message)
+        {
+            var compact = Compact(message);
+            if (!ContextCue.IsMatch(compact) || DetectPredicate(message) == "general") return false;
+            // A demonstrative alone cannot identify a product. Permit a current,
+            // independently stated business object or exact product ID, not a
+            // subject inherited from the previous conversation.
+            return ExtractEntities(message).Any(x => x.StartsWith("product:", StringComparison.OrdinalIgnoreCase))
+                || Regex.IsMatch(compact, @"(?:电视机?|tv|大屏|车机|手机|电脑|平板|支付宝|微信)", RegexOptions.IgnoreCase);
         }
 
         public static bool IsHighRisk(string text)
@@ -247,12 +258,13 @@ namespace Bot.Knowledge
             // so keep name-based retrieval available in that case. When the current
             // message does contain an explicit product ID, however, never let a record
             // bound to a different product answer or enter the approved context set.
+            // Multi-product queries must be covered in full, not by a single shared ID.
             var recordProductIds = NormalizeProductIds(record.ProductIds);
             var queryProductIds = NormalizeProductIds(
                 (query.Entities ?? new List<string>())
                     .Where(x => x.StartsWith("product:", StringComparison.OrdinalIgnoreCase)));
             if (recordProductIds.Count > 0 && queryProductIds.Count > 0
-                && !recordProductIds.Any(id => queryProductIds.Any(queryId =>
+                && !queryProductIds.All(queryId => recordProductIds.Any(id =>
                     string.Equals(id, queryId, StringComparison.OrdinalIgnoreCase))))
             {
                 reason = "商品ID与当前问题中的商品不匹配";

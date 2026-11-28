@@ -6,6 +6,7 @@ using System.Collections.Generic;
 using System.Diagnostics;
 using System.Linq;
 using System.Threading;
+using System.Text.RegularExpressions;
 
 namespace Bot.Knowledge
 {
@@ -202,12 +203,20 @@ namespace Bot.Knowledge
         private static bool IsMeaningfulConflictPair(KnowledgeV2Record left, KnowledgeV2Record right)
         {
             if (left == null || right == null) return false;
-            if (!string.Equals(KnowledgeEngineV2Semantics.FactKey(left),
+            var exactQuestion = (left.Aliases ?? new List<string>()).Concat(new[] { left.Title })
+                .Select(KnowledgeEngineV2Semantics.Compact).Where(x => x.Length > 0)
+                .Intersect((right.Aliases ?? new List<string>()).Concat(new[] { right.Title })
+                    .Select(KnowledgeEngineV2Semantics.Compact), StringComparer.Ordinal).Any();
+            if (!exactQuestion && !string.Equals(KnowledgeEngineV2Semantics.FactKey(left),
                 KnowledgeEngineV2Semantics.FactKey(right), StringComparison.Ordinal)) return false;
             if (AnswersEquivalent(left.Answer, right.Answer)) return false;
+            // Two applicable records claiming the exact same wording but different
+            // conclusions cannot be resolved safely by ranking alone.
+            if (exactQuestion) return true;
 
             var questionSimilarity = KnowledgeEngineV2Semantics.TextSimilarity(left.Title, right.Title);
             if (questionSimilarity < 0.72) return false;
+            if (questionSimilarity >= 0.86 && !SameAnswerNumbers(left.Answer, right.Answer)) return true;
 
             var leftDirection = AnswerDirection(left.Answer);
             var rightDirection = AnswerDirection(right.Answer);
@@ -224,7 +233,19 @@ namespace Bot.Knowledge
 
         private static bool AnswersEquivalent(string left, string right)
         {
-            return KnowledgeEngineV2Semantics.TextSimilarity(left, right) >= 0.68;
+            // Similar strings can have opposite meaning or different quantities:
+            // "supports" versus "does not support", or 1.2 versus 12.
+            return !HasAnswerPolarityConflict(left, right)
+                && SameAnswerNumbers(left, right)
+                && KnowledgeEngineV2Semantics.TextSimilarity(left, right) >= 0.68;
+        }
+
+        private static bool SameAnswerNumbers(string left, string right)
+        {
+            const string pattern = @"\d+(?:[.,]\d+)?";
+            var a = Regex.Matches(left ?? string.Empty, pattern).Cast<Match>().Select(x => x.Value);
+            var b = Regex.Matches(right ?? string.Empty, pattern).Cast<Match>().Select(x => x.Value);
+            return a.SequenceEqual(b, StringComparer.Ordinal);
         }
 
         private static double EntitySimilarity(IEnumerable<string> left, IEnumerable<string> right)
