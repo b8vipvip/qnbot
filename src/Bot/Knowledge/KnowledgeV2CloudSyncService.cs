@@ -238,6 +238,14 @@ namespace Bot.Knowledge
                     Log.ErrorWithMaxCount("Knowledge V2 反馈同步失败：" + Safe(ex.Message, 180), 10);
                 }
 
+                // Immutable revision/rollback history sync has its own durable
+                // cursor. A history outage cannot prevent the active corpus sync.
+                try { await SyncRevisionHistoryOnce(shop, url, token).ConfigureAwait(false); }
+                catch (Exception ex)
+                {
+                    Log.ErrorWithMaxCount("Knowledge V2修订历史同步失败：" + Safe(ex.Message, 180), 10);
+                }
+
                 var local=KnowledgeEngineV2Repository.LoadAll(shop.DisplayName);
                 var localFingerprint=Fingerprint(local);
                 // Upgrade an older aggregate-only checkpoint only when the local
@@ -462,6 +470,37 @@ namespace Bot.Knowledge
                             state.LastSuccessUtc=DateTime.UtcNow;
                             state.LastStatus=state.LastConverged?"synced":"local_changed_during_sync";
                         }
+                    }
+                }
+            }
+        }
+
+        private static async Task SyncRevisionHistoryOnce(ShopContext shop, string url, string token)
+        {
+            var scope = url.TrimEnd('/') + "|" + shop.ShopKey;
+            using (var handler = new HttpClientHandler { UseProxy = true, Proxy = WebRequest.DefaultWebProxy })
+            using (var http = new HttpClient(handler))
+            {
+                http.Timeout = TimeSpan.FromSeconds(15);
+                for (var i = 0; i < 4; i++)
+                {
+                    var payload = KnowledgeEngineV2Repository.BuildRevisionSyncRequest(shop.DisplayName, scope);
+                    using (var response = await ShopRuntimeCredentialAuthority.SendWithUnauthorizedRecoveryAsync(
+                        shop, token, async requestToken =>
+                        {
+                            using (var request = new HttpRequestMessage(HttpMethod.Post, url.TrimEnd('/') + "/api/runtime/v1/bot-web/knowledge-v2-revision-sync"))
+                            {
+                                request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", requestToken);
+                                request.Headers.TryAddWithoutValidation("X-Shop-Key", shop.ShopKey);
+                                request.Content = new StringContent(payload.ToString(Formatting.None), Encoding.UTF8, "application/json");
+                                return await http.SendAsync(request).ConfigureAwait(false);
+                            }
+                        }))
+                    {
+                        if (!response.IsSuccessStatusCode)
+                            throw new InvalidOperationException("修订同步 HTTP " + (int)response.StatusCode);
+                        var body = JObject.Parse(await response.Content.ReadAsStringAsync().ConfigureAwait(false));
+                        if (!KnowledgeEngineV2Repository.ApplyRevisionSyncResponse(shop.DisplayName, scope, payload, body)) break;
                     }
                 }
             }
