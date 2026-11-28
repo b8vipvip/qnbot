@@ -82,7 +82,7 @@ namespace Bot.Knowledge
         public string Value { get; set; }
     }
 
-    internal sealed class KnowledgeV2Record
+    public sealed class KnowledgeV2Record
     {
         private double _confidence;
 
