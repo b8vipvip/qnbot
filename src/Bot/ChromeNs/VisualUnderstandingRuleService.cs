@@ -4,6 +4,9 @@ using BotLib.Db.Sqlite;
 using System;
 using System.Collections.Generic;
 using System.Linq;
+using System.Security.Cryptography;
+using System.Text;
+using Newtonsoft.Json.Linq;
 using System.Text.RegularExpressions;
 
 namespace Bot.ChromeNs
@@ -29,6 +32,7 @@ namespace Bot.ChromeNs
     internal sealed class VisualUnderstandingMatch
     {
         public string RuleId { get; set; }
+        public string RuleFingerprint { get; set; }
         public string RuleName { get; set; }
         public string AppName { get; set; }
         public string ScreenName { get; set; }
@@ -119,6 +123,7 @@ namespace Bot.ChromeNs
             var normalizedOcrText = NormalizeApplicationText(ocrText);
             VisualUnderstandingRuleEntity best = null;
             double bestScore = 0;
+            var tied = false;
             foreach (var rule in rules)
             {
                 if (IsApplicationNamePlaceholder(rule.AppName)) continue;
@@ -137,15 +142,17 @@ namespace Bot.ChromeNs
                     continue;
                 var optional = Split(rule.OptionalKeywords);
                 var score = required.Count + optional.Count(x => ocrText.IndexOf(x, StringComparison.OrdinalIgnoreCase) >= 0) * 0.5;
-                if (score > bestScore) { best = rule; bestScore = score; }
+                if (score > bestScore) { best = rule; bestScore = score; tied = false; }
+                else if (score == bestScore && best != null && best.EntityId != rule.EntityId) tied = true;
             }
-            if (best == null) return false;
+            if (best == null || tied) return false; // competing rule interpretations are not authoritative
 
             var fields = Extract(best.FieldPatterns, ocrText);
             var context = BuildContext(best, fields);
             match = new VisualUnderstandingMatch
             {
                 RuleId = best.EntityId,
+                RuleFingerprint = RuleFingerprint(best),
                 RuleName = best.Name,
                 AppName = best.AppName,
                 ScreenName = best.ScreenName,
@@ -157,6 +164,23 @@ namespace Bot.ChromeNs
             Log.Info("OCR 命中视觉理解预设: shopRef=" + MyWebSocketServer.DiagnosticRef("shop", shopKey)
                 + ", ruleId=" + best.EntityId + ", fields=" + fields.Count);
             return true;
+        }
+
+        internal static string RuleFingerprint(VisualUnderstandingRuleEntity rule)
+        {
+            if (rule == null) return string.Empty;
+            using (var sha = SHA256.Create())
+                return BitConverter.ToString(sha.ComputeHash(Encoding.UTF8.GetBytes(JObject.FromObject(rule)
+                    .ToString(Newtonsoft.Json.Formatting.None)))).Replace("-", "").ToLowerInvariant();
+        }
+
+        internal static bool IsMatchCurrent(string shopKey, string seller, string ocrText, string id, string fingerprint)
+        {
+            if (string.IsNullOrWhiteSpace(id) || string.IsNullOrWhiteSpace(fingerprint)) return false;
+            VisualUnderstandingMatch current;
+            return TryMatch(shopKey, seller, ocrText, out current)
+                && string.Equals(current.RuleId, id, StringComparison.Ordinal)
+                && string.Equals(current.RuleFingerprint, fingerprint, StringComparison.Ordinal);
         }
 
         public static bool TryResolveConfiguredApplication(
