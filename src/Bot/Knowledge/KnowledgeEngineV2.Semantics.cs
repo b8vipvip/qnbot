@@ -39,6 +39,8 @@ namespace Bot.Knowledge
                 if (query.Predicate == "general") query.Predicate = memory.Predicate;
                 query.WorkingMemoryReason = "当前消息缺少完整主体，仅补全最近明确业务对象";
             }
+            if (query.Entities.Count(x => x != null && x.StartsWith("product:", StringComparison.OrdinalIgnoreCase)) > 10)
+                query.ProductEvidenceConflict = true;
             query.Entities = query.Entities
                 .Where(x => !string.IsNullOrWhiteSpace(x))
                 .Distinct(StringComparer.OrdinalIgnoreCase)
@@ -315,7 +317,7 @@ namespace Bot.Knowledge
             var required = allRequired
                 .Where(x => !ConditionalBusinessAdviceService.IsEvidenceRequirement(x))
                 .ToList();
-            var missing = required.FirstOrDefault(x => !ScopeTermMatches(x, query));
+            var missing = required.FirstOrDefault(x => !ScopeTermMatches(x, query, true));
             if (!string.IsNullOrWhiteSpace(missing))
             {
                 reason = "缺少必需上下文：" + missing;
@@ -323,7 +325,7 @@ namespace Bot.Knowledge
             }
 
             var conditions = NormalizeScopeTerms(record.Conditions).Where(x => !IsCommerceScope(x)).ToList();
-            if (conditions.Count > 0 && !conditions.Any(x => ScopeTermMatches(x, query)))
+            if (conditions.Count > 0 && !conditions.Any(x => ScopeTermMatches(x, query, true)))
             {
                 reason = "当前消息不满足适用条件";
                 return false;
@@ -339,16 +341,16 @@ namespace Bot.Knowledge
             if (subject.Length == 0) subject = Compact(record.Title);
             var predicate = NormalizePredicate(record.Predicate);
             var intent = NormalizeIntent(record.Intent);
-            var products = Signature(record.ProductIds, 20, true);
+            var products = Signature(record.ProductIds, int.MaxValue, true);
             var entities = Signature(
                 (record.Entities ?? new List<string>())
                     .Where(x => !string.IsNullOrWhiteSpace(x)
                         && !x.StartsWith("product:", StringComparison.OrdinalIgnoreCase)),
                 24,
                 false);
-            var conditions = Signature(record.Conditions, 20, false);
-            var required = Signature(record.RequiredContext, 20, false);
-            var exclusions = Signature(record.Exclusions, 20, false);
+            var conditions = Signature(record.Conditions, int.MaxValue, false);
+            var required = Signature(record.RequiredContext, int.MaxValue, false);
+            var exclusions = Signature(record.Exclusions, int.MaxValue, false);
             return subject + "|" + predicate + "|" + intent
                 + "|p=" + products
                 + "|e=" + entities
@@ -368,7 +370,6 @@ namespace Bot.Knowledge
                 .Select(Compact)
                 .Where(x => x.Length > 0)
                 .Distinct(StringComparer.OrdinalIgnoreCase)
-                .Take(20)
                 .ToList();
         }
 
@@ -378,7 +379,6 @@ namespace Bot.Knowledge
                 .Where(x => !string.IsNullOrWhiteSpace(x))
                 .Select(x => x.Trim())
                 .Distinct(StringComparer.OrdinalIgnoreCase)
-                .Take(20)
                 .ToList();
         }
 
@@ -393,7 +393,7 @@ namespace Bot.Knowledge
                 .Select(x => x.Trim()).Distinct(StringComparer.OrdinalIgnoreCase).ToList();
         }
 
-        private static bool ScopeTermMatches(string term, KnowledgeV2Query query)
+        private static bool ScopeTermMatches(string term, KnowledgeV2Query query, bool requireAffirmative = false)
         {
             term = (term ?? string.Empty).Trim();
             if (term.Length == 0 || query == null) return false;
@@ -424,7 +424,7 @@ namespace Bot.Knowledge
                 var expected = split >= 0 ? Compact(term.Substring(split + 1)) : string.Empty;
                 return expected.Length > 0 && (query.Entities ?? new List<string>())
                     .Select(Compact)
-                    .Any(x => x == expected || x.Contains(expected) || expected.Contains(x));
+                    .Any(x => x == expected && (!requireAffirmative || HasAffirmativeTerm(query.Original, term.Substring(split + 1))));
             }
             if (lower.StartsWith("product:") || lower.StartsWith("product="))
             {
@@ -438,6 +438,8 @@ namespace Bot.Knowledge
 
             var compact = Compact(term);
             if (compact.Length == 0) return false;
+            if (requireAffirmative)
+                return HasAffirmativeTerm(query.Original, term);
             var evidence = Compact((query.Original ?? string.Empty)
                 + " " + (query.Subject ?? string.Empty)
                 + " " + (query.Intent ?? string.Empty)
@@ -445,6 +447,29 @@ namespace Bot.Knowledge
                 + " " + string.Join(" ", query.Entities ?? new List<string>()));
             if (evidence.Contains(compact)) return true;
             return compact.Length >= 4 && TextSimilarity(term, query.Original) >= 0.86;
+        }
+
+        internal static bool HasAffirmativeTerm(string text, string term)
+        {
+            // Positive scope conditions require explicit wording in the query,
+            // not a fuzzy match against inferred subject/intent or joined entities.
+            // Preserve punctuation and decimal points; do not turn "没有X" into X.
+            var source = Regex.Replace(text ?? string.Empty, @"\s+", string.Empty);
+            var expected = Regex.Replace(term ?? string.Empty, @"\s+", string.Empty);
+            if (expected.Length == 0) return false;
+            var occurrences = Regex.Matches(source, Regex.Escape(expected), RegexOptions.IgnoreCase);
+            if (occurrences.Count == 0) return false;
+            foreach (Match occurrence in occurrences)
+            {
+                var prefix = source.Substring(0, occurrence.Index);
+                if (Regex.IsMatch(prefix, @"(?:并非|不是|没有|未曾|尚未|不具备|不含|不支持|不使用|不需要|未|无|非|没|不)(?:[\u4e00-\u9fffA-Za-z0-9]{0,3})$", RegexOptions.IgnoreCase))
+                    return false;
+                // A numeric condition must not match a suffix of a larger number.
+                if (char.IsDigit(expected[0]) && occurrence.Index > 0
+                    && (char.IsDigit(source[occurrence.Index - 1]) || source[occurrence.Index - 1] == '.'))
+                    return false;
+            }
+            return true;
         }
 
         private static string Signature(IEnumerable<string> values, int max, bool preserveDigits)
@@ -488,7 +513,6 @@ namespace Bot.Knowledge
 
             return result.Where(x => Regex.IsMatch(x ?? string.Empty, @"^\d{8,20}$"))
                 .Distinct(StringComparer.Ordinal)
-                .Take(10)
                 .ToList();
         }
 
