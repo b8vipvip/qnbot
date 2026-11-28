@@ -14,7 +14,7 @@ def test_ai_failure_fallback_uses_only_a_preapproved_v2_decision_and_authenticat
     server = read("services/api-control-plane/app.py")
 
     assert "KnowledgeV2Decision OfflineFallbackDecision" in runtime
-    assert "return KnowledgeV2RuntimeResult.Continue(aiFirstContext, decision);" in runtime
+    assert "return KnowledgeV2RuntimeResult.Continue(aiFirstContext, decision).WithContextDecision(decision);" in runtime
     assert "TryResolveV2OfflineFallback(" in client
     assert "approvedDecision.CanDirectReply" in client
     assert "KnowledgeV2AuthorityPolicy.IsProductionApproved" in client
@@ -38,7 +38,7 @@ def test_ai_failure_does_not_lower_the_normal_v2_direct_answer_threshold():
     assert "latest.CanDirectReply" in client
     assert "latest.Answer, approvedDecision.Answer, StringComparison.Ordinal" in client
     assert "MinimumFallbackScore" not in client
-    assert "return KnowledgeV2RuntimeResult.Continue(aiFirstContext, decision);" in runtime
+    assert "return KnowledgeV2RuntimeResult.Continue(aiFirstContext, decision).WithContextDecision(decision);" in runtime
 
 def test_ai_failure_answer_is_replaced_by_v2_before_the_pipeline_error_gate():
     reply = read("src/Bot/ChromeNs/BuyerStreamingReplyPipeline.cs")
@@ -151,7 +151,9 @@ def test_pre_send_dedup_requires_verified_shop_scope_and_uses_v2_evidence_only()
 def test_v2_offline_fallback_revalidates_after_delay_and_inside_send_guard():
     source = read("src/Bot/ChromeNs/BuyerStreamingReplyPipeline.cs")
     assert "() => offlineFallbackUsed = true" in source
-    assert "if (deduplication.Regenerated) offlineFallbackUsed = false" in source
+    assert "if (deduplication.Regenerated)" in source
+    assert "offlineFallbackUsed = false;" in source[source.index("if (deduplication.Regenerated)"):source.index("catch (OperationCanceledException)", source.index("if (deduplication.Regenerated)"))]
+    assert "requiresFinalFactValidation = true" in source[source.index("if (deduplication.Regenerated)"):source.index("catch (OperationCanceledException)", source.index("if (deduplication.Regenerated)"))]
     assert 'offlineFallbackUsed ? "Knowledge V2 AI故障兜底"' in source
     delay = source.index("await Task.Delay(TimeSpan.FromSeconds(directDelaySeconds)")
     check = source.index("if (offlineFallbackUsed && !StreamingBuyerAnswerService.IsV2OfflineFallbackCurrent(", delay)
