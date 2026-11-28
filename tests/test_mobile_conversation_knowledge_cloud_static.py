@@ -63,7 +63,8 @@ def test_mobile_page_has_buyer_list_detail_long_press_and_knowledge_management()
     assert 'id="conversationList"' in html
     assert 'id="chatMessageList"' in html
     assert 'data-page="knowledge"' in html
-    assert 'id="knowledgeList"' in html
+    assert 'id="knowledgeV2List"' in html
+    assert 'id="knowledgeList"' not in html
     assert 'id="knowledgeExportBtn"' in html
     assert 'id="knowledgeMergeImportBtn"' in html
     assert 'id="knowledgeReplaceImportBtn"' in html
