@@ -29,6 +29,7 @@ namespace Bot.ChromeNs
         public string MatchedVisualKnowledgeId { get; set; }
         public double VisualKnowledgeScore { get; set; }
         public string MatchedImageKnowledgeId { get; set; }
+        public string MatchedImageKnowledgeFingerprint { get; set; }
         public double ImageKnowledgeScore { get; set; }
         public string LocalOcrText { get; set; }
         public double LocalOcrConfidence { get; set; }
@@ -373,6 +374,7 @@ namespace Bot.ChromeNs
                         : "ocr-text-only",
                     MatchedImageKnowledgeId = localDecision == null ? string.Empty : localDecision.MatchedImageKnowledgeId,
                     ImageKnowledgeScore = localDecision == null ? 0d : localDecision.ImageKnowledgeScore,
+                    MatchedImageKnowledgeFingerprint = localDecision == null ? string.Empty : localDecision.MatchedImageKnowledgeFingerprint,
                     LocalOcrText = ocr.Text,
                     LocalOcrConfidence = ocr.Confidence,
                     LocalOcrCacheHit = true,
@@ -486,6 +488,10 @@ namespace Bot.ChromeNs
                         || ConversationContextStore.IsWithdrawnAnswer(burst.SellerNick, burst.BuyerNick, answer))
                         return false;
                     if (workflowReply) return true;
+                    if (!string.IsNullOrWhiteSpace(result.MatchedImageKnowledgeId)
+                        && !VisualImageKnowledgeService.IsMatchCurrent(burst.ShopKey, burst.SellerNick,
+                            result.MatchedImageKnowledgeId, result.MatchedImageKnowledgeFingerprint))
+                        return false;
                     if (trustedOcrKnowledge)
                         return KnowledgeEngineV2RuntimeBridge.IsSelectedKnowledgeCurrent(
                             burst.SellerNick, burst.ShopKey, result.SelectedKnowledgeDecision);
@@ -493,6 +499,12 @@ namespace Bot.ChromeNs
                         .WithContextDecision(result.ContextKnowledgeDecision);
                     if (!KnowledgeEngineV2RuntimeBridge.IsContextKnowledgeCurrent(
                         burst.SellerNick, burst.ShopKey, context))
+                        return false;
+                    if (!PreSendAnswerValidator.AllowsUnresolvedKnowledgeReply(result.ContextKnowledgeDecision, answer))
+                        return false;
+                    if (result.LocalOcrConfidence >= 0.88
+                        && PreSendAnswerValidator.HasUnverifiedProductConclusion(
+                            burst.CombinedQuestion + "\n" + result.LocalOcrText, answer, result.ApprovedV2KnowledgeEvidence))
                         return false;
                     // OCR/pixel summaries are untrusted observations, not business facts.
                     // Do not add them to price, order-status or promise authority.
@@ -520,6 +532,7 @@ namespace Bot.ChromeNs
             if (string.IsNullOrWhiteSpace(localDecision.MatchedImageKnowledgeId)) return;
 
             result.MatchedImageKnowledgeId = localDecision.MatchedImageKnowledgeId;
+            result.MatchedImageKnowledgeFingerprint = localDecision.MatchedImageKnowledgeFingerprint;
             result.ImageKnowledgeScore = localDecision.ImageKnowledgeScore;
             var description = (localDecision.VisualSummary ?? string.Empty).Trim();
             if (description.Length > 0)
