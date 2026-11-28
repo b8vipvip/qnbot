@@ -147,8 +147,9 @@ def test_idle_learning_resolves_shop_before_structured_ai_call():
     assert "ApplyVerifiedCorpusCorrections(" in finalize
     assert "ReviewedKnowledgeLearningService.ApplyReviewedKnowledge" not in finalize
     assert finalize.index("using (ShopSettingsScope.Enter(shop))") < finalize.index("analysis = await AnalyzeAsync")
-    assert finalize.index("analysis = await AnalyzeAsync") < finalize.index("AnalyzeKnowledgeCorpusAsync")
-    assert finalize.index("AnalyzeKnowledgeCorpusAsync") < finalize.index("ApplyVerifiedCorpusNewKnowledge")
+    corpus_call = finalize.index("corpusAnalysis = await AnalyzeKnowledgeCorpusAsync(")
+    assert finalize.index("analysis = await AnalyzeAsync") < corpus_call
+    assert corpus_call < finalize.index("newKnowledgeApplied = ApplyVerifiedCorpusNewKnowledge(")
 
 def test_session_learning_pages_complete_remote_history_and_recreates_state_after_restart():
     context = read("src/Bot/ChromeNs/ConversationContextStore.cs")
@@ -1065,13 +1066,13 @@ def test_long_lived_runtime_bridges_use_weak_qn_subscription_keys_and_sweep_reti
     assert "NextPanelProbeAt.TryRemove(qn, out ignored)" in ingress
 
 
-def test_knowledge_policy_fuzzy_search_uses_weak_manager_identity_not_hash_codes():
-    source = read("src/Bot/Knowledge/KnowledgePolicyProfileUi.cs")
-    assert "ConditionalWeakTable<KnowledgeManagerControl, object> FuzzySearchAttached" in source
-    assert "FuzzySearchAttached.TryGetValue(manager, out marker)" in source
-    assert "FuzzySearchAttached.Add(manager, new object())" in source
-    assert "RuntimeHelpers.GetHashCode(manager)" not in source
-    assert "FuzzySearchAttached.TryRemove(instanceKey" not in source
+def test_knowledge_v2_search_is_owned_by_records_page_not_reflected_legacy_manager():
+    source = read("src/Bot/Knowledge/KnowledgeCenterV2RecordsPage.cs")
+    assert "_search.TextChanged += delegate { ApplyFilter(); }" in source
+    assert ".Where(x => MatchesQuery(x, query))" in source
+    assert "KnowledgeEngineV2Semantics.Compact(term)" in source
+    assert "KnowledgeManagerControl" not in source
+    assert "RuntimeHelpers.GetHashCode" not in source
 
 
 def test_manual_reply_optimization_distinguishes_empty_bot_history_from_storage_failure():
