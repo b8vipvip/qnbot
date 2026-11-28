@@ -1,4 +1,5 @@
 using System;
+using Newtonsoft.Json;
 using Bot.ChromeNs;
 using Bot.ShopScope;
 using System.Collections.Generic;
@@ -53,6 +54,7 @@ namespace Bot.Knowledge
         private string _pendingRecordId = string.Empty;
         private bool _recordsLoaded;
         private bool _recordsLoading;
+        private bool _recordSaving;
 
         public KnowledgeV2RecordsPage(Window owner, string seller, KnowledgeV2RecordsPageMode mode)
         {
@@ -407,8 +409,15 @@ namespace Bot.Knowledge
 
         private void SaveCurrent()
         {
-            if (string.IsNullOrWhiteSpace(_seller)) return;
-            var record = _selected ?? new KnowledgeV2Record { Id = Guid.NewGuid().ToString("N"), CreatedAt = DateTime.Now };
+            if (string.IsNullOrWhiteSpace(_seller) || _recordSaving) return;
+            var selected = _selected;
+            var existing = selected == null ? null : _all.FirstOrDefault(x =>
+                x != null && string.Equals(x.Id, selected.Id, StringComparison.Ordinal));
+            // Do not mutate the grid's selected object before validation or a successful commit.
+            var expectedFingerprint = KnowledgeEngineV2Repository.EditorRecordFingerprint(existing);
+            var record = selected == null
+                ? new KnowledgeV2Record { Id = Guid.NewGuid().ToString("N"), CreatedAt = DateTime.Now }
+                : JsonConvert.DeserializeObject<KnowledgeV2Record>(JsonConvert.SerializeObject(selected));
             record.Title = _title.Text.Trim();
             record.Type = _type.Text.Trim();
             record.Intent = _intent.Text.Trim();
@@ -434,14 +443,20 @@ namespace Bot.Knowledge
                 MessageBox.Show(_owner, "标题和标准答案不能为空。", "知识中心 V2", MessageBoxButton.OK, MessageBoxImage.Warning);
                 return;
             }
+            _recordSaving = true;
             _count.Text = "正在保存...";
             Task.Run(() =>
             {
-                KnowledgeEngineV2Repository.Save(_seller, record);
-                KnowledgeEngineV2Service.Warm(_seller);
+                return KnowledgeEngineV2Repository.TrySaveEditorRecord(_seller, record, expectedFingerprint);
             }).ContinueWith(t => Dispatcher.BeginInvoke(new Action(() =>
             {
+                _recordSaving = false;
                 if (t.IsFaulted) MessageBox.Show(_owner, "保存失败：" + t.Exception.GetBaseException().Message);
+                else if (!t.Result)
+                {
+                    _count.Text = "知识已被其他设备或自动学习更新，请刷新后重新编辑。未覆盖新版本。";
+                    MessageBox.Show(_owner, _count.Text, "知识冲突", MessageBoxButton.OK, MessageBoxImage.Warning);
+                }
                 else { _selected = null; RefreshView(); }
             })));
         }
@@ -449,7 +464,7 @@ namespace Bot.Knowledge
         private void DeleteCurrent()
         {
             if (_selected == null || string.IsNullOrWhiteSpace(_selected.Id)) return;
-            if (MessageBox.Show(_owner, "确定删除这条V2知识吗？旧兼容知识镜像也会同步删除。", "删除知识", MessageBoxButton.YesNo, MessageBoxImage.Question) != MessageBoxResult.Yes) return;
+            if (MessageBox.Show(_owner, "确定删除这条知识吗？删除后将退出 Knowledge V2 检索，并通过 V2 云同步同步删除状态。", "删除知识", MessageBoxButton.YesNo, MessageBoxImage.Question) != MessageBoxResult.Yes) return;
             var id = _selected.Id;
             Task.Run(() =>
             {
