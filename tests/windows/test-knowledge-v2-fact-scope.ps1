@@ -80,6 +80,7 @@ Assert-Equal ($scopedNumbers.Invoke($null, @('商品ID:12345678 退款多少','�
 $shipping = "V2知识1：`n问题：发货时效`n答案：发货2天`n商品ID：12345678`n"
 Assert-Equal ($scopedNumbers.Invoke($null, @('商品ID:12345678 发货多久','发货2天',$shipping,''))) $false 'shipping time is supported'
 Assert-Equal ($scopedNumbers.Invoke($null, @('商品ID:12345678 退款多久','退款2天',$shipping,''))) $true 'shipping time cannot become refund time'
+Assert-Equal ($scopedNumbers.Invoke($null, @('商品ID:12345678 首单多少钱','首单不是10元',$price,''))) $true 'positive evidence cannot authorize negative numeric claim'
 $unverified = $validator.GetMethod('HasUnverifiedProductConclusion', $flags)
 $promise = $validator.GetMethod('HasTransactionalPromise', $flags)
 $overlap = $semantics.GetMethod('ProductScopesOverlap', $flags)
@@ -94,6 +95,10 @@ Assert-Equal ($unverified.Invoke($null, @($productQuestion, '支持', $unrelated
 Assert-Equal ($unverified.Invoke($null, @($productQuestion, '不支持', $scopedPositive))) $true 'wrong direction blocked'
 Assert-Equal ($unverified.Invoke($null, @($productQuestion, '商品ID:87654321 支持', $scopedPositive))) $true 'generated new product not authorized'
 Assert-Equal ($unverified.Invoke($null, @('商品ID:12345678 商品ID:87654321 是否支持', '支持', $scopedPositive))) $true 'partial scope not sufficient'
+$tvFact = "V2知识1：`n问题：电视是否支持`n答案：电视支持`n商品ID：12345678`n"
+Assert-Equal ($unverified.Invoke($null, @('商品ID:12345678 手机是否支持','支持',$tvFact))) $true 'TV evidence cannot authorize phone capability'
+Assert-Equal ($unverified.Invoke($null, @('商品ID:12345678 电视是否支持','支持',$tvFact))) $false 'same feature capability'
+
 
 Assert-Equal ($promise.Invoke($null, @('我马上给您退款'))) $true 'unauthorized transactional promise'
 Assert-Equal ($promise.Invoke($null, @('请提供订单号核实退款情况'))) $false 'refund clarification'
