@@ -178,9 +178,10 @@ def test_corpus_version_fences_all_active_mutation_paths_before_commit():
     repo = read("src/Bot/Knowledge/KnowledgeEngineV2.Repository.cs")
     assert "Interlocked.Increment(ref state.CorpusVersion)" in repo
     assert "LoadSnapshotCorpus" in repo and "ReadTable<KnowledgeV2RecordRow>()" in repo
-    for line in repo.splitlines():
+    lines = repo.splitlines()
+    for i, line in enumerate(lines):
         if "state.Db.SaveOneRecord(ToRow" in line or "state.Db.SaveRecordsInTransaction(new List<object> { ToRow" in line:
-            assert "MarkCorpusMutation" in line or "MarkCorpusMutation" in repo[:repo.index(line)].splitlines()[-1]
+            assert "MarkCorpusMutation" in line or "MarkCorpusMutation" in lines[i - 1]
     index = read("src/Bot/Knowledge/KnowledgeEngineV2.Service.Index.cs")
     assert "existing.CorpusVersion == KnowledgeEngineV2Repository.GetCorpusVersion(seller)" in index
     assert "snapshot.CorpusVersion = version" in index
